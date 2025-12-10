@@ -13,7 +13,6 @@ export default function SplashScreen(){
       <View style={styles.overlay} />
 
       <View style={styles.center}>
-        <Image source={require('../assets/images/logo.png')} style={styles.logo} resizeMode="contain" />
         <Text style={styles.appName}>Punjab Tree Enumeration</Text>
         <Text style={styles.tagline}>Field · Verify · Protect</Text>
         <ActivityIndicator size="large" color="#fff" style={{marginTop: 22}} />

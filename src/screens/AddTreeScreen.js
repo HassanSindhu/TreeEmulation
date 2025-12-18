@@ -30,7 +30,10 @@ const DropdownRow = ({label, value, options, onChange, required}) => {
       <TouchableOpacity
         style={styles.dropdownSelected}
         onPress={() => setOpen(true)}>
-        <Text style={value ? styles.dropdownSelectedText : styles.dropdownPlaceholder}>
+        <Text
+          style={
+            value ? styles.dropdownSelectedText : styles.dropdownPlaceholder
+          }>
           {value || 'Select...'}
         </Text>
         <Ionicons name="chevron-down" size={18} color="#6b7280" />
@@ -72,31 +75,32 @@ export default function AddTreeScreen({navigation}) {
   const [enumModalVisible, setEnumModalVisible] = useState(false);
   const [enumerations, setEnumerations] = useState([]);
 
-  // Enumeration form fields (header)
+  // Image-based form fields
+  const [zone, setZone] = useState('');
+  const [circle, setCircle] = useState('');
   const [division, setDivision] = useState('');
   const [subDivision, setSubDivision] = useState('');
-  const [block, setBlock] = useState('');
-  const [year, setYear] = useState('');
-  const [beat, setBeat] = useState('');
-
-  // Type of Linear Plantation + Side
   const [linearType, setLinearType] = useState(''); // Road | Rail | Canal
-  const [side, setSide] = useState('');
-
-  // Other header fields
-  const [registerNo, setRegisterNo] = useState('');
-  const [pageNo, setPageNo] = useState('');
-  const [canalName, setCanalName] = useState(''); // Name of Canal / Road / Site
-  const [siteName, setSiteName] = useState('');
+  const [canalName, setCanalName] = useState(''); // Name of Canal/Road/Site
+  const [block, setBlock] = useState('');
+  const [beat, setBeat] = useState('');
   const [compartment, setCompartment] = useState('');
+  const [year, setYear] = useState('');
+  const [side, setSide] = useState('');
   const [rdFrom, setRdFrom] = useState('');
   const [rdTo, setRdTo] = useState('');
   const [remarks, setRemarks] = useState('');
 
   /* --------- dropdown options --------- */
+  const zoneOptions = ['Zone 1', 'Zone 2', 'Zone 3'];
+  const circleOptions = ['Circle 1', 'Circle 2', 'Circle 3'];
+
   const divisionOptions = ['Lahore', 'Faisalabad', 'Multan'];
   const subDivisionOptions = ['Range 1', 'Range 2', 'Range 3'];
   const blockOptions = ['Block A', 'Block B', 'Block C'];
+  const beatOptions = ['Beat 1', 'Beat 2', 'Beat 3'];
+  const linearTypeOptions = ['Road', 'Rail', 'Canal'];
+
   const yearOptions = [
     '2021-22',
     '2022-23',
@@ -108,18 +112,25 @@ export default function AddTreeScreen({navigation}) {
     '2028-29',
     '2029-30',
   ];
-  const beatOptions = ['Beat 1', 'Beat 2', 'Beat 3'];
-
-  const linearTypeOptions = ['Road', 'Rail', 'Canal'];
 
   const getSideOptions = type => {
-    // As you requested:
-    // Road => Left, Right, Both (you also had M, but you said only Left/Right/Both for road)
-    if (type === 'Road') return ['Left', 'Right', 'Both','Median'];
-    // Rail & Canal => Left, Right
-    if (type === 'Rail' || type === 'Canal') return ['Left', 'Right'];
+    // As per latest image:
+    // Side L/R/Both/M (Only for Road)
+    if (type === 'Road') return ['Left', 'Right', 'Both', 'Median'];
+    // Canal & Rail => L/R
+    if (type === 'Canal' || type === 'Rail') return ['Left', 'Right'];
     return [];
   };
+
+  const rdKmLabelFrom = () =>
+    linearType === 'Canal'
+      ? 'RDs for Canal'
+      : 'KMs for Road and Rail';
+
+  const rdKmLabelTo = () =>
+    linearType === 'Canal'
+      ? 'RDs/KMs To'
+      : 'RDs/KMs To';
 
   /* --------- Load saved enumeration headers --------- */
   useEffect(() => {
@@ -144,25 +155,35 @@ export default function AddTreeScreen({navigation}) {
 
   /* ------------- enumeration header save ------------- */
   const saveEnumerationForm = async () => {
-    if (!division || !subDivision || !block || !year || !beat || !linearType || !side) {
+    // Required fields (matching form "Select" fields)
+    if (
+      !zone ||
+      !circle ||
+      !division ||
+      !subDivision ||
+      !linearType ||
+      !block ||
+      !beat ||
+      !year ||
+      !side
+    ) {
       Alert.alert('Missing data', 'Please fill all required dropdown fields.');
       return;
     }
 
     const newItem = {
       id: Date.now().toString(),
+      zone,
+      circle,
       division,
       subDivision,
-      block,
-      year,
-      beat,
       linearType,
-      side,
-      registerNo,
-      pageNo,
       canalName,
-      siteName,
+      block,
+      beat,
       compartment,
+      year,
+      side,
       rdFrom,
       rdTo,
       remarks,
@@ -173,19 +194,18 @@ export default function AddTreeScreen({navigation}) {
     setEnumerations(updated);
     await persistEnumerations(updated);
 
-    // Clear header form
+    // Clear modal form
+    setZone('');
+    setCircle('');
     setDivision('');
     setSubDivision('');
-    setBlock('');
-    setYear('');
-    setBeat('');
     setLinearType('');
-    setSide('');
-    setRegisterNo('');
-    setPageNo('');
     setCanalName('');
-    setSiteName('');
+    setBlock('');
+    setBeat('');
     setCompartment('');
+    setYear('');
+    setSide('');
     setRdFrom('');
     setRdTo('');
     setRemarks('');
@@ -196,7 +216,6 @@ export default function AddTreeScreen({navigation}) {
 
   /* ------------- tap handlers for category screens ------------- */
   const handleCategoryPress = (type, item) => {
-    // Pass enumeration to record screens
     if (type === 'Mature Tree') {
       navigation.navigate('MatureTreeRecords', {enumeration: item});
     } else if (type === 'Pole Crop') {
@@ -224,7 +243,9 @@ export default function AddTreeScreen({navigation}) {
           </TouchableOpacity>
           <View style={styles.headerContent}>
             <Text style={styles.headerTitle}>Tree Enumeration</Text>
-            <Text style={styles.headerSubtitle}>Enumeration header details (offline)</Text>
+            <Text style={styles.headerSubtitle}>
+              Enumeration header details (offline)
+            </Text>
           </View>
         </View>
 
@@ -248,30 +269,41 @@ export default function AddTreeScreen({navigation}) {
               {enumerations.map(item => (
                 <View key={item.id} style={styles.enumCard}>
                   <Text style={styles.enumTitle}>
-                    {item.division} - {item.block}
+                    {item.zone} • {item.circle}
                   </Text>
 
                   <Text style={styles.enumMeta}>
-                    Year: {item.year} • Beat: {item.beat}
-                    {item.linearType ? ` • ${item.linearType}` : ''} • Side: {item.side}
+                    {item.division} • {item.subDivision} • Block: {item.block} •
+                    Beat: {item.beat}
                   </Text>
 
-                  {(item.canalName || item.siteName) && (
-                    <Text style={styles.enumMeta}>
-                      {item.canalName || '—'}
-                      {item.siteName ? ` | ${item.siteName}` : ''}
-                    </Text>
-                  )}
+                  <Text style={styles.enumMeta}>
+                    Year: {item.year} • Type: {item.linearType} • Side:{' '}
+                    {item.side}
+                  </Text>
 
-                  {(item.rdFrom || item.rdTo) && (
+                  {item.canalName ? (
                     <Text style={styles.enumMeta}>
-                      {item.linearType === 'Canal' ? 'RD' : 'KM'}: {item.rdFrom || '—'} →{' '}
-                      {item.rdTo || '—'}
+                      Name (Canal/Road/Site): {item.canalName}
                     </Text>
-                  )}
+                  ) : null}
+
+                  {(item.rdFrom || item.rdTo) ? (
+                    <Text style={styles.enumMeta}>
+                      {item.linearType === 'Canal'
+                        ? `RDs: ${item.rdFrom || '—'} → ${item.rdTo || '—'}`
+                        : `KMs: ${item.rdFrom || '—'} → ${item.rdTo || '—'}`}
+                    </Text>
+                  ) : null}
 
                   {item.compartment ? (
-                    <Text style={styles.enumMeta}>Compartment: {item.compartment}</Text>
+                    <Text style={styles.enumMeta}>
+                      Compartment: {item.compartment}
+                    </Text>
+                  ) : null}
+
+                  {item.remarks ? (
+                    <Text style={styles.enumMeta}>Remarks: {item.remarks}</Text>
                   ) : null}
 
                   {/* Action buttons */}
@@ -324,9 +356,26 @@ export default function AddTreeScreen({navigation}) {
               </TouchableOpacity>
             </View>
 
-
-
             <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Select Zone */}
+              <DropdownRow
+                label="Zone"
+                value={zone}
+                onChange={setZone}
+                options={zoneOptions}
+                required
+              />
+
+              {/* Select Circle */}
+              <DropdownRow
+                label="Circle"
+                value={circle}
+                onChange={setCircle}
+                options={circleOptions}
+                required
+              />
+
+              {/* Select Division */}
               <DropdownRow
                 label="Division"
                 value={division}
@@ -335,52 +384,16 @@ export default function AddTreeScreen({navigation}) {
                 required
               />
 
+              {/* Select S.Division / Range */}
               <DropdownRow
-                label="S. Division / Range"
+                label="S.Division / Range"
                 value={subDivision}
                 onChange={setSubDivision}
                 options={subDivisionOptions}
                 required
               />
 
-              <FormRow
-                label="Name of Canal/Road/Site"
-                value={canalName}
-                onChangeText={setCanalName}
-                placeholder="Enter Canal/Road/Site name"
-              />
-
-              <DropdownRow
-                label="Block"
-                value={block}
-                onChange={setBlock}
-                options={blockOptions}
-                required
-              />
-
-              <DropdownRow
-                label="Beat"
-                value={beat}
-                onChange={setBeat}
-                options={beatOptions}
-                required
-              />
-
-              <FormRow
-                label="Compartment (Optional)"
-                value={compartment}
-                onChangeText={setCompartment}
-                placeholder="Enter compartment (if any)"
-              />
-
-              <DropdownRow
-                label="Year (Ex 2021-22)"
-                value={year}
-                onChange={setYear}
-                options={yearOptions}
-                required
-              />
-
+              {/* Select Type of Linear Plantation */}
               <DropdownRow
                 label="Type of Linear Plantation (Road/Rail/Canal)"
                 value={linearType}
@@ -392,43 +405,82 @@ export default function AddTreeScreen({navigation}) {
                 required
               />
 
+              {/* Input Name of Canal/Road/Site */}
+              <FormRow
+                label="Name of Canal/Road/Site"
+                value={canalName}
+                onChangeText={setCanalName}
+                placeholder="Enter name"
+              />
+
+              {/* Select Block */}
               <DropdownRow
-                label={
-                  linearType === 'Road'
-                    ? 'Side (Road)'
-                    : linearType === 'Rail'
-                    ? 'Side (Rail)'
-                    : linearType === 'Canal'
-                    ? 'Side (Canal)'
-                    : 'Side'
-                }
+                label="Block"
+                value={block}
+                onChange={setBlock}
+                options={blockOptions}
+                required
+              />
+
+              {/* Select Beat */}
+              <DropdownRow
+                label="Beat"
+                value={beat}
+                onChange={setBeat}
+                options={beatOptions}
+                required
+              />
+
+              {/* Input Compartment Optional */}
+              <FormRow
+                label="Compartment (Optional)"
+                value={compartment}
+                onChangeText={setCompartment}
+                placeholder="Enter compartment (if any)"
+              />
+
+              {/* Select Year */}
+              <DropdownRow
+                label="Year (Ex 2021-22)"
+                value={year}
+                onChange={setYear}
+                options={yearOptions}
+                required
+              />
+
+              {/* Select Side */}
+              <DropdownRow
+                label="Side L/R/Both/M (Only for Road)"
                 value={side}
                 onChange={setSide}
                 options={getSideOptions(linearType)}
                 required
               />
 
+              {/* Input RD/KM From */}
               <FormRow
-                label={linearType === 'Canal' ? 'RD From (Canal)' : 'KM From (Road/Rail)'}
+                label={`${rdKmLabelFrom()} (From)`}
                 value={rdFrom}
                 onChangeText={setRdFrom}
                 placeholder="From"
                 keyboardType="numeric"
               />
 
+              {/* Input RD/KM To */}
               <FormRow
-                label={linearType === 'Canal' ? 'RD To (Canal)' : 'KM To (Road/Rail)'}
+                label={`${rdKmLabelTo()} (To)`}
                 value={rdTo}
                 onChangeText={setRdTo}
                 placeholder="To"
                 keyboardType="numeric"
               />
 
+              {/* Text Remarks */}
               <FormRow
                 label="Remarks"
                 value={remarks}
                 onChangeText={setRemarks}
-                placeholder="Any remarks"
+                placeholder="Enter remarks"
                 multiline
               />
 
@@ -567,9 +619,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   modalCard: {backgroundColor: '#ffffff', borderRadius: 20, padding: 16, maxHeight: '85%'},
-  modalHeader: {flexDirection: 'row', alignItems: 'center', marginBottom: 8},
-  modalTitle: {flex: 1, fontSize: 18, fontWeight: '700', color: '#ffffff'},
-  modalCloseBtn: {padding: 4, borderRadius: 999},
   modalSaveBtn: {
     marginTop: 16,
     marginBottom: 4,
@@ -590,24 +639,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    marginLeft: -16,   // because modalCard has padding:16
-    marginRight: -16,  // so header goes full width
+    marginLeft: -16,
+    marginRight: -16,
     marginTop: -16,
     marginBottom: 12,
   },
-
   modalTitleEnum: {
     flex: 1,
     fontSize: 18,
     fontWeight: '800',
     color: '#ffffff',
   },
-
   modalCloseBtnEnum: {
     padding: 6,
     borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.20)',
     marginLeft: 10,
   },
-
 });

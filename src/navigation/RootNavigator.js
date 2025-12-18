@@ -104,7 +104,7 @@ export default function RootNavigator() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const t = setTimeout(() => setReady(true), 1600);
+    const t = setTimeout(() => setReady(true), 2600);
     return () => clearTimeout(t);
   }, []);
 

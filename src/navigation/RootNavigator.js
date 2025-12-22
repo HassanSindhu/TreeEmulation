@@ -13,21 +13,24 @@ import VerificationScreen from '../screens/VerificationScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import colors from '../theme/colors';
 
-// ✅ NEW SCREENS (add these files in /screens)
+// RECORD SCREENS
 import MatureTreeRecordsScreen from '../screens/MatureTreeRecordsScreen';
 import PoleCropRecordsScreen from '../screens/PoleCropRecordsScreen';
 import AfforestationRecordsScreen from '../screens/AfforestationRecordsScreen';
 
+// ✅ NEW DETAIL SCREENS
+import DisposalScreen from '../screens/DisposalScreen';
+import SuperdariScreen from '../screens/SuperdariScreen';
+
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-/** Tabs remain same (Dashboard/Register/Add/Verification/Profile) **/
+/* -------------------- TABS -------------------- */
 function TabsForRole({role}) {
   return (
     <Tab.Navigator
       screenOptions={({route}) => ({
         headerShown: false,
-        headerTitleAlign: 'center',
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: '#9ca3af',
         tabBarIcon: ({color, size}) => {
@@ -44,46 +47,46 @@ function TabsForRole({role}) {
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Registers" component={RegistersScreen} />
       <Tab.Screen name="Add" component={AddTreeScreen} options={{title: 'Add Tree'}} />
+
       {(role === 'DFO' || role === 'CCF' || role === 'ADMIN') && (
         <Tab.Screen name="Verification" component={VerificationScreen} />
       )}
+
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }
 
-/**
- * ✅ NEW: A Stack around Tabs
- * So you can open new screens from AddTreeScreen without adding them in Tab bar.
- */
+/* -------------------- MAIN STACK -------------------- */
 function MainStack({role}) {
   return (
     <Stack.Navigator screenOptions={{headerShown: false}}>
-      {/* Tabs as the first screen */}
+      {/* Tabs */}
       <Stack.Screen name="Tabs">
         {() => <TabsForRole role={role} />}
       </Stack.Screen>
 
-      {/* ✅ Detail screens opened from AddTreeScreen */}
+      {/* Tree Record Screens */}
+      <Stack.Screen name="MatureTreeRecords" component={MatureTreeRecordsScreen} />
+      <Stack.Screen name="PoleCropRecords" component={PoleCropRecordsScreen} />
+      <Stack.Screen name="AfforestationRecords" component={AfforestationRecordsScreen} />
+
+      {/* ✅ Disposal & Superdari Screens */}
       <Stack.Screen
-        name="MatureTreeRecords"
-        component={MatureTreeRecordsScreen}
+        name="Disposal"
+        component={DisposalScreen}
         options={{headerShown: false}}
       />
       <Stack.Screen
-        name="PoleCropRecords"
-        component={PoleCropRecordsScreen}
-        options={{headerShown: false}}
-      />
-      <Stack.Screen
-        name="AfforestationRecords"
-        component={AfforestationRecordsScreen}
+        name="Superdari"
+        component={SuperdariScreen}
         options={{headerShown: false}}
       />
     </Stack.Navigator>
   );
 }
 
+/* -------------------- AUTH GATE -------------------- */
 function Gate() {
   const {user} = useAuth();
 
@@ -100,6 +103,7 @@ function Gate() {
   );
 }
 
+/* -------------------- ROOT -------------------- */
 export default function RootNavigator() {
   const [ready, setReady] = useState(false);
 

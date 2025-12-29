@@ -1,33 +1,94 @@
-import React from 'react';
+import React, {useMemo} from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   ImageBackground,
-  ScrollView
+  ScrollView,
+  Image,
+  Alert,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useAuth} from '../context/AuthContext';
 import colors from '../theme/colors';
 
-export default function ProfileScreen(){
+export default function ProfileScreen() {
   const {user, logout} = useAuth();
 
+  // ✅ Demo / fallback data (role-based app friendly)
+  const profile = useMemo(() => {
+    const fallback = {
+      name: 'Muhammad Zafar',
+      designation: 'Forest Guard',
+      role: user?.role || 'FG',
+      email: user?.email || 'forest.guard@example.com',
+      phone: user?.phone || '+92-000-0000000',
+      employeeId: user?.employeeId || 'FG-10234',
+      circle: user?.circle || 'Lahore Circle',
+      division: user?.division || 'Lahore Division',
+      range: user?.subDivision || user?.range || 'Range 2',
+      beat: user?.beat || 'Beat 1',
+      station: user?.station || 'Forest Station A',
+      joinDate: user?.joinDate || '2024-01-15',
+      status: user?.status || 'Active',
+      avatarUrl: user?.avatarUrl || '', // if you have a remote URL
+    };
+
+    return {
+      ...fallback,
+      name: user?.name || fallback.name,
+      role: user?.role || fallback.role,
+    };
+  }, [user]);
+
   const handleLogout = () => {
-    // You can add a confirmation dialog here if needed
-    logout();
+    Alert.alert('Sign out', 'Do you want to sign out?', [
+      {text: 'Cancel', style: 'cancel'},
+      {text: 'Sign Out', style: 'destructive', onPress: logout},
+    ]);
   };
 
-  const ProfileItem = ({ icon, label, value }) => (
-    <View style={styles.profileItem}>
-      <View style={styles.profileIcon}>
-        <Ionicons name={icon} size={20} color={colors.primary} />
+  const InfoRow = ({icon, label, value, right}) => (
+    <View style={styles.infoRow}>
+      <View style={styles.infoIcon}>
+        <Ionicons name={icon} size={18} color={colors.primary} />
       </View>
-      <View style={styles.profileInfo}>
-        <Text style={styles.profileLabel}>{label}</Text>
-        <Text style={styles.profileValue}>{value || '-'}</Text>
+
+      <View style={styles.infoBody}>
+        <Text style={styles.infoLabel}>{label}</Text>
+        <Text style={styles.infoValue} numberOfLines={1}>
+          {value || '-'}
+        </Text>
       </View>
+
+      {right ? <View style={styles.infoRight}>{right}</View> : null}
+    </View>
+  );
+
+  const Chip = ({text, tone = 'primary'}) => {
+    const map = {
+      primary: {bg: 'rgba(16,185,129,0.14)', fg: '#065f46', bd: 'rgba(16,185,129,0.25)'},
+      neutral: {bg: 'rgba(59,130,246,0.12)', fg: '#1e3a8a', bd: 'rgba(59,130,246,0.18)'},
+      warning: {bg: 'rgba(245,158,11,0.16)', fg: '#92400e', bd: 'rgba(245,158,11,0.22)'},
+      danger: {bg: 'rgba(239,68,68,0.14)', fg: '#7f1d1d', bd: 'rgba(239,68,68,0.22)'},
+    };
+    const t = map[tone] || map.primary;
+
+    return (
+      <View style={[styles.chip, {backgroundColor: t.bg, borderColor: t.bd}]}>
+        <Text style={[styles.chipText, {color: t.fg}]}>{text}</Text>
+      </View>
+    );
+  };
+
+  const Stat = ({label, value, icon}) => (
+    <View style={styles.statCard}>
+      <View style={styles.statIcon}>
+        <Ionicons name={icon} size={18} color={colors.primary} />
+      </View>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
 
@@ -36,108 +97,127 @@ export default function ProfileScreen(){
       <ImageBackground
         source={require('../assets/images/bg.jpg')}
         style={styles.background}
-        resizeMode="cover"
-      >
+        resizeMode="cover">
         <View style={styles.overlay} />
 
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Header Section */}
-          <View style={styles.header}>
-            <View style={styles.avatar}>
-              <Ionicons name="person" size={40} color="#fff" />
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {/* ===== HERO ===== */}
+          <View style={styles.hero}>
+            <View style={styles.heroTopRow}>
+              <View style={styles.avatarWrap}>
+                {profile.avatarUrl ? (
+                  <Image source={{uri: profile.avatarUrl}} style={styles.avatarImg} />
+                ) : (
+                  <View style={styles.avatarFallback}>
+                    <Ionicons name="person" size={42} color="#fff" />
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.heroText}>
+                <Text style={styles.name} numberOfLines={1}>
+                  {profile.name}
+                </Text>
+                <Text style={styles.designation} numberOfLines={1}>
+                  {profile.designation}
+                </Text>
+
+                <View style={styles.chipsRow}>
+                  <Chip text={profile.status} tone={profile.status === 'Active' ? 'primary' : 'warning'} />
+                  <Chip text={`Role: ${profile.role}`} tone="neutral" />
+                </View>
+              </View>
             </View>
-            <Text style={styles.userName}>{user?.name || 'User'}</Text>
-            <Text style={styles.userRole}>{user?.role || 'Role not specified'}</Text>
-          </View>
 
-          {/* Profile Information Card */}
-          <View style={styles.profileCard}>
-            <Text style={styles.cardTitle}>Profile Information</Text>
-
-            <ProfileItem
-              icon="person"
-              label="Full Name"
-              value={user?.name}
-            />
-
-            <ProfileItem
-              icon="briefcase"
-              label="Role"
-              value={user?.role}
-            />
-
-            <ProfileItem
-              icon="mail"
-              label="Email"
-              value={user?.email}
-            />
-
-            <ProfileItem
-              icon="business"
-              label="Division"
-              value={user?.division}
-            />
-
-            <ProfileItem
-              icon="calendar"
-              label="Member Since"
-              value={user?.joinDate}
-            />
-          </View>
-
-          {/* Quick Stats Card */}
-          <View style={styles.statsCard}>
-            <Text style={styles.cardTitle}>Activity Summary</Text>
-            <View style={styles.statsGrid}>
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>24</Text>
-                <Text style={styles.statLabel}>Trees Added</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>18</Text>
-                <Text style={styles.statLabel}>Verified</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>6</Text>
-                <Text style={styles.statLabel}>Pending</Text>
-              </View>
+            <View style={styles.locationBar}>
+              <Ionicons name="location" size={16} color="#ffffff" />
+              <Text style={styles.locationText} numberOfLines={1}>
+                {profile.circle} • {profile.division} • {profile.range}
+              </Text>
             </View>
           </View>
 
-          {/* Actions Card */}
-          <View style={styles.actionsCard}>
-            <Text style={styles.cardTitle}>Account Actions</Text>
+          {/* ===== QUICK STATS ===== */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Activity Snapshot</Text>
 
-            <TouchableOpacity style={styles.actionButton}>
-              <Ionicons name="settings" size={20} color="#3b82f6" />
-              <Text style={[styles.actionText, { color: '#3b82f6' }]}>Settings</Text>
+            <View style={styles.statsRow}>
+              <Stat label="Trees Added" value="24" icon="leaf" />
+              <Stat label="Verified" value="18" icon="checkmark-done" />
+              <Stat label="Pending" value="6" icon="time" />
+            </View>
+
+
+          </View>
+
+          {/* ===== PROFILE DETAILS ===== */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Profile Details</Text>
+
+            <InfoRow icon="person" label="Full Name" value={profile.name} />
+            <InfoRow icon="briefcase" label="Designation" value={profile.designation} />
+            <InfoRow icon="shield-checkmark" label="Employee ID" value={profile.employeeId} />
+            <InfoRow icon="call" label="Phone" value={profile.phone} />
+            <InfoRow icon="mail" label="Email" value={profile.email} />
+
+            <View style={styles.divider} />
+
+            <InfoRow icon="map" label="Circle" value={profile.circle} />
+            <InfoRow icon="business" label="Division" value={profile.division} />
+            <InfoRow icon="git-network" label="Range / Sub-Division" value={profile.range} />
+            <InfoRow icon="trail-sign" label="Beat" value={profile.beat} />
+            <InfoRow icon="home" label="Station" value={profile.station} />
+
+            <View style={styles.divider} />
+
+            <InfoRow icon="calendar" label="Joined On" value={profile.joinDate} />
+          </View>
+
+          {/* ===== ACTIONS ===== */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Account & Support</Text>
+
+            <TouchableOpacity style={styles.actionRow} activeOpacity={0.8} onPress={() => Alert.alert('Demo', 'Settings screen can be added later.')}>
+              <View style={[styles.actionIcon, {backgroundColor: 'rgba(59,130,246,0.12)'}]}>
+                <Ionicons name="settings" size={18} color="#2563eb" />
+              </View>
+              <View style={styles.actionBody}>
+                <Text style={styles.actionTitle}>Settings</Text>
+                <Text style={styles.actionSub}>App preferences, notifications, and profile updates</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.actionButton}>
-              <Ionicons name="help-circle" size={20} color="#f59e0b" />
-              <Text style={[styles.actionText, { color: '#f59e0b' }]}>Help & Support</Text>
+            <TouchableOpacity style={styles.actionRow} activeOpacity={0.8} onPress={() => Alert.alert('Demo', 'Help & Support screen can be added later.')}>
+              <View style={[styles.actionIcon, {backgroundColor: 'rgba(245,158,11,0.14)'}]}>
+                <Ionicons name="help-circle" size={18} color="#d97706" />
+              </View>
+              <View style={styles.actionBody}>
+                <Text style={styles.actionTitle}>Help & Support</Text>
+                <Text style={styles.actionSub}>FAQs, contact support, and troubleshooting</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.actionButton}>
-              <Ionicons name="document-text" size={20} color="#10b981" />
-              <Text style={[styles.actionText, { color: '#10b981' }]}>Privacy Policy</Text>
+            <TouchableOpacity style={styles.actionRow} activeOpacity={0.8} onPress={() => Alert.alert('Demo', 'Privacy Policy screen can be added later.')}>
+              <View style={[styles.actionIcon, {backgroundColor: 'rgba(16,185,129,0.14)'}]}>
+                <Ionicons name="document-text" size={18} color="#059669" />
+              </View>
+              <View style={styles.actionBody}>
+                <Text style={styles.actionTitle}>Privacy Policy</Text>
+                <Text style={styles.actionSub}>Data usage, storage policy, and permissions</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
             </TouchableOpacity>
           </View>
 
-          {/* Logout Button */}
-          <TouchableOpacity
-            style={styles.logoutButton}
-            onPress={handleLogout}
-          >
+          {/* ===== SIGN OUT ===== */}
+          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
             <Ionicons name="log-out" size={20} color="#fff" />
             <Text style={styles.logoutText}>Sign Out</Text>
           </TouchableOpacity>
 
-          {/* App Version */}
-          <Text style={styles.versionText}>Forest Management System v1.0.0</Text>
+          <Text style={styles.versionText}>Forest Management System • v1.0.0</Text>
         </ScrollView>
       </ImageBackground>
     </View>
@@ -145,186 +225,172 @@ export default function ProfileScreen(){
 }
 
 const styles = StyleSheet.create({
-  screen: {
+  screen: {flex: 1, backgroundColor: '#ffffff'},
+  background: {flex: 1, width: '100%'},
+  overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(2, 6, 23, 0.08)'},
+  scrollContent: {paddingBottom: 34},
+
+  /* Hero */
+  hero: {
+    paddingTop: 54,
+    paddingHorizontal: 16,
+    paddingBottom: 18,
+    backgroundColor: 'rgba(16, 185, 129, 0.82)',
+    borderBottomLeftRadius: 22,
+    borderBottomRightRadius: 22,
+  },
+  heroTopRow: {flexDirection: 'row', alignItems: 'center'},
+  avatarWrap: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    padding: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  avatarImg: {width: '100%', height: '100%', borderRadius: 46},
+  avatarFallback: {
     flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  background: {
-    flex: 1,
-    width: '100%',
-  },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-  },
-  scrollContent: {
-    paddingBottom: 40,
-  },
-  header: {
-    alignItems: 'center',
-    padding: 30,
-    paddingTop: 50,
-    backgroundColor: 'rgba(16, 185, 129, 0.8)',
-  },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 46,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
-  userName: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#ffffff',
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  userRole: {
-    fontSize: 16,
-    color: 'rgba(255,255,255,0.9)',
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-  profileCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    margin: 16,
-    marginBottom: 12,
-    borderRadius: 20,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  statsCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    margin: 16,
-    marginBottom: 12,
-    borderRadius: 20,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  actionsCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    margin: 16,
-    marginBottom: 20,
-    borderRadius: 20,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 16,
-  },
-  profileItem: {
+  heroText: {flex: 1, marginLeft: 14},
+  name: {fontSize: 22, fontWeight: '900', color: '#fff'},
+  designation: {fontSize: 14, fontWeight: '700', color: 'rgba(255,255,255,0.92)', marginTop: 2},
+  chipsRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10},
+  chip: {paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1},
+  chipText: {fontSize: 12, fontWeight: '900'},
+  locationBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
+    marginTop: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.20)',
   },
-  profileIcon: {
-    width: 40,
-    height: 40,
+  locationText: {color: '#fff', fontWeight: '800', fontSize: 12, flex: 1},
+
+  /* Sections */
+  section: {marginTop: 14, marginHorizontal: 16},
+  sectionTitle: {fontSize: 16, fontWeight: '900', color: '#0f172a', marginBottom: 10},
+  sectionHint: {fontSize: 12, color: '#64748b', marginTop: 8},
+
+  statsRow: {flexDirection: 'row', gap: 10},
+  statCard: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 6},
+    shadowOpacity: 0.10,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  statIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(16,185,129,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  statValue: {fontSize: 22, fontWeight: '900', color: '#0f172a'},
+  statLabel: {fontSize: 12, fontWeight: '800', color: '#64748b'},
+
+  /* Cards */
+  card: {
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    marginHorizontal: 16,
+    marginTop: 12,
     borderRadius: 20,
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 8},
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  cardTitle: {fontSize: 16, fontWeight: '900', color: '#0f172a', marginBottom: 10},
+
+  infoRow: {flexDirection: 'row', alignItems: 'center', paddingVertical: 10},
+  infoIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(16,185,129,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.22)',
   },
-  profileInfo: {
-    flex: 1,
-  },
-  profileLabel: {
-    fontSize: 14,
-    color: '#6b7280',
-    fontWeight: '500',
-    marginBottom: 2,
-  },
-  profileValue: {
-    fontSize: 16,
-    color: '#111827',
-    fontWeight: '600',
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statNumber: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.primary,
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#6b7280',
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  actionButton: {
+  infoBody: {flex: 1},
+  infoLabel: {fontSize: 12, fontWeight: '800', color: '#64748b'},
+  infoValue: {fontSize: 15, fontWeight: '800', color: '#0f172a', marginTop: 2},
+  infoRight: {marginLeft: 8},
+
+  divider: {height: 1, backgroundColor: '#eef2f7', marginVertical: 8},
+
+  /* Actions */
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#eef2f7',
+  },
+  actionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(15,23,42,0.06)',
+  },
+  actionBody: {flex: 1},
+  actionTitle: {fontSize: 14, fontWeight: '900', color: '#0f172a'},
+  actionSub: {fontSize: 12, fontWeight: '700', color: '#64748b', marginTop: 2},
+
+  /* Logout */
+  logoutBtn: {
+    marginTop: 16,
+    marginHorizontal: 16,
     paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
-  actionText: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 12,
-  },
-  logoutButton: {
+    borderRadius: 14,
+    backgroundColor: '#ef4444',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#ef4444',
-    marginHorizontal: 16,
-    paddingVertical: 16,
-    borderRadius: 12,
-    gap: 8,
+    gap: 10,
     shadowColor: '#ef4444',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-    marginBottom: 20,
+    shadowOffset: {width: 0, height: 6},
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 8,
   },
-  logoutText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 16,
-  },
+  logoutText: {color: '#fff', fontSize: 16, fontWeight: '900'},
+
   versionText: {
+    marginTop: 14,
     textAlign: 'center',
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(255,255,255,0.70)',
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: '700',
   },
 });

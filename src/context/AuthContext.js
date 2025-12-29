@@ -10,7 +10,7 @@ export default function AuthProvider({children}) {
   const login = async ({email, password}) => {
     // TODO: replace with real API call
     // const res = await api.login(email, password); await AsyncStorage.setItem('token', res.token);
-    setUser({id: 'u_1', name: 'Demo User', role: 'ENUMERATOR'}); // ENUMERATOR | DFO | CCF | ADMIN
+    setUser({id: 'u_1', name: 'Muhammad Ali', role: 'Forest Guard'}); // ENUMERATOR | DFO | CCF | ADMIN
   };
 
   const logout = async () => {

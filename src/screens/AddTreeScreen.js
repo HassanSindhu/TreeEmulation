@@ -1,4 +1,5 @@
-import React, {useState, useEffect} from 'react';
+// /screens/AddTreeScreen.js
+import React, {useMemo, useState, useEffect} from 'react';
 import {
   ScrollView,
   Text,
@@ -11,6 +12,7 @@ import {
   Platform,
   Modal,
   TouchableWithoutFeedback,
+  TextInput,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -60,15 +62,30 @@ const DropdownRow = ({label, value, options, onChange, required}) => {
   );
 };
 
-/* ===================== MAIN SCREEN ===================== */
 export default function AddTreeScreen({navigation}) {
   const [enumModalVisible, setEnumModalVisible] = useState(false);
   const [enumerations, setEnumerations] = useState([]);
 
-  // ✅ NEW: Action modal for selected enumeration row
+  // Row actions modal
   const [actionModalVisible, setActionModalVisible] = useState(false);
   const [selectedEnum, setSelectedEnum] = useState(null);
 
+  // ✅ Search (body)
+  const [search, setSearch] = useState('');
+
+  // ✅ Filters
+  const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [filters, setFilters] = useState({
+    linearType: '',   // Road/Rail/Canal
+    circle: '',
+    block: '',
+    dateFrom: '',     // YYYY-MM-DD
+    dateTo: '',       // YYYY-MM-DD
+    kmFrom: '',       // number
+    kmTo: '',         // number
+  });
+
+  // Enumeration form fields
   const [zone, setZone] = useState('');
   const [circle, setCircle] = useState('');
   const [division, setDivision] = useState('');
@@ -86,7 +103,6 @@ export default function AddTreeScreen({navigation}) {
 
   const zoneOptions = ['Zone 1', 'Zone 2', 'Zone 3'];
   const circleOptions = ['Circle 1', 'Circle 2', 'Circle 3'];
-
   const divisionOptions = ['Lahore', 'Faisalabad', 'Multan'];
   const subDivisionOptions = ['Range 1', 'Range 2', 'Range 3'];
   const blockOptions = ['Block A', 'Block B', 'Block C'];
@@ -94,26 +110,21 @@ export default function AddTreeScreen({navigation}) {
   const linearTypeOptions = ['Road', 'Rail', 'Canal'];
 
   const yearOptions = [
-    '2021-22',
-    '2022-23',
-    '2023-24',
-    '2024-25',
-    '2025-26',
-    '2026-27',
-    '2027-28',
-    '2028-29',
-    '2029-30',
+    '2021-22','2022-23','2023-24','2024-25','2025-26','2026-27','2027-28','2028-29','2029-30',
   ];
 
+  // Road => Left, Right, Both, Median
+  // Rail => Left, Right
+  // Canal => Left, Right
   const getSideOptions = type => {
-    if (type === 'Road') return ['Left', 'Right', 'Both', 'Median']; // L,R,Both,M
-    if (type === 'Rail') return ['Left', 'Right'];                  // L,R
-    if (type === 'Canal') return ['Left', 'Right'];                 // L,R
+    if (type === 'Road') return ['Left', 'Right', 'Both', 'Median'];
+    if (type === 'Rail') return ['Left', 'Right'];
+    if (type === 'Canal') return ['Left', 'Right'];
     return [];
   };
 
   const rdKmLabelFrom = () => (linearType === 'Canal' ? 'RDs for Canal' : 'KMs for Road and Rail');
-  const rdKmLabelTo = () => (linearType === 'Canal' ? 'RDs/KMs To' : 'RDs/KMs To');
+  const rdKmLabelTo = () => 'RDs/KMs To';
 
   useEffect(() => {
     const loadEnumerations = async () => {
@@ -164,6 +175,7 @@ export default function AddTreeScreen({navigation}) {
     setEnumerations(updated);
     await persistEnumerations(updated);
 
+    // reset
     setZone('');
     setCircle('');
     setDivision('');
@@ -183,131 +195,368 @@ export default function AddTreeScreen({navigation}) {
     Alert.alert('Saved', 'Enumeration header has been saved offline.');
   };
 
+  const navTo = (screen, params) => {
+    const parentNav = navigation.getParent?.();
+    (parentNav || navigation).navigate(screen, params);
+  };
+
   const handleCategoryPress = (type, item) => {
     if (!item) return;
 
-    if (type === 'Mature Tree') {
-      navigation.navigate('MatureTreeRecords', {enumeration: item});
-      return;
-    }
-    if (type === 'Pole Crop') {
-      navigation.navigate('PoleCropRecords', {enumeration: item});
-      return;
-    }
-    if (type === 'Afforestation') {
-      navigation.navigate('AfforestationRecords', {enumeration: item});
-      return;
-    }
-    if (type === 'Disposed') {
-      navigation.navigate('Disposal', {enumeration: item});
-      return;
-    }
+    if (type === 'Mature Tree') return navTo('MatureTreeRecords', {enumeration: item});
+    if (type === 'Pole Crop') return navTo('PoleCropRecords', {enumeration: item});
+    if (type === 'Afforestation') return navTo('AfforestationRecords', {enumeration: item});
+    if (type === 'disposal') return navTo('Disposal', {enumeration: item});
+    if (type === 'Superdari') return navTo('Superdari', {enumeration: item});
   };
+
+  const openRowActions = item => {
+    setSelectedEnum(item);
+    setActionModalVisible(true);
+  };
+
+  const iconForType = t => {
+    if (t === 'Road') return 'car-sport-outline';
+    if (t === 'Rail') return 'train-outline';
+    if (t === 'Canal') return 'water-outline';
+    return 'leaf-outline';
+  };
+
+  // ✅ Active filters count (badge)
+  const activeFilterCount = useMemo(() => {
+    const adv = Object.values(filters).filter(v => String(v || '').trim() !== '').length;
+    const s = search.trim() ? 1 : 0;
+    return adv + s;
+  }, [filters, search]);
+
+  const clearAllFilters = () => {
+    setSearch('');
+    setFilters({
+      linearType: '',
+      circle: '',
+      block: '',
+      dateFrom: '',
+      dateTo: '',
+      kmFrom: '',
+      kmTo: '',
+    });
+  };
+
+  // ✅ Filtering logic
+  const filteredEnumerations = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    // parse filter dates (YYYY-MM-DD)
+    const df = filters.dateFrom ? new Date(filters.dateFrom + 'T00:00:00') : null;
+    const dt = filters.dateTo ? new Date(filters.dateTo + 'T23:59:59') : null;
+
+    const kmF = filters.kmFrom !== '' ? Number(filters.kmFrom) : null;
+    const kmT = filters.kmTo !== '' ? Number(filters.kmTo) : null;
+
+    return enumerations.filter(item => {
+      // Type
+      if (filters.linearType && item.linearType !== filters.linearType) return false;
+
+      // Circle
+      if (filters.circle && item.circle !== filters.circle) return false;
+
+      // Block
+      if (filters.block && item.block !== filters.block) return false;
+
+      // Date range (createdAt)
+      if ((df || dt) && item.createdAt) {
+        const itemDate = new Date(item.createdAt);
+        if (df && itemDate < df) return false;
+        if (dt && itemDate > dt) return false;
+      } else if ((df || dt) && !item.createdAt) {
+        return false;
+      }
+
+      // KM/RD range based on item.rdFrom & item.rdTo
+      if (kmF !== null || kmT !== null) {
+        const a = item.rdFrom !== '' && item.rdFrom != null ? Number(item.rdFrom) : null;
+        const b = item.rdTo !== '' && item.rdTo != null ? Number(item.rdTo) : null;
+
+        // if filter applied but item has no km -> reject
+        if (a === null && b === null) return false;
+
+        const itemFrom = a !== null ? a : b;
+        const itemTo = b !== null ? b : a;
+
+        // normalize
+        const minV = Math.min(itemFrom, itemTo);
+        const maxV = Math.max(itemFrom, itemTo);
+
+        if (kmF !== null && maxV < kmF) return false;
+        if (kmT !== null && minV > kmT) return false;
+      }
+
+      // Search
+      if (!q) return true;
+      const blob = [
+        item.zone,
+        item.circle,
+        item.division,
+        item.subDivision,
+        item.block,
+        item.beat,
+        item.year,
+        item.linearType,
+        item.side,
+        item.canalName,
+        item.compartment,
+        item.remarks,
+        item.rdFrom,
+        item.rdTo,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return blob.includes(q);
+    });
+  }, [enumerations, search, filters]);
 
   const sideLabel =
     linearType === 'Road'
       ? 'Side (Left / Right / Both / Median)'
       : 'Side (Left / Right)';
 
-  // ✅ NEW: When user taps table row
-  const openRowActions = item => {
-    setSelectedEnum(item);
-    setActionModalVisible(true);
-  };
-
   return (
     <View style={styles.screen}>
       <ImageBackground source={require('../assets/images/bg.jpg')} style={styles.background} resizeMode="cover">
         <View style={styles.overlay} />
 
-        {/* Fixed Header */}
+        {/* ✅ CLEAN HEADER */}
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
+            <Ionicons name="arrow-back" size={22} color="#fff" />
           </TouchableOpacity>
-          <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>Tree Enumeration</Text>
-            <Text style={styles.headerSubtitle}>Enumeration header details (offline)</Text>
+
+          <View style={{flex: 1}}>
+            <Text style={styles.headerTitle}>Guard Site Information</Text>
+            <Text style={styles.headerSubtitle}>Sites</Text>
           </View>
         </View>
 
         <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            <View style={styles.enumListSection}>
-              <Text style={styles.sectionTitle}>Enumeration Forms</Text>
+          <ScrollView contentContainerStyle={{paddingBottom: 110}} showsVerticalScrollIndicator={false}>
+            <View style={styles.section}>
+
+              {/* ✅ SEARCH + FILTER BUTTON (BODY میں) */}
+              <View style={styles.searchFilterRow}>
+                <View style={styles.searchBox}>
+                  <Ionicons name="search" size={18} color="#6b7280" />
+                  <TextInput
+                    value={search}
+                    onChangeText={setSearch}
+                    placeholder="Search here..."
+                    placeholderTextColor="#9ca3af"
+                    style={styles.searchInput}
+                  />
+                  {!!search && (
+                    <TouchableOpacity onPress={() => setSearch('')}>
+                      <Ionicons name="close-circle" size={18} color="#9ca3af" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterModalVisible(true)}>
+                  <Ionicons name="options-outline" size={20} color="#111827" />
+                  {activeFilterCount > 0 && (
+                    <View style={styles.filterBadge}>
+                      <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              {/* Summary row */}
+              <View style={styles.sectionHead}>
+                <Text style={styles.sectionTitle}>Guard Enumeration Forms</Text>
+                <Text style={styles.sectionMeta}>
+                  {filteredEnumerations.length} / {enumerations.length}
+                </Text>
+              </View>
 
               {enumerations.length === 0 ? (
                 <Text style={styles.emptyText}>
                   No enumeration forms saved yet. Tap the + button to add one.
                 </Text>
+              ) : filteredEnumerations.length === 0 ? (
+                <Text style={styles.emptyText}>
+                  No record matches your search/filters.
+                </Text>
               ) : (
-                // ✅ TABLE (Horizontal + Vertical scroll-friendly)
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <View style={styles.tableWrap}>
-                    {/* Header Row */}
-                    <View style={[styles.tr, styles.thRow]}>
-                      <Text style={[styles.th, {width: 90}]}>Zone</Text>
-                      <Text style={[styles.th, {width: 90}]}>Circle</Text>
-                      <Text style={[styles.th, {width: 110}]}>Division</Text>
-                      <Text style={[styles.th, {width: 120}]}>Range</Text>
-                      <Text style={[styles.th, {width: 90}]}>Block</Text>
-                      <Text style={[styles.th, {width: 90}]}>Beat</Text>
-                      <Text style={[styles.th, {width: 95}]}>Year</Text>
-                      <Text style={[styles.th, {width: 90}]}>Type</Text>
-                      <Text style={[styles.th, {width: 90}]}>Side</Text>
-                      <Text style={[styles.th, {width: 110}]}>RD/KM</Text>
-                      <Text style={[styles.th, {width: 120}]}>Remarks</Text>
-                      <Text style={[styles.th, {width: 90}]}>Open</Text>
+                filteredEnumerations.map(item => (
+                  <TouchableOpacity
+                    key={item.id}
+                    activeOpacity={0.9}
+                    onPress={() => openRowActions(item)}
+                    style={styles.cardRow}>
+                    <View style={{flex: 1}}>
+                      <Text style={styles.cardTitle}>
+                        {item.division} • {item.subDivision}
+                      </Text>
+
+                      <Text style={styles.cardSub}>
+                        {item.zone} • {item.circle} • {item.year}
+                      </Text>
+
+                      <Text style={styles.cardSub2}>
+                        {item.linearType} • {item.side} • Block {item.block} • Beat {item.beat}
+                      </Text>
+
+                      {(item.rdFrom || item.rdTo) ? (
+                        <Text style={styles.cardHint}>
+                          {item.linearType === 'Canal'
+                            ? `RDs: ${item.rdFrom || '—'} → ${item.rdTo || '—'}`
+                            : `KMs: ${item.rdFrom || '—'} → ${item.rdTo || '—'}`}
+                        </Text>
+                      ) : null}
+
+                      {item.remarks ? (
+                        <Text style={styles.cardHint} numberOfLines={1}>
+                          Remarks: {item.remarks}
+                        </Text>
+                      ) : null}
                     </View>
 
-                    {/* Data Rows */}
-                    {enumerations.map((item, idx) => {
-                      const rdText =
-                        item.rdFrom || item.rdTo
-                          ? `${item.rdFrom || '—'} → ${item.rdTo || '—'}`
-                          : '—';
-
-                      return (
-                        <TouchableOpacity
-                          key={item.id}
-                          activeOpacity={0.85}
-                          onPress={() => openRowActions(item)}
-                          style={[
-                            styles.tr,
-                            idx % 2 === 0 ? styles.trEven : styles.trOdd,
-                          ]}>
-                          <Text style={[styles.td, {width: 90}]} numberOfLines={1}>{item.zone || '—'}</Text>
-                          <Text style={[styles.td, {width: 90}]} numberOfLines={1}>{item.circle || '—'}</Text>
-                          <Text style={[styles.td, {width: 110}]} numberOfLines={1}>{item.division || '—'}</Text>
-                          <Text style={[styles.td, {width: 120}]} numberOfLines={1}>{item.subDivision || '—'}</Text>
-                          <Text style={[styles.td, {width: 90}]} numberOfLines={1}>{item.block || '—'}</Text>
-                          <Text style={[styles.td, {width: 90}]} numberOfLines={1}>{item.beat || '—'}</Text>
-                          <Text style={[styles.td, {width: 95}]} numberOfLines={1}>{item.year || '—'}</Text>
-                          <Text style={[styles.td, {width: 90}]} numberOfLines={1}>{item.linearType || '—'}</Text>
-                          <Text style={[styles.td, {width: 90}]} numberOfLines={1}>{item.side || '—'}</Text>
-                          <Text style={[styles.td, {width: 110}]} numberOfLines={1}>{rdText}</Text>
-                          <Text style={[styles.td, {width: 120}]} numberOfLines={1}>{item.remarks || '—'}</Text>
-
-                          {/* “Open” hint */}
-                          <View style={[styles.openCell, {width: 90}]}>
-                            <Ionicons name="open-outline" size={18} color="#0f766e" />
-                            <Text style={styles.openText}>Open</Text>
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </ScrollView>
+                    <View style={styles.cardRight}>
+                      <View style={styles.typeIconWrap}>
+                        <Ionicons name={iconForType(item.linearType)} size={22} color={colors.primary} />
+                      </View>
+                      <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+                    </View>
+                  </TouchableOpacity>
+                ))
               )}
+
+              {/* Optional: clear filters quick */}
+              {(activeFilterCount > 0) && (
+                <TouchableOpacity style={styles.clearAllBtn} onPress={clearAllFilters}>
+                  <Ionicons name="trash-outline" size={16} color="#fff" />
+                  <Text style={styles.clearAllText}>Clear Search & Filters</Text>
+                </TouchableOpacity>
+              )}
+
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
 
-        {/* floating / hover button */}
+        {/* FAB */}
         <TouchableOpacity style={styles.fab} onPress={() => setEnumModalVisible(true)}>
           <Ionicons name="add" size={26} color="#fff" />
         </TouchableOpacity>
       </ImageBackground>
+
+      {/* ✅ Filters Modal */}
+      <Modal transparent visible={filterModalVisible} animationType="fade" onRequestClose={() => setFilterModalVisible(false)}>
+        <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
+          <View style={styles.actionOverlay} />
+        </TouchableWithoutFeedback>
+
+        <View style={styles.filterCard}>
+          <View style={styles.filterHeader}>
+            <Text style={styles.filterTitle}>Filters</Text>
+            <TouchableOpacity onPress={() => setFilterModalVisible(false)}>
+              <Ionicons name="close" size={22} color="#111827" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <DropdownRow
+              label="Type (Road/Rail/Canal)"
+              value={filters.linearType}
+              onChange={v => setFilters(prev => ({...prev, linearType: v}))}
+              options={linearTypeOptions}
+              required={false}
+            />
+
+            <DropdownRow
+              label="Circle"
+              value={filters.circle}
+              onChange={v => setFilters(prev => ({...prev, circle: v}))}
+              options={circleOptions}
+              required={false}
+            />
+
+            <DropdownRow
+              label="Block"
+              value={filters.block}
+              onChange={v => setFilters(prev => ({...prev, block: v}))}
+              options={blockOptions}
+              required={false}
+            />
+
+            {/* Date range */}
+            <View style={{flexDirection: 'row', gap: 10}}>
+              <View style={{flex: 1}}>
+                <FormRow
+                  label="Saved Date From (YYYY-MM-DD)"
+                  value={filters.dateFrom}
+                  onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
+                  placeholder="2025-12-01"
+                />
+              </View>
+              <View style={{flex: 1}}>
+                <FormRow
+                  label="Saved Date To (YYYY-MM-DD)"
+                  value={filters.dateTo}
+                  onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
+                  placeholder="2025-12-31"
+                />
+              </View>
+            </View>
+
+            {/* KM/RD range */}
+            <View style={{flexDirection: 'row', gap: 10}}>
+              <View style={{flex: 1}}>
+                <FormRow
+                  label="KM/RD From"
+                  value={filters.kmFrom}
+                  onChangeText={v => setFilters(prev => ({...prev, kmFrom: v}))}
+                  placeholder="e.g. 10"
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={{flex: 1}}>
+                <FormRow
+                  label="KM/RD To"
+                  value={filters.kmTo}
+                  onChangeText={v => setFilters(prev => ({...prev, kmTo: v}))}
+                  placeholder="e.g. 50"
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+
+            <View style={{flexDirection: 'row', gap: 10, marginTop: 10}}>
+              <TouchableOpacity
+                style={styles.filterApply}
+                onPress={() => setFilterModalVisible(false)}>
+                <Text style={styles.filterApplyText}>Apply</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.filterClear}
+                onPress={() => {
+                  setFilters({
+                    linearType: '',
+                    circle: '',
+                    block: '',
+                    dateFrom: '',
+                    dateTo: '',
+                    kmFrom: '',
+                    kmTo: '',
+                  });
+                }}>
+                <Text style={styles.filterClearText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
 
       {/* ✅ Row Actions Modal */}
       <Modal transparent visible={actionModalVisible} animationType="fade" onRequestClose={() => setActionModalVisible(false)}>
@@ -316,7 +565,7 @@ export default function AddTreeScreen({navigation}) {
         </TouchableWithoutFeedback>
 
         <View style={styles.actionCard}>
-          <Text style={styles.actionTitle}>Select Form</Text>
+          <Text style={styles.actionTitle}>Select Action</Text>
           <Text style={styles.actionSub}>
             {selectedEnum ? `${selectedEnum.division} • ${selectedEnum.subDivision} • ${selectedEnum.year}` : ''}
           </Text>
@@ -357,18 +606,23 @@ export default function AddTreeScreen({navigation}) {
             <Text style={[styles.actionBtnText, styles.actionBtnDangerText]}>Disposed</Text>
           </TouchableOpacity>
 
+          <TouchableOpacity
+            style={[styles.actionBtn, styles.actionBtnWarn]}
+            onPress={() => {
+              setActionModalVisible(false);
+              handleCategoryPress('Superdari', selectedEnum);
+            }}>
+            <Text style={[styles.actionBtnText, styles.actionBtnWarnText]}>Superdari</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.actionCancel} onPress={() => setActionModalVisible(false)}>
             <Text style={styles.actionCancelText}>Cancel</Text>
           </TouchableOpacity>
         </View>
       </Modal>
 
-      {/* Enumeration Header Modal (same as before) */}
-      <Modal
-        visible={enumModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setEnumModalVisible(false)}>
+      {/* ✅ Enumeration Header Modal */}
+      <Modal visible={enumModalVisible} animationType="slide" transparent onRequestClose={() => setEnumModalVisible(false)}>
         <View style={styles.modalRoot}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeaderEnum}>
@@ -405,13 +659,7 @@ export default function AddTreeScreen({navigation}) {
 
               <DropdownRow label="Year (Ex 2021-22)" value={year} onChange={setYear} options={yearOptions} required />
 
-              <DropdownRow
-                label={sideLabel}
-                value={side}
-                onChange={setSide}
-                options={getSideOptions(linearType)}
-                required
-              />
+              <DropdownRow label={sideLabel} value={side} onChange={setSide} options={getSideOptions(linearType)} required />
 
               <FormRow label={`${rdKmLabelFrom()} (From)`} value={rdFrom} onChangeText={setRdFrom} placeholder="From" keyboardType="numeric" />
               <FormRow label={`${rdKmLabelTo()} (To)`} value={rdTo} onChangeText={setRdTo} placeholder="To" keyboardType="numeric" />
@@ -434,109 +682,146 @@ export default function AddTreeScreen({navigation}) {
 const styles = StyleSheet.create({
   screen: {flex: 1, backgroundColor: '#ffffff'},
   background: {flex: 1, width: '100%'},
-  overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16, 185, 129, 0.1)'},
+  overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16, 185, 129, 0.10)'},
 
+  // Clean header
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    padding: 20,
+    gap: 12,
+    paddingHorizontal: 16,
     paddingTop: 50,
-    backgroundColor: 'rgba(16, 185, 129, 0.8)',
-    zIndex: 10,
+    paddingBottom: 14,
+    backgroundColor: 'rgba(16, 185, 129, 0.85)',
   },
   backButton: {
     padding: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    marginRight: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.20)',
+    marginTop: 2,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 24, fontWeight: '800', color: '#ffffff', marginBottom: 4},
-  headerSubtitle: {fontSize: 14, color: 'rgba(255,255,255,0.9)', fontWeight: '500'},
+  headerTitle: {fontSize: 20, fontWeight: '900', color: '#fff'},
+  headerSubtitle: {fontSize: 12, color: 'rgba(255,255,255,0.9)', marginTop: 2},
 
   container: {flex: 1},
-  scrollView: {flex: 1},
-  scrollContent: {paddingBottom: 80},
+  section: {paddingHorizontal: 16, paddingTop: 14},
 
-  enumListSection: {marginHorizontal: 16, marginTop: 12, marginBottom: 4},
-  sectionTitle: {fontSize: 18, fontWeight: '700', color: '#111827', marginBottom: 10},
-  emptyText: {fontSize: 13, color: '#6b7280', marginBottom: 8},
-
-  // ✅ TABLE
-  tableWrap: {
+  // Search + filter row
+  searchFilterRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12},
+  searchBox: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    height: 44,
     borderWidth: 1,
     borderColor: '#e5e7eb',
+  },
+  searchInput: {flex: 1, fontSize: 14, color: '#111827'},
+
+  filterBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  filterBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  filterBadgeText: {color: '#fff', fontSize: 11, fontWeight: '900'},
+
+  sectionHead: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 10},
+  sectionTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
+  sectionMeta: {fontSize: 12, fontWeight: '800', color: '#6b7280'},
+  emptyText: {fontSize: 13, color: '#6b7280', marginTop: 4},
+
+  cardRow: {
+    flexDirection: 'row',
+    gap: 12,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOpacity: 0.10,
+    shadowRadius: 10,
+    shadowOffset: {width: 0, height: 4},
+    elevation: 4,
+  },
+  cardTitle: {fontSize: 14, fontWeight: '900', color: '#111827'},
+  cardSub: {fontSize: 12, fontWeight: '800', color: '#6b7280', marginTop: 4},
+  cardSub2: {fontSize: 12, fontWeight: '700', color: '#6b7280', marginTop: 2},
+  cardHint: {fontSize: 12, fontWeight: '700', color: '#374151', marginTop: 6},
+
+  cardRight: {alignItems: 'center', justifyContent: 'space-between'},
+  typeIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  clearAllBtn: {
+    marginTop: 6,
+    backgroundColor: '#ef4444',
     borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: '#fff',
-  },
-  tr: {
-    flexDirection: 'row',
+    paddingVertical: 10,
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    minHeight: 44,
-  },
-  thRow: {
-    backgroundColor: 'rgba(14, 165, 233, 0.15)', // light blue-ish
-    borderBottomWidth: 1,
-    borderBottomColor: '#cbd5e1',
-  },
-  th: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  td: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  trEven: {backgroundColor: '#ffffff'},
-  trOdd: {backgroundColor: 'rgba(2, 132, 199, 0.04)'},
-  openCell: {
+    justifyContent: 'center',
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    gap: 8,
   },
-  openText: {fontSize: 12, fontWeight: '800', color: '#0f766e'},
+  clearAllText: {color: '#fff', fontWeight: '900'},
 
   fab: {
     position: 'absolute',
     right: 20,
-    bottom: 30,
+    bottom: 28,
     width: 56,
     height: 56,
     borderRadius: 28,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 9,
+    elevation: 10,
     shadowColor: colors.primary,
-    shadowOffset: {width: 0, height: 4},
     shadowOpacity: 0.35,
-    shadowRadius: 8,
+    shadowRadius: 10,
+    shadowOffset: {width: 0, height: 6},
   },
 
-  // Action Modal
+  // overlays + modals
   actionOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.35)'},
   actionCard: {
     position: 'absolute',
     left: 16,
     right: 16,
-    top: '30%',
+    top: '24%',
     backgroundColor: '#fff',
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 14,
     borderWidth: 1,
     borderColor: '#e5e7eb',
-    elevation: 10,
+    elevation: 12,
   },
   actionTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
   actionSub: {fontSize: 12, color: '#6b7280', marginTop: 4, marginBottom: 12},
@@ -549,18 +834,50 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     alignItems: 'center',
   },
-  actionBtnText: {fontSize: 14, fontWeight: '800', color: '#0369a1'},
-  actionBtnDanger: {
-    backgroundColor: 'rgba(239, 68, 68, 0.10)',
-    borderColor: 'rgba(239, 68, 68, 0.25)',
-  },
+  actionBtnText: {fontSize: 14, fontWeight: '900', color: '#0369a1'},
+  actionBtnDanger: {backgroundColor: 'rgba(239, 68, 68, 0.10)', borderColor: 'rgba(239, 68, 68, 0.25)'},
   actionBtnDangerText: {color: '#b91c1c'},
+  actionBtnWarn: {backgroundColor: 'rgba(245, 158, 11, 0.10)', borderColor: 'rgba(245, 158, 11, 0.25)'},
+  actionBtnWarnText: {color: '#b45309'},
   actionCancel: {alignItems: 'center', paddingVertical: 10},
-  actionCancelText: {fontSize: 13, fontWeight: '800', color: '#6b7280'},
+  actionCancelText: {fontSize: 13, fontWeight: '900', color: '#6b7280'},
 
-  // Dropdown + enum modal styles (same)
+  // filter modal
+  filterCard: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    top: '14%',
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    elevation: 12,
+    maxHeight: '78%',
+  },
+  filterHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6},
+  filterTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
+  filterApply: {
+    flex: 1,
+    backgroundColor: colors.primary,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  filterApplyText: {color: '#fff', fontWeight: '900'},
+  filterClear: {
+    flex: 1,
+    backgroundColor: '#f3f4f6',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  filterClearText: {color: '#111827', fontWeight: '900'},
+
+  // dropdowns
   dropdownContainer: {marginHorizontal: 4, marginBottom: 12},
-  dropdownLabel: {fontSize: 14, color: '#374151', marginBottom: 4, fontWeight: '600'},
+  dropdownLabel: {fontSize: 14, color: '#374151', marginBottom: 4, fontWeight: '700'},
   required: {color: '#dc2626'},
   dropdownSelected: {
     flexDirection: 'row',
@@ -568,32 +885,33 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: '#d1d5db',
-    borderRadius: 10,
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     backgroundColor: '#f9fafb',
   },
-  dropdownSelectedText: {fontSize: 14, color: '#111827'},
-  dropdownPlaceholder: {fontSize: 14, color: '#9ca3af'},
+  dropdownSelectedText: {fontSize: 14, color: '#111827', fontWeight: '700'},
+  dropdownPlaceholder: {fontSize: 14, color: '#9ca3af', fontWeight: '700'},
   dropdownModal: {
     position: 'absolute',
     left: 20,
     right: 20,
-    top: '20%',
+    top: '22%',
     backgroundColor: '#fff',
     borderRadius: 16,
     padding: 16,
-    elevation: 8,
+    elevation: 10,
     shadowColor: '#000',
     shadowOffset: {width: 0, height: 6},
     shadowOpacity: 0.25,
     shadowRadius: 10,
   },
-  dropdownModalTitle: {fontSize: 16, fontWeight: '700', marginBottom: 8, color: '#111827'},
+  dropdownModalTitle: {fontSize: 16, fontWeight: '900', marginBottom: 8, color: '#111827'},
   dropdownItem: {paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e5e7eb'},
-  dropdownItemText: {fontSize: 14, color: '#111827'},
+  dropdownItemText: {fontSize: 14, color: '#111827', fontWeight: '700'},
   modalOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.3)'},
 
+  // add enumeration modal
   modalRoot: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.35)',
@@ -610,8 +928,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 12,
     backgroundColor: colors.primary,
+    gap: 8,
   },
-  modalSaveText: {fontSize: 15, fontWeight: '700', color: '#fff', marginLeft: 8},
+  modalSaveText: {fontSize: 15, fontWeight: '900', color: '#fff'},
   modalHeaderEnum: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -626,7 +945,7 @@ const styles = StyleSheet.create({
     marginTop: -16,
     marginBottom: 12,
   },
-  modalTitleEnum: {flex: 1, fontSize: 18, fontWeight: '800', color: '#ffffff'},
+  modalTitleEnum: {flex: 1, fontSize: 18, fontWeight: '900', color: '#ffffff'},
   modalCloseBtnEnum: {
     padding: 6,
     borderRadius: 999,

@@ -13,24 +13,23 @@ import VerificationScreen from '../screens/VerificationScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import colors from '../theme/colors';
 
-// RECORD SCREENS
 import MatureTreeRecordsScreen from '../screens/MatureTreeRecordsScreen';
 import PoleCropRecordsScreen from '../screens/PoleCropRecordsScreen';
 import AfforestationRecordsScreen from '../screens/AfforestationRecordsScreen';
 
-// ✅ NEW DETAIL SCREENS
+// ✅ NEW
 import DisposalScreen from '../screens/DisposalScreen';
 import SuperdariScreen from '../screens/SuperdariScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-/* -------------------- TABS -------------------- */
 function TabsForRole({role}) {
   return (
     <Tab.Navigator
       screenOptions={({route}) => ({
         headerShown: false,
+        headerTitleAlign: 'center',
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: '#9ca3af',
         tabBarIcon: ({color, size}) => {
@@ -47,46 +46,33 @@ function TabsForRole({role}) {
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Registers" component={RegistersScreen} />
       <Tab.Screen name="Add" component={AddTreeScreen} options={{title: 'Add Tree'}} />
-
       {(role === 'DFO' || role === 'CCF' || role === 'ADMIN') && (
         <Tab.Screen name="Verification" component={VerificationScreen} />
       )}
-
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }
 
-/* -------------------- MAIN STACK -------------------- */
 function MainStack({role}) {
   return (
     <Stack.Navigator screenOptions={{headerShown: false}}>
-      {/* Tabs */}
       <Stack.Screen name="Tabs">
         {() => <TabsForRole role={role} />}
       </Stack.Screen>
 
-      {/* Tree Record Screens */}
+      {/* Detail screens */}
       <Stack.Screen name="MatureTreeRecords" component={MatureTreeRecordsScreen} />
       <Stack.Screen name="PoleCropRecords" component={PoleCropRecordsScreen} />
       <Stack.Screen name="AfforestationRecords" component={AfforestationRecordsScreen} />
 
-      {/* ✅ Disposal & Superdari Screens */}
-      <Stack.Screen
-        name="Disposal"
-        component={DisposalScreen}
-        options={{headerShown: false}}
-      />
-      <Stack.Screen
-        name="Superdari"
-        component={SuperdariScreen}
-        options={{headerShown: false}}
-      />
+      {/* ✅ FIX: These were missing -> caused "was not handled by any navigator" */}
+      <Stack.Screen name="Disposal" component={DisposalScreen} />
+      <Stack.Screen name="Superdari" component={SuperdariScreen} />
     </Stack.Navigator>
   );
 }
 
-/* -------------------- AUTH GATE -------------------- */
 function Gate() {
   const {user} = useAuth();
 
@@ -103,7 +89,6 @@ function Gate() {
   );
 }
 
-/* -------------------- ROOT -------------------- */
 export default function RootNavigator() {
   const [ready, setReady] = useState(false);
 

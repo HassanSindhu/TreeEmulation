@@ -1,4 +1,4 @@
-import React, {useCallback, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useMemo, useRef, useState, useEffect} from 'react';
 import {
   View,
   Text,
@@ -25,30 +25,35 @@ import colors from '../theme/colors';
 import FormRow from '../components/FormRow';
 import {DropdownRow} from '../components/SelectRows';
 
-const STORAGE_KEY = 'AFFORESTATION_RECORDS';
-
 /**
- * Updates requested:
- * 1) GPS:
- *    - Auto fetch ONE coordinate (autoGps) when opening Add (and on Edit if missing)
- *    - Allow MULTIPLE manual coordinates (gpsList[])
- *    - A button to "Add Auto GPS to list" (adds autoGps into gpsList)
- *    - A button to "Fill last with auto GPS" (same behavior as your previous fetchGpsFillLast)
- *
- * 2) Status:
- *    - Status displayed in table (Pending/Approved/Returned)
- *    - NOT editable here
- *    - Default "pending" when creating record
- *    - Officer will approve from upper level later
- *    - Filter includes status
+ * ✅ AFFORESTATION SCREEN (FIXED nameOfSiteId)
+ * - Submit API (5000): POST /enum/afforestation   (expects: nameOfSiteId)
+ * - List API (3000): POST /enum/afforestation/user-site-wise-afforestion (expects: name_of_site_id)
+ * - Multi Species (IDs): species_ids:[...]
+ * - GPS behavior kept (autoGps single + gpsList multiple)
+ * - Uses API list as primary source; AsyncStorage is fallback cache
  */
+
+const CACHE_KEY = 'AFFORESTATION_CACHE_BY_SITE';
+
+const API_HOST = 'http://be.lte.gisforestry.com';
+
+// Submit server
+const API_5000 = `${API_HOST}`;
+const SPECIES_URL = `${API_5000}/enum/species`;
+const AFFORESTATION_SUBMIT_URL = `${API_5000}/enum/afforestation`;
+
+// List server
+const API_3000 = `${API_HOST}`;
+const AFFORESTATION_LIST_URL = `${API_3000}/enum/afforestation/user-site-wise-afforestion`;
 
 export default function AfforestationRecordsScreen({navigation, route}) {
   const enumeration = route?.params?.enumeration;
 
   const [records, setRecords] = useState([]);
-  const [modalVisible, setModalVisible] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
 
+  const [modalVisible, setModalVisible] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
@@ -58,12 +63,9 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   const [filters, setFilters] = useState({
     dateFrom: '',
     dateTo: '',
-
     year: '',
     schemeType: '',
-    mainSpecies: '',
     status: '',
-
     successFrom: '',
     successTo: '',
     plantsFrom: '',
@@ -73,73 +75,324 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   });
 
   // form states
-  const [registerNo, setRegisterNo] = useState('');
-  const [pageNo, setPageNo] = useState('');
   const [avgMilesKm, setAvgMilesKm] = useState('');
   const [success, setSuccess] = useState(0);
-  const [mainSpecies, setMainSpecies] = useState('');
   const [year, setYear] = useState('');
   const [schemeType, setSchemeType] = useState('');
   const [projectName, setProjectName] = useState('');
   const [nonDevScheme, setNonDevScheme] = useState('');
   const [plants, setPlants] = useState('');
 
-  // ✅ GPS: one auto + multiple manual list
-  const [autoGps, setAutoGps] = useState(''); // single auto fetched point
-  const [gpsList, setGpsList] = useState(['']); // multiple manual points
+  // ✅ Species from API + multi-select ids
+  const [speciesRows, setSpeciesRows] = useState([]); // [{id,name}]
+  const [speciesLoading, setSpeciesLoading] = useState(false);
+  const [speciesModalVisible, setSpeciesModalVisible] = useState(false);
+  const [speciesIds, setSpeciesIds] = useState([]); // [2,8,...]
+
+  // ✅ GPS
+  const [autoGps, setAutoGps] = useState('');
+  const [gpsList, setGpsList] = useState(['']);
   const [gpsLoading, setGpsLoading] = useState(false);
   const lastGpsRequestAtRef = useRef(0);
 
-  const [remarks, setRemarks] = useState('');
   const [pictureUri, setPictureUri] = useState(null);
 
-  const speciesOptions = ['Shisham', 'Kikar', 'Sufaida', 'Siris', 'Neem', 'Other'];
-
   const yearOptions = [
-    '2021-22','2022-23','2023-24','2024-25','2025-26',
-    '2026-27','2027-28','2028-29','2029-30',
+    '2021-22',
+    '2022-23',
+    '2023-24',
+    '2024-25',
+    '2025-26',
+    '2026-27',
+    '2027-28',
+    '2028-29',
+    '2029-30',
   ];
 
   const schemeOptions = ['Development', 'Non Development'];
   const nonDevOptions = ['1% Plantation', 'Replenishment', 'Gap Filling', 'Other'];
 
-  const loadRecords = async () => {
-    try {
-      const json = await AsyncStorage.getItem(STORAGE_KEY);
-      const all = json ? JSON.parse(json) : [];
-      setRecords(all.filter(r => r.enumerationId === enumeration?.id));
-    } catch (e) {
-      console.warn('Failed to load records', e);
-      setRecords([]);
-    }
+  const normalizeList = json => {
+    if (!json) return [];
+    if (Array.isArray(json)) return json;
+    if (typeof json === 'object' && Array.isArray(json.data)) return json.data;
+    return [];
   };
+
+  const getAuthToken = async () => {
+    const t = await AsyncStorage.getItem('AUTH_TOKEN');
+    return t || '';
+  };
+
+  // ✅ Helper: safely coerce numeric ids
+  const asValidId = (v) => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+    if (typeof v === 'string') {
+      const s = v.trim();
+      if (!s) return null;
+      const n = Number(s);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  };
+
+  /**
+   * ✅ FIX: resolve site id from many possible places
+   * (because your enumeration object might not contain name_of_site_id or id)
+   */
+  const resolveNameOfSiteId = useCallback(() => {
+    const p = route?.params || {};
+    const e = enumeration || {};
+
+    // try route params first (best)
+    const candidates = [
+      p.nameOfSiteId,
+      p.name_of_site_id,
+      p.siteId,
+      p.site_id,
+
+      // common enumeration shapes
+      e.nameOfSiteId,
+      e.name_of_site_id,
+      e.siteId,
+      e.site_id,
+
+      // nested patterns (very common in APIs)
+      e.site?.id,
+      e.site?.site_id,
+      e.name_of_site?.id,
+      e.name_of_site?.site_id,
+
+      // last resort (sometimes the screen is passed a site object directly)
+      e.id,
+      e._id,
+    ];
+
+    for (const c of candidates) {
+      const n = asValidId(c);
+      if (n) return n;
+    }
+
+    return null;
+  }, [route?.params, enumeration]);
+
+  const nameOfSiteId = useMemo(() => resolveNameOfSiteId(), [resolveNameOfSiteId]);
+
+  const parseLatLng = str => {
+    const s = String(str || '').trim();
+    if (!s) return {lat: null, lng: null};
+    const parts = s
+      .split(/,|\s+/)
+      .map(p => p.trim())
+      .filter(Boolean);
+    if (parts.length < 2) return {lat: null, lng: null};
+    const lat = Number(parts[0]);
+    const lng = Number(parts[1]);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return {lat: null, lng: null};
+    return {lat, lng};
+  };
+
+  const toNumber = v => {
+    if (v === null || v === undefined) return null;
+    const m = String(v).match(/-?\d+(\.\d+)?/);
+    if (!m) return null;
+    const n = Number(m[0]);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  // ---------------------------
+  // Species API
+  // ---------------------------
+  const fetchSpecies = useCallback(async () => {
+    try {
+      setSpeciesLoading(true);
+      const res = await fetch(SPECIES_URL);
+      const json = await res.json().catch(() => null);
+      const rows = normalizeList(json);
+
+      const normalized = rows
+        .map(x => {
+          if (typeof x === 'string') return {id: null, name: x};
+          return {
+            id: x?.id ?? x?.species_id ?? null,
+            name: x?.name ?? x?.species_name ?? '',
+          };
+        })
+        .filter(x => x.name);
+
+      setSpeciesRows(normalized);
+    } catch (e) {
+      setSpeciesRows([]);
+    } finally {
+      setSpeciesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSpecies();
+  }, [fetchSpecies]);
+
+  const speciesLabel = useMemo(() => {
+    if (!speciesIds.length) return 'Select species';
+    const names = speciesRows
+      .filter(x => speciesIds.includes(Number(x.id)))
+      .map(x => x.name);
+    if (!names.length) return `${speciesIds.length} selected`;
+    return names.join(', ');
+  }, [speciesIds, speciesRows]);
+
+  const toggleSpeciesId = id => {
+    const num = Number(id);
+    if (!Number.isFinite(num)) return;
+    setSpeciesIds(prev => {
+      const set = new Set(prev.map(Number));
+      if (set.has(num)) set.delete(num);
+      else set.add(num);
+      return Array.from(set);
+    });
+  };
+
+  // ---------------------------
+  // LIST API (3000): site-wise afforestation
+  // ---------------------------
+  const normalizeApiRecord = raw => {
+    const scheme = raw?.scheme_type ?? raw?.schemeType ?? '';
+    const project = raw?.project_name ?? raw?.projectName ?? '';
+    const yearVal = raw?.year ?? '';
+
+    const succRaw =
+      raw?.success_percentage ?? raw?.successPercent ?? raw?.success_percent ?? '';
+    const succNum =
+      typeof succRaw === 'number'
+        ? succRaw
+        : toNumber(String(succRaw).replace('%', ''));
+
+    const avRaw = raw?.av_miles_km ?? raw?.avgMilesKm ?? raw?.avg_miles_km ?? '';
+    const plantsRaw = raw?.no_of_plants ?? raw?.noOfPlants ?? raw?.no_of_plants ?? '';
+
+    const autoLat = raw?.auto_lat ?? raw?.autoLat ?? null;
+    const autoLng = raw?.auto_long ?? raw?.autoLong ?? null;
+
+    const manualLat = raw?.manual_lat ?? raw?.manualLat ?? null;
+    const manualLng = raw?.manual_long ?? raw?.manualLong ?? null;
+
+    const spIds =
+      raw?.species_ids ??
+      raw?.speciesIds ??
+      raw?.species_id ??
+      raw?.species ??
+      [];
+
+    const species_ids = Array.isArray(spIds)
+      ? spIds.map(n => Number(n)).filter(n => Number.isFinite(n))
+      : [];
+
+    const autoGpsLatLong =
+      Number.isFinite(Number(autoLat)) && Number.isFinite(Number(autoLng))
+        ? `${Number(autoLat).toFixed(6)}, ${Number(autoLng).toFixed(6)}`
+        : (raw?.autoGpsLatLong || '');
+
+    const gpsBoundingBox =
+      Number.isFinite(Number(manualLat)) && Number.isFinite(Number(manualLng))
+        ? [`${Number(manualLat).toFixed(6)}, ${Number(manualLng).toFixed(6)}`]
+        : (Array.isArray(raw?.gpsBoundingBox) ? raw.gpsBoundingBox : []);
+
+    return {
+      id: String(raw?.id ?? raw?._id ?? Date.now()),
+      avgMilesKm: avRaw !== null && avRaw !== undefined ? String(avRaw) : '',
+      successPercent: Number.isFinite(Number(succNum)) ? Number(succNum) : 0,
+      year: String(yearVal || ''),
+      schemeType: String(scheme || ''),
+      projectName: scheme === 'Development' ? String(project || '') : '',
+      nonDevScheme: scheme === 'Non Development' ? String(project || '') : '',
+      noOfPlants: plantsRaw !== null && plantsRaw !== undefined ? String(plantsRaw) : '',
+      autoGpsLatLong,
+      gpsBoundingBox,
+      pictureUri: raw?.pictureUri ?? null,
+      species_ids,
+      status: raw?.status || 'pending',
+      createdAt: raw?.createdAt || raw?.created_at || new Date().toISOString(),
+      lastSubmitStatus: raw?.lastSubmitStatus || 'SERVER',
+      serverRaw: raw,
+    };
+  };
+
+  const cacheKeyForSite = siteId => `${CACHE_KEY}:${siteId}`;
+
+  const fetchAfforestationList = useCallback(async () => {
+    if (!nameOfSiteId) {
+      setRecords([]);
+      return;
+    }
+
+    try {
+      setListLoading(true);
+
+      const token = await getAuthToken();
+      if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
+
+      const res = await fetch(AFFORESTATION_LIST_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({name_of_site_id: Number(nameOfSiteId)}),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg = json?.message || json?.error || `API Error (${res.status})`;
+        throw new Error(msg);
+      }
+
+      const rows = normalizeList(json);
+      const normalized = rows.map(normalizeApiRecord);
+
+      setRecords(normalized);
+
+      await AsyncStorage.setItem(cacheKeyForSite(nameOfSiteId), JSON.stringify(normalized));
+    } catch (e) {
+      try {
+        const cached = await AsyncStorage.getItem(cacheKeyForSite(nameOfSiteId));
+        const arr = cached ? JSON.parse(cached) : [];
+        setRecords(Array.isArray(arr) ? arr : []);
+      } catch (ignored) {
+        setRecords([]);
+      }
+      Alert.alert('Load Failed', e?.message || 'Failed to load records from server.');
+    } finally {
+      setListLoading(false);
+    }
+  }, [nameOfSiteId]);
 
   useFocusEffect(
     useCallback(() => {
-      loadRecords();
-    }, [enumeration?.id]),
+      fetchAfforestationList();
+    }, [fetchAfforestationList]),
   );
 
+  // ---------------------------
+  // FORM / GPS helpers
+  // ---------------------------
   const resetFormForAdd = () => {
     setIsEdit(false);
     setEditingId(null);
 
-    setRegisterNo(enumeration?.registerNo || '');
-    setPageNo(enumeration?.pageNo || '');
     setAvgMilesKm('');
     setSuccess(0);
-    setMainSpecies('');
     setYear('');
     setSchemeType('');
     setProjectName('');
     setNonDevScheme('');
     setPlants('');
 
-    // GPS
+    setSpeciesIds([]);
+
     setAutoGps('');
     setGpsList(['']);
 
-    setRemarks('');
     setPictureUri(null);
   };
 
@@ -167,7 +420,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   const openAddForm = () => {
     resetFormForAdd();
     setModalVisible(true);
-    // ✅ auto fetch one coordinate
     setTimeout(() => fetchAutoGps(true), 300);
   };
 
@@ -175,31 +427,25 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     setIsEdit(true);
     setEditingId(record.id);
 
-    setRegisterNo(record.registerNo || '');
-    setPageNo(record.pageNo || '');
     setAvgMilesKm(record.avgMilesKm || '');
     setSuccess(typeof record.successPercent === 'number' ? record.successPercent : 0);
-    setMainSpecies(record.mainSpecies || '');
     setYear(record.year || '');
     setSchemeType(record.schemeType || '');
     setProjectName(record.projectName || '');
     setNonDevScheme(record.nonDevScheme || '');
     setPlants(record.noOfPlants || '');
 
-    // GPS
+    setSpeciesIds(Array.isArray(record.species_ids) ? record.species_ids : []);
+
     setAutoGps(record.autoGpsLatLong || '');
     setGpsList(
-      Array.isArray(record.gpsBoundingBox) && record.gpsBoundingBox.length
-        ? record.gpsBoundingBox
-        : ['']
+      Array.isArray(record.gpsBoundingBox) && record.gpsBoundingBox.length ? record.gpsBoundingBox : [''],
     );
 
-    setRemarks(record.remarks || '');
     setPictureUri(record.pictureUri || null);
 
     setModalVisible(true);
 
-    // ✅ auto fetch if missing
     if (!record.autoGpsLatLong) {
       setTimeout(() => fetchAutoGps(true), 300);
     }
@@ -217,7 +463,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     });
   };
 
-  // ✅ Add / remove coordinate inputs (manual list)
   const addCoordinateField = () => setGpsList(prev => [...prev, '']);
 
   const removeCoordinateField = index => {
@@ -229,9 +474,8 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     });
   };
 
-  // ✅ Fill last field with autoGps (if present). Otherwise fetch first then fill.
   const fillLastWithAuto = () => {
-    const apply = (value) => {
+    const apply = value => {
       setGpsList(prev => {
         const list = Array.isArray(prev) && prev.length ? [...prev] : [''];
         list[list.length - 1] = value;
@@ -244,7 +488,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       return;
     }
 
-    // fetch then fill
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
@@ -262,16 +505,14 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     );
   };
 
-  // ✅ Add autoGps into list as a NEW coordinate (append)
   const addAutoToList = () => {
     const v = (autoGps || '').trim();
     if (!v) {
-      Alert.alert('GPS', 'Auto GPS is empty. Tap "Re-Fetch Auto GPS" first.');
+      Alert.alert('GPS', 'Auto GPS is empty. Tap "Re-Fetch" first.');
       return;
     }
     setGpsList(prev => {
       const list = Array.isArray(prev) ? [...prev] : [];
-      // If list has one empty field, fill it, else append
       if (list.length === 1 && !String(list[0] || '').trim()) {
         list[0] = v;
         return list;
@@ -280,111 +521,124 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     });
   };
 
+  // ---------------------------
+  // SUBMIT API (5000)
+  // ---------------------------
+  const submitAfforestationToApi = async body => {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
+
+    const res = await fetch(AFFORESTATION_SUBMIT_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const msg = json?.message || json?.error || `API Error (${res.status})`;
+      throw new Error(msg);
+    }
+    return json;
+  };
+
   const upsertRecord = async () => {
-    if (!avgMilesKm || !year) {
-      Alert.alert('Missing', 'Avg. Miles/KM and Year are required.');
+    if (!avgMilesKm || !year || !schemeType) {
+      Alert.alert('Missing', 'Avg. Miles/KM, Year and Scheme Type are required.');
       return;
     }
-    if (!enumeration?.id) {
-      Alert.alert('Error', 'Parent enumeration missing.');
+
+    // ✅ FIXED: use resolved site id
+    if (!nameOfSiteId) {
+      const keys = enumeration ? Object.keys(enumeration).join(', ') : '(enumeration is null)';
+      Alert.alert(
+        'Error',
+        `nameOfSiteId missing. Ensure previous screen passes it.\n\nAvailable enumeration keys:\n${keys}`,
+      );
+      return;
+    }
+
+    if (!speciesIds.length) {
+      Alert.alert('Missing', 'Please select at least 1 species.');
       return;
     }
 
     const cleanGps = gpsList.map(x => (x || '').trim()).filter(x => x.length > 0);
 
+    const {lat: autoLat, lng: autoLng} = parseLatLng(autoGps);
+    const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : '';
+    const {lat: manualLat, lng: manualLng} = parseLatLng(lastManual || autoGps);
+
+    const av = Number(String(avgMilesKm).replace(/[^\d.]+/g, ''));
+    const avMilesKmNum = Number.isFinite(av) ? av : 0;
+
+    const p = Number(String(plants).replace(/[^\d.]+/g, ''));
+    const plantsNum = Number.isFinite(p) ? p : 0;
+
+    const apiBody = {
+      // ✅ required by submit API
+      nameOfSiteId: Number(nameOfSiteId),
+      av_miles_km: avMilesKmNum,
+      success_percentage: `${Number(success)}%`,
+      year: String(year),
+      scheme_type: String(schemeType),
+      project_name:
+        schemeType === 'Development'
+          ? String(projectName || '')
+          : String(nonDevScheme || ''),
+      no_of_plants: plantsNum,
+      auto_lat: autoLat,
+      auto_long: autoLng,
+      manual_lat: manualLat,
+      manual_long: manualLng,
+      species_ids: speciesIds.map(n => Number(n)).filter(n => Number.isFinite(n)),
+    };
+
     try {
-      const json = await AsyncStorage.getItem(STORAGE_KEY);
-      const arr = json ? JSON.parse(json) : [];
+      await submitAfforestationToApi(apiBody);
 
-      if (isEdit && editingId) {
-        const updated = arr.map(r => {
-          if (r.id !== editingId) return r;
-          return {
-            ...r,
-            registerNo,
-            pageNo,
-            avgMilesKm,
-            successPercent: success,
-            mainSpecies,
-            year,
-            schemeType,
-            projectName: schemeType === 'Development' ? projectName : '',
-            nonDevScheme: schemeType === 'Non Development' ? nonDevScheme : '',
-            noOfPlants: plants,
-
-            // ✅ GPS save
-            autoGpsLatLong: (autoGps || '').trim(),
-            gpsBoundingBox: cleanGps,
-
-            remarks,
-            pictureUri,
-            updatedAt: new Date().toISOString(),
-          };
-        });
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-        Alert.alert('Updated', 'Afforestation record updated.');
-      } else {
-        const record = {
-          id: Date.now().toString(),
-          enumerationId: enumeration.id,
-          registerNo,
-          pageNo,
-          avgMilesKm,
-          successPercent: success,
-          mainSpecies,
-          year,
-          schemeType,
-          projectName: schemeType === 'Development' ? projectName : '',
-          nonDevScheme: schemeType === 'Non Development' ? nonDevScheme : '',
-          noOfPlants: plants,
-
-          // ✅ GPS save
-          autoGpsLatLong: (autoGps || '').trim(),
-          gpsBoundingBox: cleanGps,
-
-          remarks,
-          pictureUri,
-
-          // ✅ default status
-          status: 'pending',
-
-          createdAt: new Date().toISOString(),
-        };
-        const updated = [record, ...arr];
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-        Alert.alert('Saved', 'Afforestation saved successfully.');
-      }
-
+      Alert.alert(
+        'Success',
+        isEdit ? 'Updated on server successfully.' : 'Saved to server successfully.',
+      );
       setModalVisible(false);
-      await loadRecords();
+      fetchAfforestationList();
     } catch (e) {
-      console.warn('Failed to save record', e);
-      Alert.alert('Error', 'Failed to save. Please try again.');
+      Alert.alert('Submit Failed', e?.message || 'Server submit failed.');
     }
   };
 
   const deleteRecord = recordId => {
-    Alert.alert('Delete', 'Are you sure you want to delete this record?', [
-      {text: 'Cancel', style: 'cancel'},
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            const json = await AsyncStorage.getItem(STORAGE_KEY);
-            const arr = json ? JSON.parse(json) : [];
-            const updated = arr.filter(r => r.id !== recordId);
-            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-            await loadRecords();
-          } catch (e) {
-            console.warn('Failed to delete record', e);
-            Alert.alert('Error', 'Failed to delete. Please try again.');
-          }
+    Alert.alert(
+      'Delete',
+      'This will remove the record from app cache only (no server delete API provided). Continue?',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const updated = records.filter(r => r.id !== recordId);
+              setRecords(updated);
+              if (nameOfSiteId) {
+                await AsyncStorage.setItem(cacheKeyForSite(nameOfSiteId), JSON.stringify(updated));
+              }
+            } catch (e) {
+              Alert.alert('Error', 'Failed to remove. Please try again.');
+            }
+          },
         },
-      },
-    ]);
+      ],
+    );
   };
 
+  // ---------------------------
+  // FILTERS
+  // ---------------------------
   const activeFilterCount = useMemo(() => {
     const adv = Object.values(filters).filter(v => String(v || '').trim() !== '').length;
     const s = search.trim() ? 1 : 0;
@@ -398,7 +652,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       dateTo: '',
       year: '',
       schemeType: '',
-      mainSpecies: '',
       status: '',
       successFrom: '',
       successTo: '',
@@ -428,7 +681,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       if (filters.status && (r.status || 'pending') !== filters.status) return false;
       if (filters.year && r.year !== filters.year) return false;
       if (filters.schemeType && r.schemeType !== filters.schemeType) return false;
-      if (filters.mainSpecies && r.mainSpecies !== filters.mainSpecies) return false;
 
       if ((df || dt) && r.createdAt) {
         const d = new Date(r.createdAt);
@@ -460,6 +712,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       }
 
       if (!q) return true;
+
       const gpsText =
         Array.isArray(r.gpsBoundingBox) && r.gpsBoundingBox.length
           ? r.gpsBoundingBox.join(' | ')
@@ -468,7 +721,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       const blob = [
         r.year,
         r.schemeType,
-        r.mainSpecies,
         r.projectName,
         r.nonDevScheme,
         r.avgMilesKm,
@@ -476,10 +728,9 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         String(r.noOfPlants ?? ''),
         r.autoGpsLatLong,
         gpsText,
-        r.remarks,
-        r.registerNo,
-        r.pageNo,
+        Array.isArray(r.species_ids) ? r.species_ids.join(',') : '',
         r.status,
+        r.lastSubmitStatus,
       ]
         .filter(Boolean)
         .join(' ')
@@ -489,21 +740,16 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     });
   }, [records, search, filters]);
 
-  function toNumber(v) {
-    if (v === null || v === undefined) return null;
-    const m = String(v).match(/-?\d+(\.\d+)?/);
-    if (!m) return null;
-    const n = Number(m[0]);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  const statusBadge = (st) => {
-    const key = (st || 'pending');
+  const statusBadge = st => {
+    const key = st || 'pending';
     if (key === 'approved') return {label: 'Approved', color: '#16a34a', icon: 'checkmark-done'};
     if (key === 'returned') return {label: 'Returned', color: '#ef4444', icon: 'arrow-undo'};
     return {label: 'Pending', color: '#f97316', icon: 'time'};
   };
 
+  // ---------------------------
+  // UI
+  // ---------------------------
   return (
     <View style={styles.screen}>
       <ImageBackground source={require('../assets/images/bg.jpg')} style={styles.background} resizeMode="cover">
@@ -513,17 +759,22 @@ export default function AfforestationRecordsScreen({navigation, route}) {
           <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
+
           <View style={styles.headerContent}>
             <Text style={styles.headerTitle}>Afforestation</Text>
             <Text style={styles.headerSubtitle}>
               {enumeration?.division} • {enumeration?.block} • {enumeration?.year}
+              {nameOfSiteId ? ` • Site# ${nameOfSiteId}` : ''}
             </Text>
           </View>
+
+          <TouchableOpacity style={styles.refreshBtn} onPress={fetchAfforestationList}>
+            <Ionicons name="refresh" size={20} color="#fff" />
+          </TouchableOpacity>
         </View>
 
         <ScrollView contentContainerStyle={{paddingBottom: 110}}>
           <View style={styles.section}>
-
             <View style={styles.searchFilterRow}>
               <View style={styles.searchBox}>
                 <Ionicons name="search" size={18} color="#6b7280" />
@@ -552,13 +803,20 @@ export default function AfforestationRecordsScreen({navigation, route}) {
             </View>
 
             <View style={styles.sectionHead}>
-              <Text style={styles.sectionTitle}>Saved Records</Text>
+              <Text style={styles.sectionTitle}>Records</Text>
               <Text style={styles.sectionMeta}>
                 {filteredRecords.length} / {records.length}
               </Text>
             </View>
 
-            {records.length === 0 ? (
+            {listLoading ? (
+              <View style={{paddingVertical: 14}}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={{marginTop: 8, color: '#6b7280', fontWeight: '700'}}>
+                  Loading from server…
+                </Text>
+              </View>
+            ) : records.length === 0 ? (
               <Text style={styles.emptyText}>No records yet. Tap + to add.</Text>
             ) : filteredRecords.length === 0 ? (
               <Text style={styles.emptyText}>No record matches your search/filters.</Text>
@@ -569,9 +827,9 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     <Text style={[styles.th, {width: 110}]}>Year</Text>
                     <Text style={[styles.th, {width: 100}]}>Success %</Text>
                     <Text style={[styles.th, {width: 140}]}>Avg</Text>
-                    <Text style={[styles.th, {width: 140}]}>Main Species</Text>
+                    <Text style={[styles.th, {width: 180}]}>Species IDs</Text>
                     <Text style={[styles.th, {width: 150}]}>Scheme</Text>
-                    <Text style={[styles.th, {width: 200}]}>Project / Non-Dev</Text>
+                    <Text style={[styles.th, {width: 220}]}>Project / Non-Dev</Text>
                     <Text style={[styles.th, {width: 120}]}>Plants</Text>
                     <Text style={[styles.th, {width: 200}]}>Auto GPS</Text>
                     <Text style={[styles.th, {width: 280}]}>GPS List</Text>
@@ -587,12 +845,13 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
                     const proj =
                       r.schemeType === 'Development'
-                        ? (r.projectName || '—')
+                        ? r.projectName || '—'
                         : r.schemeType === 'Non Development'
-                          ? (r.nonDevScheme || '—')
-                          : '—';
+                        ? r.nonDevScheme || '—'
+                        : '—';
 
                     const sb = statusBadge(r.status);
+                    const sp = Array.isArray(r.species_ids) ? r.species_ids.join(', ') : '—';
 
                     return (
                       <View key={r.id} style={[styles.tr, idx % 2 === 0 ? styles.trEven : styles.trOdd]}>
@@ -601,9 +860,9 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                           {typeof r.successPercent === 'number' ? `${r.successPercent}%` : '—'}
                         </Text>
                         <Text style={[styles.td, {width: 140}]} numberOfLines={1}>{r.avgMilesKm || '—'}</Text>
-                        <Text style={[styles.td, {width: 140}]} numberOfLines={1}>{r.mainSpecies || '—'}</Text>
+                        <Text style={[styles.td, {width: 180}]} numberOfLines={1}>{sp}</Text>
                         <Text style={[styles.td, {width: 150}]} numberOfLines={1}>{r.schemeType || '—'}</Text>
-                        <Text style={[styles.td, {width: 200}]} numberOfLines={1}>{proj}</Text>
+                        <Text style={[styles.td, {width: 220}]} numberOfLines={1}>{proj}</Text>
                         <Text style={[styles.td, {width: 120}]} numberOfLines={1}>{r.noOfPlants || '—'}</Text>
                         <Text style={[styles.td, {width: 200}]} numberOfLines={1}>{r.autoGpsLatLong || '—'}</Text>
                         <Text style={[styles.td, {width: 280}]} numberOfLines={1}>{gpsText}</Text>
@@ -645,11 +904,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       </ImageBackground>
 
       {/* Filters Modal */}
-      <Modal
-        transparent
-        visible={filterModalVisible}
-        animationType="fade"
-        onRequestClose={() => setFilterModalVisible(false)}>
+      <Modal transparent visible={filterModalVisible} animationType="fade" onRequestClose={() => setFilterModalVisible(false)}>
         <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
           <View style={styles.actionOverlay} />
         </TouchableWithoutFeedback>
@@ -704,90 +959,37 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
             <View style={{flexDirection: 'row', gap: 10}}>
               <View style={{flex: 1}}>
-                <DropdownRow
-                  label="Year"
-                  value={filters.year}
-                  onChange={v => setFilters(prev => ({...prev, year: v}))}
-                  options={['', ...yearOptions]}
-                />
+                <DropdownRow label="Year" value={filters.year} onChange={v => setFilters(prev => ({...prev, year: v}))} options={['', ...yearOptions]} />
               </View>
               <View style={{flex: 1}}>
-                <DropdownRow
-                  label="Scheme Type"
-                  value={filters.schemeType}
-                  onChange={v => setFilters(prev => ({...prev, schemeType: v}))}
-                  options={['', ...schemeOptions]}
-                />
-              </View>
-            </View>
-
-            <DropdownRow
-              label="Main Species"
-              value={filters.mainSpecies}
-              onChange={v => setFilters(prev => ({...prev, mainSpecies: v}))}
-              options={['', ...speciesOptions]}
-            />
-
-            <View style={{flexDirection: 'row', gap: 10}}>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="Success % From (>=)"
-                  value={filters.successFrom}
-                  onChangeText={v => setFilters(prev => ({...prev, successFrom: v}))}
-                  placeholder="e.g. 10"
-                  keyboardType="numeric"
-                />
-              </View>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="Success % To (<=)"
-                  value={filters.successTo}
-                  onChangeText={v => setFilters(prev => ({...prev, successTo: v}))}
-                  placeholder="e.g. 90"
-                  keyboardType="numeric"
-                />
+                <DropdownRow label="Scheme Type" value={filters.schemeType} onChange={v => setFilters(prev => ({...prev, schemeType: v}))} options={['', ...schemeOptions]} />
               </View>
             </View>
 
             <View style={{flexDirection: 'row', gap: 10}}>
               <View style={{flex: 1}}>
-                <FormRow
-                  label="Plants From (>=)"
-                  value={filters.plantsFrom}
-                  onChangeText={v => setFilters(prev => ({...prev, plantsFrom: v}))}
-                  placeholder="e.g. 1000"
-                  keyboardType="numeric"
-                />
+                <FormRow label="Success % From (>=)" value={filters.successFrom} onChangeText={v => setFilters(prev => ({...prev, successFrom: v}))} placeholder="e.g. 10" keyboardType="numeric" />
               </View>
               <View style={{flex: 1}}>
-                <FormRow
-                  label="Plants To (<=)"
-                  value={filters.plantsTo}
-                  onChangeText={v => setFilters(prev => ({...prev, plantsTo: v}))}
-                  placeholder="e.g. 5000"
-                  keyboardType="numeric"
-                />
+                <FormRow label="Success % To (<=)" value={filters.successTo} onChangeText={v => setFilters(prev => ({...prev, successTo: v}))} placeholder="e.g. 90" keyboardType="numeric" />
               </View>
             </View>
 
             <View style={{flexDirection: 'row', gap: 10}}>
               <View style={{flex: 1}}>
-                <FormRow
-                  label="Avg Miles/KM From (>=)"
-                  value={filters.avgFrom}
-                  onChangeText={v => setFilters(prev => ({...prev, avgFrom: v}))}
-                  placeholder="e.g. 1"
-                  keyboardType="numeric"
-                />
+                <FormRow label="Plants From (>=)" value={filters.plantsFrom} onChangeText={v => setFilters(prev => ({...prev, plantsFrom: v}))} placeholder="e.g. 1000" keyboardType="numeric" />
               </View>
               <View style={{flex: 1}}>
-                <FormRow
-                  label="Avg Miles/KM To (<=)"
-                  value={filters.avgTo}
-                  onChangeText={v => setFilters(prev => ({...prev, avgTo: v}))}
-                  placeholder="e.g. 10"
-                  keyboardType="numeric"
-                />
+                <FormRow label="Plants To (<=)" value={filters.plantsTo} onChangeText={v => setFilters(prev => ({...prev, plantsTo: v}))} placeholder="e.g. 5000" keyboardType="numeric" />
+              </View>
+            </View>
+
+            <View style={{flexDirection: 'row', gap: 10}}>
+              <View style={{flex: 1}}>
+                <FormRow label="Avg Miles/KM From (>=)" value={filters.avgFrom} onChangeText={v => setFilters(prev => ({...prev, avgFrom: v}))} placeholder="e.g. 1" keyboardType="numeric" />
+              </View>
+              <View style={{flex: 1}}>
+                <FormRow label="Avg Miles/KM To (<=)" value={filters.avgTo} onChangeText={v => setFilters(prev => ({...prev, avgTo: v}))} placeholder="e.g. 10" keyboardType="numeric" />
               </View>
             </View>
 
@@ -804,7 +1006,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     dateTo: '',
                     year: '',
                     schemeType: '',
-                    mainSpecies: '',
                     status: '',
                     successFrom: '',
                     successTo: '',
@@ -821,6 +1022,54 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         </View>
       </Modal>
 
+      {/* Species Multi-Select Modal */}
+      <Modal visible={speciesModalVisible} transparent animationType="fade" onRequestClose={() => setSpeciesModalVisible(false)}>
+        <TouchableWithoutFeedback onPress={() => setSpeciesModalVisible(false)}>
+          <View style={styles.actionOverlay} />
+        </TouchableWithoutFeedback>
+
+        <View style={styles.speciesCard}>
+          <View style={styles.filterHeader}>
+            <Text style={styles.filterTitle}>Select Species</Text>
+            <TouchableOpacity onPress={() => setSpeciesModalVisible(false)}>
+              <Ionicons name="close" size={22} color="#111827" />
+            </TouchableOpacity>
+          </View>
+
+          {speciesLoading ? (
+            <View style={{padding: 12}}>
+              <ActivityIndicator />
+              <Text style={{marginTop: 8, color: '#6b7280'}}>Loading species…</Text>
+            </View>
+          ) : (
+            <ScrollView style={{maxHeight: 420}}>
+              {speciesRows.map(row => {
+                const checked = speciesIds.includes(Number(row.id));
+                return (
+                  <TouchableOpacity key={String(row.id)} style={styles.speciesRow} onPress={() => toggleSpeciesId(row.id)}>
+                    <View style={[styles.checkbox, checked && styles.checkboxOn]}>
+                      {checked ? <Ionicons name="checkmark" size={16} color="#fff" /> : null}
+                    </View>
+                    <Text style={styles.speciesText}>{row.name}</Text>
+                    <Text style={styles.speciesIdText}>#{row.id}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
+
+          <View style={{flexDirection: 'row', gap: 10, marginTop: 12}}>
+            <TouchableOpacity style={[styles.filterClear, {flex: 1}]} onPress={() => setSpeciesIds([])}>
+              <Text style={styles.filterClearText}>Clear</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[styles.filterApply, {flex: 1}]} onPress={() => setSpeciesModalVisible(false)}>
+              <Text style={styles.filterApplyText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Add/Edit Modal */}
       <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalRoot}>
@@ -834,8 +1083,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
               <ScrollView showsVerticalScrollIndicator={false}>
-                <FormRow label="Register No" value={registerNo} onChangeText={setRegisterNo} />
-                <FormRow label="Page No" value={pageNo} onChangeText={setPageNo} />
                 <FormRow label="Av. Miles/ KM" value={avgMilesKm} onChangeText={setAvgMilesKm} keyboardType="numeric" required />
 
                 <View style={styles.sliderBlock}>
@@ -854,7 +1101,12 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   <Text style={styles.sliderValue}>{success}%</Text>
                 </View>
 
-                <DropdownRow label="Main Species" value={mainSpecies} onChange={setMainSpecies} options={speciesOptions} />
+                <Text style={styles.pickLabel}>Species (Multi)</Text>
+                <TouchableOpacity style={[styles.multiSelectBtn, {opacity: speciesLoading ? 0.7 : 1}]} disabled={speciesLoading} onPress={() => setSpeciesModalVisible(true)}>
+                  <Ionicons name="leaf-outline" size={18} color="#fff" />
+                  <Text style={styles.multiSelectText}>{speciesLabel}</Text>
+                </TouchableOpacity>
+
                 <DropdownRow label="Year" value={year} onChange={setYear} options={yearOptions} required />
 
                 <DropdownRow
@@ -874,17 +1126,11 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                 ) : null}
 
                 {schemeType === 'Non Development' ? (
-                  <DropdownRow
-                    label="Non Development Scheme"
-                    value={nonDevScheme}
-                    onChange={setNonDevScheme}
-                    options={nonDevOptions}
-                  />
+                  <DropdownRow label="Non Development Scheme" value={nonDevScheme} onChange={setNonDevScheme} options={nonDevOptions} />
                 ) : null}
 
                 <FormRow label="No. of Plants" value={plants} onChangeText={setPlants} keyboardType="numeric" />
 
-                {/* ✅ Auto GPS + Multiple List */}
                 <View style={{marginTop: 10}}>
                   <Text style={styles.gpsTitle}>Location</Text>
 
@@ -925,7 +1171,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   </View>
 
                   <Text style={styles.gpsNote}>
-                    You can add multiple coordinates (boundary). Auto GPS is one point and can be added to list.
+                    You can add multiple coordinates (boundary). API uses the last manual coordinate as manual_lat/long.
                   </Text>
 
                   {gpsList.map((coord, index) => (
@@ -961,8 +1207,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   </Text>
                 </View>
 
-                <FormRow label="Remarks" value={remarks} onChangeText={setRemarks} multiline />
-
                 <TouchableOpacity style={styles.saveBtn} onPress={upsertRecord}>
                   <Ionicons name="save" size={20} color="#fff" />
                   <Text style={styles.saveText}>{isEdit ? 'Update' : 'Save'}</Text>
@@ -986,6 +1230,7 @@ const styles = StyleSheet.create({
   headerContent: {flex: 1},
   headerTitle: {fontSize: 22, fontWeight: '800', color: '#fff'},
   headerSubtitle: {fontSize: 13, color: 'rgba(255,255,255,0.9)', marginTop: 2},
+  refreshBtn: {padding: 8, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.2)', marginLeft: 10},
 
   section: {marginHorizontal: 16, marginTop: 12},
   sectionHead: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 10},
@@ -993,102 +1238,43 @@ const styles = StyleSheet.create({
   sectionMeta: {fontSize: 12, fontWeight: '800', color: '#6b7280'},
   emptyText: {fontSize: 13, color: '#6b7280'},
 
-  // Search + Filter
   searchFilterRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12},
   searchBox: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    height: 44,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderRadius: 14, paddingHorizontal: 12, height: 44,
+    borderWidth: 1, borderColor: '#e5e7eb',
   },
   searchInput: {flex: 1, fontSize: 14, color: '#111827'},
   filterBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 44, height: 44, borderRadius: 14,
     backgroundColor: 'rgba(255,255,255,0.95)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#e5e7eb',
   },
-  filterBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#ef4444',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
+  filterBadge: {position: 'absolute', top: -6, right: -6, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: '#ef4444', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4},
   filterBadgeText: {color: '#fff', fontSize: 11, fontWeight: '900'},
 
-  clearAllBtn: {
-    marginTop: 10,
-    backgroundColor: '#ef4444',
-    borderRadius: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-  },
+  clearAllBtn: {marginTop: 10, backgroundColor: '#ef4444', borderRadius: 12, paddingVertical: 10, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8},
   clearAllText: {color: '#fff', fontWeight: '900'},
 
-  // Table
-  tableWrap: {
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: '#fff',
-  },
+  tableWrap: {borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, overflow: 'hidden', backgroundColor: '#fff'},
   tr: {flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', minHeight: 44},
   thRow: {backgroundColor: 'rgba(14, 165, 233, 0.15)', borderBottomWidth: 1, borderBottomColor: '#cbd5e1'},
   th: {paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontWeight: '800', color: '#0f172a'},
   td: {paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontWeight: '600', color: '#111827'},
   trEven: {backgroundColor: '#ffffff'},
   trOdd: {backgroundColor: 'rgba(2, 132, 199, 0.04)'},
+
   actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, paddingVertical: 10},
   iconBtn: {padding: 8, borderRadius: 10, backgroundColor: '#f3f4f6'},
 
   statusCell: {paddingHorizontal: 10, paddingVertical: 10},
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 999,
-    borderWidth: 1,
-    alignSelf: 'flex-start',
-  },
+  statusPill: {flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, borderWidth: 1, alignSelf: 'flex-start'},
   statusText: {fontSize: 12, fontWeight: '900'},
 
-  // Filter modal
   actionOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.35)'},
-  filterCard: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    top: '14%',
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    elevation: 12,
-    maxHeight: '78%',
-  },
+  filterCard: {position: 'absolute', left: 16, right: 16, top: '14%', backgroundColor: '#fff', borderRadius: 18, padding: 14, borderWidth: 1, borderColor: '#e5e7eb', elevation: 12, maxHeight: '78%'},
   filterHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6},
   filterTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
   filterHint: {fontSize: 12, color: '#374151', fontWeight: '900', marginBottom: 6},
@@ -1115,18 +1301,8 @@ const styles = StyleSheet.create({
   sliderLabel: {fontSize: 14, color: '#374151', fontWeight: '600', marginBottom: 4},
   sliderValue: {fontSize: 13, color: '#111827', fontWeight: '700', textAlign: 'right', marginTop: -4},
 
-  // GPS styles
   gpsTitle: {fontSize: 14, color: '#374151', fontWeight: '700', marginBottom: 6},
-  autoGpsBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 14,
-    padding: 10,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-  },
+  autoGpsBox: {flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 14, padding: 10, backgroundColor: 'rgba(255,255,255,0.95)'},
   autoGpsLabel: {fontSize: 12, color: '#374151', fontWeight: '800'},
   autoGpsValue: {fontSize: 12, color: '#111827', fontWeight: '900', marginTop: 2},
   autoGpsBtn: {flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.primary},
@@ -1147,7 +1323,7 @@ const styles = StyleSheet.create({
   addAutoBtn: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, backgroundColor: '#16a34a'},
   addAutoText: {fontSize: 12, color: '#fff', marginLeft: 6, fontWeight: '900'},
 
-  pickLabel: {fontSize: 14, color: '#374151', fontWeight: '600', marginBottom: 4},
+  pickLabel: {fontSize: 14, color: '#374151', fontWeight: '600', marginBottom: 6},
   imageBtn: {flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.primary},
   imageBtnText: {fontSize: 13, color: '#fff', marginLeft: 8, fontWeight: '700'},
   imageOk: {fontSize: 12, color: '#16a34a', marginTop: 6},
@@ -1155,4 +1331,14 @@ const styles = StyleSheet.create({
 
   saveBtn: {marginTop: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 12, backgroundColor: colors.primary},
   saveText: {fontSize: 15, fontWeight: '700', color: '#fff', marginLeft: 8},
+
+  multiSelectBtn: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#111827', marginBottom: 10},
+  multiSelectText: {color: '#fff', fontWeight: '800', flex: 1},
+
+  speciesCard: {position: 'absolute', left: 16, right: 16, top: '18%', backgroundColor: '#fff', borderRadius: 18, padding: 14, borderWidth: 1, borderColor: '#e5e7eb', elevation: 12, maxHeight: '70%'},
+  speciesRow: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f3f4f6'},
+  checkbox: {width: 22, height: 22, borderRadius: 6, borderWidth: 1, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff'},
+  checkboxOn: {backgroundColor: '#16a34a', borderColor: '#16a34a'},
+  speciesText: {flex: 1, color: '#111827', fontWeight: '800'},
+  speciesIdText: {color: '#6b7280', fontWeight: '800'},
 });

@@ -1,5 +1,5 @@
-// DisposalScreen.js
-import React, {useEffect, useState} from 'react';
+
+import React, {useEffect, useState, useMemo} from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Alert,
   ImageBackground,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -20,25 +21,25 @@ import {DropdownRow} from '../components/SelectRows';
 
 const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 
+const API_BASE = 'http://be.lte.gisforestry.com';
+const DISPOSAL_POST_URL = `${API_BASE}/enum/disposal`;
+
 export default function DisposalScreen({navigation, route}) {
   const {treeId, enumeration} = route.params || {};
 
   const [record, setRecord] = useState(null);
-
-  // Basic / Linking
-  const [registerNo, setRegisterNo] = useState('');
-  const [pageNo, setPageNo] = useState('');
+  const [saving, setSaving] = useState(false);
 
   // Damage Report
   const [drNo, setDrNo] = useState('');
-  const [drDate, setDrDate] = useState(''); // YYYY-MM-DD
+  const [drDate, setDrDate] = useState(''); // YYYY-MM-DD or ISO
 
   // Case / Prosecution
-  const [fcNo, setFcNo] = useState(''); // Forest Case No
-  const [dpcNo, setDpcNo] = useState(''); // Divisional Prosecution No
-  const [dpcDate, setDpcDate] = useState(''); // YYYY-MM-DD
+  const [fcNo, setFcNo] = useState('');
+  const [dpcNo, setDpcNo] = useState('');
+  const [dpcDate, setDpcDate] = useState(''); // YYYY-MM-DD or ISO
 
-  // FIR (if DPC not implemented)
+  // FIR
   const [firChecked, setFirChecked] = useState(false);
   const [firNo, setFirNo] = useState('');
   const [firDate, setFirDate] = useState('');
@@ -46,14 +47,14 @@ export default function DisposalScreen({navigation, route}) {
   // General remarks
   const [remarks, setRemarks] = useState('');
 
-  // PEEDA Act (if no legal action)
+  // PEEDA Act
   const [peedaChecked, setPeedaChecked] = useState(false);
-  const [peedaAct, setPeedaAct] = useState(''); // text
+  const [peedaAct, setPeedaAct] = useState(''); // text / reference
   const [authorityOO, setAuthorityOO] = useState('');
   const [officerName, setOfficerName] = useState('');
   const [officerDesignation, setOfficerDesignation] = useState('');
   const [actDate, setActDate] = useState('');
-  const [peedaRemarks, setPeedaRemarks] = useState('');
+  const [actRemarks, setActRemarks] = useState(''); // action taken remarks
 
   // Auction
   const [auctionChecked, setAuctionChecked] = useState(false);
@@ -63,7 +64,7 @@ export default function DisposalScreen({navigation, route}) {
   const [auctionAuthorityDesignation, setAuctionAuthorityDesignation] = useState('');
   const [auctionRemarks, setAuctionRemarks] = useState('');
 
-  // Pictures (kept per section, backward-compatible)
+  // Pictures (kept per section)
   const [drImages, setDrImages] = useState([]);
   const [firImages, setFirImages] = useState([]);
   const [peedaImages, setPeedaImages] = useState([]);
@@ -76,54 +77,57 @@ export default function DisposalScreen({navigation, route}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const getAuthToken = async () => {
+    const t = await AsyncStorage.getItem('AUTH_TOKEN');
+    return t || '';
+  };
+
   const loadRecord = async () => {
-    const json = await AsyncStorage.getItem(STORAGE_KEY);
-    const arr = json ? JSON.parse(json) : [];
-    const r = arr.find(x => x.id === treeId);
+    try {
+      const json = await AsyncStorage.getItem(STORAGE_KEY);
+      const arr = json ? JSON.parse(json) : [];
+      const r = arr.find(x => String(x.id) === String(treeId));
+      if (!r) return;
 
-    if (!r) return;
+      setRecord(r);
 
-    setRecord(r);
+      const d = r.disposal || {};
 
-    // Pre-fill register/page from record if present
-    setRegisterNo(r.registerNo || enumeration?.registerNo || '');
-    setPageNo(r.pageNo || enumeration?.pageNo || '');
+      setDrNo(d.drNo || '');
+      setDrDate(d.drDate || '');
 
-    const d = r.disposal || {};
+      setFcNo(d.fcNo || '');
+      setDpcNo(d.dpcNo || '');
+      setDpcDate(d.dpcDate || '');
 
-    setDrNo(d.drNo || '');
-    setDrDate(d.drDate || '');
+      setFirChecked(!!d.firChecked);
+      setFirNo(d.firNo || '');
+      setFirDate(d.firDate || '');
 
-    setFcNo(d.fcNo || '');
-    setDpcNo(d.dpcNo || '');
-    setDpcDate(d.dpcDate || '');
+      setRemarks(d.remarks || '');
 
-    setFirChecked(!!d.firChecked);
-    setFirNo(d.firNo || '');
-    setFirDate(d.firDate || '');
+      setPeedaChecked(!!d.peedaChecked);
+      setPeedaAct(d.peedaAct || '');
+      setAuthorityOO(d.authorityOO || '');
+      setOfficerName(d.officerName || '');
+      setOfficerDesignation(d.officerDesignation || '');
+      setActDate(d.actDate || '');
+      setActRemarks(d.actRemarks || '');
 
-    setRemarks(d.remarks || '');
+      setAuctionChecked(!!d.auctionChecked);
+      setAuctionDetails(d.auctionDetails || '');
+      setAuctionDate(d.auctionDate || '');
+      setAuctionAuthorityName(d.auctionAuthorityName || '');
+      setAuctionAuthorityDesignation(d.auctionAuthorityDesignation || '');
+      setAuctionRemarks(d.auctionRemarks || '');
 
-    setPeedaChecked(!!d.peedaChecked);
-    setPeedaAct(d.peedaAct || '');
-    setAuthorityOO(d.authorityOO || '');
-    setOfficerName(d.officerName || '');
-    setOfficerDesignation(d.officerDesignation || '');
-    setActDate(d.actDate || '');
-    setPeedaRemarks(d.peedaRemarks || '');
-
-    setAuctionChecked(!!d.auctionChecked);
-    setAuctionDetails(d.auctionDetails || '');
-    setAuctionDate(d.auctionDate || '');
-    setAuctionAuthorityName(d.auctionAuthorityName || '');
-    setAuctionAuthorityDesignation(d.auctionAuthorityDesignation || '');
-    setAuctionRemarks(d.auctionRemarks || '');
-
-    // Pictures (backward compatible)
-    setDrImages(Array.isArray(d.drImages) ? d.drImages : []);
-    setFirImages(Array.isArray(d.firImages) ? d.firImages : []);
-    setPeedaImages(Array.isArray(d.peedaImages) ? d.peedaImages : []);
-    setAuctionImages(Array.isArray(d.auctionImages) ? d.auctionImages : []);
+      setDrImages(Array.isArray(d.drImages) ? d.drImages : []);
+      setFirImages(Array.isArray(d.firImages) ? d.firImages : []);
+      setPeedaImages(Array.isArray(d.peedaImages) ? d.peedaImages : []);
+      setAuctionImages(Array.isArray(d.auctionImages) ? d.auctionImages : []);
+    } catch (e) {
+      // ignore
+    }
   };
 
   const pickImages = setter => {
@@ -139,81 +143,175 @@ export default function DisposalScreen({navigation, route}) {
     setter(prev => (Array.isArray(prev) ? prev.filter(x => x !== uri) : []));
   };
 
-  const saveDisposal = async () => {
-    if (!record?.id) {
-      Alert.alert('Error', 'Record not found.');
-      return;
+  // ---- Date helpers ----
+  const toIsoDateOrNull = (val) => {
+    const s = String(val || '').trim();
+    if (!s) return null;
+
+    // If already ISO-ish, keep as Date parsing
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+
+    // If user types YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const d2 = new Date(`${s}T00:00:00.000Z`);
+      if (!Number.isNaN(d2.getTime())) return d2.toISOString();
     }
+    return null;
+  };
 
-    // Keep your existing FIR/PEEDA logic intact (conditional fields stay optional)
-    if (firChecked && !firNo.trim()) {
-      Alert.alert('Missing', 'FIR No is required (because FIR is selected).');
-      return;
-    }
+  // ---- pictures mapping (TEST placeholders) ----
+  // Backend expects: pictures: ["https://example.com/pic1.jpg", ...]
+  // You asked: allow multi images in UI, but for now send example links.
+  const buildPicturesPayload = () => {
+    const count =
+      (drImages?.length || 0) +
+      (firImages?.length || 0) +
+      (peedaImages?.length || 0) +
+      (auctionImages?.length || 0);
 
-    const json = await AsyncStorage.getItem(STORAGE_KEY);
-    const arr = json ? JSON.parse(json) : [];
+    const n = Math.max(1, Math.min(count || 2, 10)); // at least 1; cap 10 for safety
+    return Array.from({length: n}).map((_, i) => `https://example.com/pic${i + 1}.jpg`);
+  };
 
-    const updated = arr.map(r => {
-      if (r.id !== treeId) return r;
-      return {
-        ...r,
-        registerNo, // keep updated at record-level too
-        pageNo,
-        disposal: {
-          // basic
-          registerNo,
-          pageNo,
+  const enumerationIdResolved = useMemo(() => {
+    // IMPORTANT: your API requires enumerationId (number)
+    return (
+      (enumeration?.id != null ? Number(enumeration.id) : null) ??
+      (record?.enumerationId != null ? Number(record.enumerationId) : null)
+    );
+  }, [enumeration?.id, record?.enumerationId]);
 
-          // DR
-          drNo,
-          drDate,
+  const submitToApi = async (body) => {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-          // case/prosecution
-          fcNo,
-          dpcNo,
-          dpcDate,
-
-          // FIR (if DPC not implemented)
-          firChecked,
-          firNo: firChecked ? firNo : '',
-          firDate: firChecked ? firDate : '',
-
-          // general
-          remarks,
-
-          // PEEDA
-          peedaChecked,
-          peedaAct: peedaChecked ? peedaAct : '',
-          authorityOO: peedaChecked ? authorityOO : '',
-          officerName: peedaChecked ? officerName : '',
-          officerDesignation: peedaChecked ? officerDesignation : '',
-          actDate: peedaChecked ? actDate : '',
-          peedaRemarks: peedaChecked ? peedaRemarks : '',
-
-          // Auction
-          auctionChecked,
-          auctionDetails: auctionChecked ? auctionDetails : '',
-          auctionDate: auctionChecked ? auctionDate : '',
-          auctionAuthorityName: auctionChecked ? auctionAuthorityName : '',
-          auctionAuthorityDesignation: auctionChecked ? auctionAuthorityDesignation : '',
-          auctionRemarks: auctionChecked ? auctionRemarks : '',
-
-          // Pictures
-          drImages,
-          firImages,
-          peedaImages,
-          auctionImages,
-
-          savedAt: new Date().toISOString(),
-        },
-      };
+    const res = await fetch(DISPOSAL_POST_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
     });
 
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    Alert.alert('Saved', 'Disposal saved successfully.');
-    navigation.goBack();
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const msg = json?.message || json?.error || `API Error (${res.status})`;
+      throw new Error(msg);
+    }
+    return json;
   };
+
+  const saveDisposal = async () => {
+    if (!treeId) return Alert.alert('Error', 'treeId missing.');
+    if (!enumerationIdResolved) return Alert.alert('Error', 'enumerationId missing.');
+
+    // Validate FIR requirement
+    if (firChecked && !firNo.trim()) {
+      return Alert.alert('Missing', 'FIR No is required (because FIR is selected).');
+    }
+
+    // Build payload exactly per your curl
+    const apiBody = {
+      enumerationId: Number(enumerationIdResolved),
+
+      dr_no: drNo?.trim() || '',
+      dr_date: toIsoDateOrNull(drDate),
+
+      fc_no: fcNo?.trim() || '',
+      dpc_no: dpcNo?.trim() || '',
+      dpc_date: toIsoDateOrNull(dpcDate),
+
+      fir_no: firChecked ? (firNo?.trim() || '') : '',
+      fir_date: firChecked ? toIsoDateOrNull(firDate) : null,
+
+      remarks: remarks?.trim() || '',
+
+      peeda_act: !!peedaChecked,
+      authority_oo: peedaChecked ? (authorityOO?.trim() || '') : '',
+      officer_name: peedaChecked ? (officerName?.trim() || '') : '',
+      officer_designation: peedaChecked ? (officerDesignation?.trim() || '') : '',
+      act_date: peedaChecked ? toIsoDateOrNull(actDate) : null,
+      act_remarks: peedaChecked ? (actRemarks?.trim() || '') : '',
+
+      auction: !!auctionChecked,
+      auction_details: auctionChecked ? (auctionDetails?.trim() || '') : '',
+      auction_date: auctionChecked ? toIsoDateOrNull(auctionDate) : null,
+      auction_authority_name: auctionChecked ? (auctionAuthorityName?.trim() || '') : null,
+      auction_authority_designation: auctionChecked ? (auctionAuthorityDesignation?.trim() || '') : null,
+      auction_remarks: auctionChecked ? (auctionRemarks?.trim() || '') : null,
+
+      pictures: buildPicturesPayload(),
+    };
+
+    // Optional: Keep local AsyncStorage save for UI state
+    // and also POST to API.
+    try {
+      setSaving(true);
+
+      // 1) POST to API
+      await submitToApi(apiBody);
+
+      // 2) Save locally for your UI status (optional but keeps your existing workflow)
+      const json = await AsyncStorage.getItem(STORAGE_KEY);
+      const arr = json ? JSON.parse(json) : [];
+
+      const updated = arr.map(r => {
+        if (String(r.id) !== String(treeId)) return r;
+        return {
+          ...r,
+          disposal: {
+            // UI fields (keep yours)
+            drNo,
+            drDate,
+            fcNo,
+            dpcNo,
+            dpcDate,
+            firChecked,
+            firNo: firChecked ? firNo : '',
+            firDate: firChecked ? firDate : '',
+            remarks,
+
+            peedaChecked,
+            peedaAct: peedaChecked ? peedaAct : '',
+            authorityOO: peedaChecked ? authorityOO : '',
+            officerName: peedaChecked ? officerName : '',
+            officerDesignation: peedaChecked ? officerDesignation : '',
+            actDate: peedaChecked ? actDate : '',
+            actRemarks: peedaChecked ? actRemarks : '',
+
+            auctionChecked,
+            auctionDetails: auctionChecked ? auctionDetails : '',
+            auctionDate: auctionChecked ? auctionDate : '',
+            auctionAuthorityName: auctionChecked ? auctionAuthorityName : '',
+            auctionAuthorityDesignation: auctionChecked ? auctionAuthorityDesignation : '',
+            auctionRemarks: auctionChecked ? auctionAuctionRemarksOrEmpty(auctionChecked, auctionRemarks) : '',
+
+            drImages,
+            firImages,
+            peedaImages,
+            auctionImages,
+
+            savedAt: new Date().toISOString(),
+          },
+        };
+      });
+
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+
+      Alert.alert('Success', 'Disposal saved to server.');
+      navigation.goBack();
+    } catch (e) {
+      Alert.alert('Error', e?.message || 'Failed to save disposal.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  function auctionAuctionRemarksOrEmpty(checked, val) {
+    return checked ? (val || '') : '';
+  }
 
   const subtitle =
     enumeration?.division || enumeration?.block || enumeration?.year
@@ -247,21 +345,13 @@ export default function DisposalScreen({navigation, route}) {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Linking</Text>
             <Text style={styles.metaLine}>
-              Enumeration ID: <Text style={styles.metaValue}>{record?.enumerationId || '—'}</Text>
+              Enumeration ID:{' '}
+              <Text style={styles.metaValue}>{String(enumerationIdResolved ?? '—')}</Text>
             </Text>
             <Text style={styles.metaLine}>
-              Disposal ID (Tree ID): <Text style={styles.metaValue}>{treeId || '—'}</Text>
+              Disposal (Tree) ID:{' '}
+              <Text style={styles.metaValue}>{String(treeId ?? '—')}</Text>
             </Text>
-            <Text style={styles.metaLine}>
-              System Tree ID: <Text style={styles.metaValue}>{record?.systemTreeId || '—'}</Text>
-            </Text>
-          </View>
-
-          {/* Basic Info */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Basic</Text>
-            <FormRow label="Register No" value={registerNo} onChangeText={setRegisterNo} />
-            <FormRow label="Page No" value={pageNo} onChangeText={setPageNo} />
           </View>
 
           {/* Damage Report */}
@@ -310,13 +400,8 @@ export default function DisposalScreen({navigation, route}) {
               placeholder="2025-12-31"
             />
 
-            {/* FIR toggle - same logic as your old screen */}
             <TouchableOpacity style={styles.checkRow} onPress={() => setFirChecked(!firChecked)}>
-              <Ionicons
-                name={firChecked ? 'checkbox' : 'square-outline'}
-                size={20}
-                color="#111827"
-              />
+              <Ionicons name={firChecked ? 'checkbox' : 'square-outline'} size={20} color="#111827" />
               <Text style={styles.checkText}>FIR (Incase if DPC not implemented)</Text>
             </TouchableOpacity>
 
@@ -361,11 +446,7 @@ export default function DisposalScreen({navigation, route}) {
           <View style={styles.card}>
             <TouchableOpacity style={styles.sectionToggle} onPress={() => setPeedaChecked(!peedaChecked)}>
               <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
-                <Ionicons
-                  name={peedaChecked ? 'checkbox' : 'square-outline'}
-                  size={20}
-                  color="#111827"
-                />
+                <Ionicons name={peedaChecked ? 'checkbox' : 'square-outline'} size={20} color="#111827" />
                 <Text style={styles.cardTitle}>PEEDA Act (Incase if no legal action)</Text>
               </View>
               <Ionicons name={peedaChecked ? 'chevron-up' : 'chevron-down'} size={20} color="#6b7280" />
@@ -373,7 +454,12 @@ export default function DisposalScreen({navigation, route}) {
 
             {peedaChecked && (
               <>
-                <FormRow label="PEEDA Act" value={peedaAct} onChangeText={setPeedaAct} placeholder="Enter act / reference" />
+                <FormRow
+                  label="PEEDA Act"
+                  value={peedaAct}
+                  onChangeText={setPeedaAct}
+                  placeholder="Enter act / reference"
+                />
                 <FormRow
                   label="Authority O/O (if PEEDA Act enforced)"
                   value={authorityOO}
@@ -392,7 +478,12 @@ export default function DisposalScreen({navigation, route}) {
                   onChangeText={setActDate}
                   placeholder="2025-12-31"
                 />
-                <FormRow label="Remarks" value={peedaRemarks} onChangeText={setPeedaRemarks} multiline />
+                <FormRow
+                  label="Act Remarks"
+                  value={actRemarks}
+                  onChangeText={setActRemarks}
+                  multiline
+                />
 
                 <View style={styles.picRow}>
                   <TouchableOpacity style={styles.picBtn} onPress={() => pickImages(setPeedaImages)}>
@@ -423,11 +514,7 @@ export default function DisposalScreen({navigation, route}) {
           <View style={styles.card}>
             <TouchableOpacity style={styles.sectionToggle} onPress={() => setAuctionChecked(!auctionChecked)}>
               <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
-                <Ionicons
-                  name={auctionChecked ? 'checkbox' : 'square-outline'}
-                  size={20}
-                  color="#111827"
-                />
+                <Ionicons name={auctionChecked ? 'checkbox' : 'square-outline'} size={20} color="#111827" />
                 <Text style={styles.cardTitle}>Auction</Text>
               </View>
               <Ionicons name={auctionChecked ? 'chevron-up' : 'chevron-down'} size={20} color="#6b7280" />
@@ -442,13 +529,22 @@ export default function DisposalScreen({navigation, route}) {
                   onChangeText={setAuctionDate}
                   placeholder="2025-12-31"
                 />
-                <FormRow label="Name of Authority" value={auctionAuthorityName} onChangeText={setAuctionAuthorityName} />
+                <FormRow
+                  label="Name of Authority"
+                  value={auctionAuthorityName}
+                  onChangeText={setAuctionAuthorityName}
+                />
                 <FormRow
                   label="Designation of Authority"
                   value={auctionAuthorityDesignation}
                   onChangeText={setAuctionAuthorityDesignation}
                 />
-                <FormRow label="Remarks" value={auctionRemarks} onChangeText={setAuctionRemarks} multiline />
+                <FormRow
+                  label="Auction Remarks"
+                  value={auctionRemarks}
+                  onChangeText={setAuctionRemarks}
+                  multiline
+                />
 
                 <View style={styles.picRow}>
                   <TouchableOpacity style={styles.picBtn} onPress={() => pickImages(setAuctionImages)}>
@@ -476,9 +572,21 @@ export default function DisposalScreen({navigation, route}) {
           </View>
 
           {/* Save */}
-          <TouchableOpacity style={styles.saveBtn} onPress={saveDisposal}>
-            <Ionicons name="save" size={18} color="#fff" />
-            <Text style={styles.saveText}>Save Disposal</Text>
+          <TouchableOpacity
+            style={[styles.saveBtn, {opacity: saving ? 0.7 : 1}]}
+            disabled={saving}
+            onPress={saveDisposal}>
+            {saving ? (
+              <>
+                <ActivityIndicator color="#fff" />
+                <Text style={styles.saveText}>Saving…</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="save" size={18} color="#fff" />
+                <Text style={styles.saveText}>Save Disposal</Text>
+              </>
+            )}
           </TouchableOpacity>
         </ScrollView>
       </ImageBackground>
@@ -526,11 +634,7 @@ const styles = StyleSheet.create({
   checkRow: {flexDirection: 'row', alignItems: 'center', marginTop: 10},
   checkText: {marginLeft: 8, fontWeight: '800', color: '#111827'},
 
-  sectionToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  sectionToggle: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
 
   saveBtn: {
     marginTop: 16,

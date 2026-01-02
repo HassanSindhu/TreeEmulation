@@ -1,5 +1,5 @@
 // /screens/AddTreeScreen.js
-import React, {useMemo, useState, useEffect} from 'react';
+import React, {useMemo, useState, useEffect, useCallback} from 'react';
 import {
   ScrollView,
   Text,
@@ -13,15 +13,44 @@ import {
   Modal,
   TouchableWithoutFeedback,
   TextInput,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {useFocusEffect} from '@react-navigation/native';
 import FormRow from '../components/FormRow';
 import colors from '../theme/colors';
+import {useAuth} from '../context/AuthContext';
 
-/* ---------- SINGLE-SELECT DROPDOWN ---------- */
-const DropdownRow = ({label, value, options, onChange, required}) => {
+/* ===================== API ===================== */
+const API_BASE = 'http://be.lte.gisforestry.com';
+const ENUM_CREATE_URL = `${API_BASE}/enum/name-of-site`;
+const ENUM_MY_SITES_URL = `${API_BASE}/enum/name-of-site/my/sites`;
+
+/* ---------- safe json ---------- */
+async function safeJson(res) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/* ---------- SINGLE-SELECT DROPDOWN (Object Options: {id,name}) ---------- */
+const DropdownRow = ({
+  label,
+  value,
+  options,
+  onChange,
+  required,
+  disabled,
+  loading,
+  lockedText,
+}) => {
   const [open, setOpen] = useState(false);
+
+  const displayText = lockedText ?? (value?.name ? value.name : '');
+  const isDisabled = !!disabled || !!loading || !!lockedText;
 
   return (
     <View style={styles.dropdownContainer}>
@@ -29,71 +58,106 @@ const DropdownRow = ({label, value, options, onChange, required}) => {
         {label} {required && <Text style={styles.required}>*</Text>}
       </Text>
 
-      <TouchableOpacity style={styles.dropdownSelected} onPress={() => setOpen(true)}>
-        <Text style={value ? styles.dropdownSelectedText : styles.dropdownPlaceholder}>
-          {value || 'Select...'}
+      <TouchableOpacity
+        style={[styles.dropdownSelected, isDisabled && {opacity: 0.65}]}
+        onPress={() => !isDisabled && setOpen(true)}
+        activeOpacity={0.8}>
+        <Text style={displayText ? styles.dropdownSelectedText : styles.dropdownPlaceholder}>
+          {loading ? 'Loading...' : displayText || 'Select...'}
         </Text>
-        <Ionicons name="chevron-down" size={18} color="#6b7280" />
+        <Ionicons
+          name={isDisabled ? 'lock-closed' : 'chevron-down'}
+          size={18}
+          color="#6b7280"
+        />
       </TouchableOpacity>
 
-      <Modal transparent visible={open} animationType="fade" onRequestClose={() => setOpen(false)}>
-        <TouchableWithoutFeedback onPress={() => setOpen(false)}>
-          <View style={styles.modalOverlay} />
-        </TouchableWithoutFeedback>
+      {!lockedText && (
+        <Modal
+          transparent
+          visible={open}
+          animationType="fade"
+          onRequestClose={() => setOpen(false)}>
+          <TouchableWithoutFeedback onPress={() => setOpen(false)}>
+            <View style={styles.modalOverlay} />
+          </TouchableWithoutFeedback>
 
-        <View style={styles.dropdownModal}>
-          <Text style={styles.dropdownModalTitle}>{label}</Text>
-          <ScrollView style={{maxHeight: 260}}>
-            {options.map(opt => (
-              <TouchableOpacity
-                key={opt}
-                style={styles.dropdownItem}
-                onPress={() => {
-                  onChange(opt);
-                  setOpen(false);
-                }}>
-                <Text style={styles.dropdownItemText}>{opt}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </Modal>
+          <View style={styles.dropdownModal}>
+            <Text style={styles.dropdownModalTitle}>{label}</Text>
+
+            <ScrollView style={{maxHeight: 260}} showsVerticalScrollIndicator={false}>
+              {options?.length ? (
+                options.map(opt => (
+                  <TouchableOpacity
+                    key={String(opt.id)}
+                    style={styles.dropdownItem}
+                    onPress={() => {
+                      onChange(opt);
+                      setOpen(false);
+                    }}>
+                    <Text style={styles.dropdownItemText}>{opt.name}</Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={{color: '#6b7280', paddingVertical: 12}}>
+                  {loading ? 'Loading...' : 'No options available.'}
+                </Text>
+              )}
+            </ScrollView>
+          </View>
+        </Modal>
+      )}
     </View>
   );
 };
 
 export default function AddTreeScreen({navigation}) {
+  const {user, token} = useAuth();
+
   const [enumModalVisible, setEnumModalVisible] = useState(false);
+
+  // API-backed list of saved sites (instead of offline)
   const [enumerations, setEnumerations] = useState([]);
+  const [loadingList, setLoadingList] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Row actions modal
   const [actionModalVisible, setActionModalVisible] = useState(false);
   const [selectedEnum, setSelectedEnum] = useState(null);
 
-  // ✅ Search (body)
+  // Search (body)
   const [search, setSearch] = useState('');
 
-  // ✅ Filters
+  // Filters
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filters, setFilters] = useState({
-    linearType: '',   // Road/Rail/Canal
+    linearType: '',
     circle: '',
     block: '',
-    dateFrom: '',     // YYYY-MM-DD
-    dateTo: '',       // YYYY-MM-DD
-    kmFrom: '',       // number
-    kmTo: '',         // number
+    dateFrom: '',
+    dateTo: '',
+    kmFrom: '',
+    kmTo: '',
   });
 
-  // Enumeration form fields
+  /* ===================== FIELDS (LOCKED FROM LOGIN) ===================== */
+  const [zoneId, setZoneId] = useState(null);
+  const [circleId, setCircleId] = useState(null);
+  const [divisionId, setDivisionId] = useState(null);
+  const [subDivisionId, setSubDivisionId] = useState(null);
+  const [blockId, setBlockId] = useState(null);
+  const [beatId, setBeatId] = useState(null);
+
   const [zone, setZone] = useState('');
   const [circle, setCircle] = useState('');
   const [division, setDivision] = useState('');
   const [subDivision, setSubDivision] = useState('');
-  const [linearType, setLinearType] = useState('');
-  const [canalName, setCanalName] = useState('');
   const [block, setBlock] = useState('');
   const [beat, setBeat] = useState('');
+
+  /* ===================== FORM (EDITABLE) ===================== */
+  const [linearType, setLinearType] = useState('');
+  const [canalName, setCanalName] = useState(''); // will be sent as site_name
   const [compartment, setCompartment] = useState('');
   const [year, setYear] = useState('');
   const [side, setSide] = useState('');
@@ -101,135 +165,207 @@ export default function AddTreeScreen({navigation}) {
   const [rdTo, setRdTo] = useState('');
   const [remarks, setRemarks] = useState('');
 
-  const zoneOptions = ['Zone 1', 'Zone 2', 'Zone 3'];
-  const circleOptions = ['Circle 1', 'Circle 2', 'Circle 3'];
-  const divisionOptions = ['Lahore', 'Faisalabad', 'Multan'];
-  const subDivisionOptions = ['Range 1', 'Range 2', 'Range 3'];
-  const blockOptions = ['Block A', 'Block B', 'Block C'];
-  const beatOptions = ['Beat 1', 'Beat 2', 'Beat 3'];
-  const linearTypeOptions = ['Road', 'Rail', 'Canal'];
+  const linearTypeOptions = ['Road', 'Rail', 'Canal'].map((name, idx) => ({
+    id: String(idx + 1),
+    name,
+  }));
 
   const yearOptions = [
-    '2021-22','2022-23','2023-24','2024-25','2025-26','2026-27','2027-28','2028-29','2029-30',
-  ];
+    '2021-22',
+    '2022-23',
+    '2023-24',
+    '2024-25',
+    '2025-26',
+    '2026-27',
+    '2027-28',
+    '2028-29',
+    '2029-30',
+  ].map((name, idx) => ({id: String(idx + 1), name}));
 
-  // Road => Left, Right, Both, Median
-  // Rail => Left, Right
-  // Canal => Left, Right
   const getSideOptions = type => {
     if (type === 'Road') return ['Left', 'Right', 'Both', 'Median'];
-    if (type === 'Rail') return ['Left', 'Right'];
-    if (type === 'Canal') return ['Left', 'Right'];
+    if (type === 'Rail') return ['Left', 'Right', 'Both'];
+    if (type === 'Canal') return ['Left', 'Right', 'Both'];
     return [];
   };
 
   const rdKmLabelFrom = () => (linearType === 'Canal' ? 'RDs for Canal' : 'KMs for Road and Rail');
   const rdKmLabelTo = () => 'RDs/KMs To';
 
+  const sideLabel =
+    linearType === 'Road' ? 'Side (Left / Right / Both / Median)' : 'Side (Left / Right / Both)';
+
+  const toNum = v => {
+    const s = String(v ?? '').trim();
+    if (s === '') return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const toDateStart = yyyyMmDd => {
+    const s = String(yyyyMmDd ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    const d = new Date(`${s}T00:00:00`);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const toDateEnd = yyyyMmDd => {
+    const s = String(yyyyMmDd ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    const d = new Date(`${s}T23:59:59`);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  /* ===================== NORMALIZE API -> UI ITEM ===================== */
+  const normalizeItemFromApi = useCallback(
+    apiItem => {
+      // API sample fields:
+      // zoneId,circleId,divisionId,subDivisionId,plantation_type,site_name,blockId,beatId,userId,compartment,year,side,rds_from,rds_to,id,created_at
+      const pt = apiItem?.plantation_type || '';
+      let lt = '';
+      if (pt.toLowerCase().includes('canal')) lt = 'Canal';
+      else if (pt.toLowerCase().includes('road')) lt = 'Road';
+      else if (pt.toLowerCase().includes('rail')) lt = 'Rail';
+      else lt = pt;
+
+      const resolvedId =
+        apiItem?.name_of_site_id ??
+        apiItem?.site_id ??
+        apiItem?.nameOfSiteId ??
+        apiItem?.id;
+
+      return {
+        // IMPORTANT: keep stable id + also keep explicit name_of_site_id for downstream screens
+        id: resolvedId != null ? String(resolvedId) : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name_of_site_id: resolvedId != null ? Number(resolvedId) : null,
+
+        // IDs (from API)
+        zoneId: apiItem?.zoneId != null ? String(apiItem.zoneId) : zoneId,
+        circleId: apiItem?.circleId != null ? String(apiItem.circleId) : circleId,
+        divisionId: apiItem?.divisionId != null ? String(apiItem.divisionId) : divisionId,
+        subDivisionId: apiItem?.subDivisionId != null ? String(apiItem.subDivisionId) : subDivisionId,
+        blockId: apiItem?.blockId != null ? String(apiItem.blockId) : blockId,
+        beatId: apiItem?.beatId != null ? String(apiItem.beatId) : beatId,
+
+        // names (we show from login, since API doesn't return names)
+        zone,
+        circle,
+        division,
+        subDivision,
+        block,
+        beat,
+
+        // form fields
+        linearType: lt,
+        plantation_type: apiItem?.plantation_type || '',
+        canalName: apiItem?.site_name || '',
+        compartment: apiItem?.compartment || '',
+        year: apiItem?.year || '',
+        side: apiItem?.side || '',
+        rdFrom: apiItem?.rds_from != null ? String(apiItem.rds_from) : '',
+        rdTo: apiItem?.rds_to != null ? String(apiItem.rds_to) : '',
+        remarks: apiItem?.remarks || '',
+
+        createdAt: apiItem?.created_at || apiItem?.createdAt || new Date().toISOString(),
+      };
+    },
+    [zoneId, circleId, divisionId, subDivisionId, blockId, beatId, zone, circle, division, subDivision, block, beat],
+  );
+
+  /* ===================== AUTO-FILL LOCKED LOCATION FROM LOGIN USER ===================== */
   useEffect(() => {
-    const loadEnumerations = async () => {
-      try {
-        const json = await AsyncStorage.getItem('ENUMERATION_FORMS');
-        if (json) setEnumerations(JSON.parse(json));
-      } catch (e) {
-        console.warn('Failed to load enumerations', e);
+    const z = user?.zone;
+    const c = user?.circle;
+    const d = user?.division;
+    const sd = user?.subDivision;
+    const b = user?.block;
+    const bt = user?.beat;
+
+    setZoneId(z?.id ? String(z.id) : null);
+    setZone(z?.name || '');
+
+    setCircleId(c?.id ? String(c.id) : null);
+    setCircle(c?.name || '');
+
+    setDivisionId(d?.id ? String(d.id) : null);
+    setDivision(d?.name || '');
+
+    setSubDivisionId(sd?.id ? String(sd.id) : null);
+    setSubDivision(sd?.name || '');
+
+    setBlockId(b?.id ? String(b.id) : null);
+    setBlock(b?.name || '');
+
+    setBeatId(bt?.id ? String(bt.id) : null);
+    setBeat(bt?.name || '');
+  }, [user]);
+
+  /* ===================== FETCH MY SITES ===================== */
+  const fetchMySites = useCallback(
+    async ({silent = false} = {}) => {
+      if (!token) {
+        if (!silent) Alert.alert('Session', 'Token missing. Please login again.');
+        return;
       }
-    };
-    loadEnumerations();
-  }, []);
 
-  const persistEnumerations = async updated => {
-    try {
-      await AsyncStorage.setItem('ENUMERATION_FORMS', JSON.stringify(updated));
-    } catch (e) {
-      console.warn('Failed to save enumerations', e);
-    }
-  };
+      try {
+        if (!silent) setLoadingList(true);
 
-  const saveEnumerationForm = async () => {
-    if (!zone || !circle || !division || !subDivision || !linearType || !block || !beat || !year || !side) {
-      Alert.alert('Missing data', 'Please fill all required dropdown fields.');
-      return;
-    }
+        const res = await fetch(ENUM_MY_SITES_URL, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
 
-    const newItem = {
-      id: Date.now().toString(),
-      zone,
-      circle,
-      division,
-      subDivision,
-      linearType,
-      canalName,
-      block,
-      beat,
-      compartment,
-      year,
-      side,
-      rdFrom,
-      rdTo,
-      remarks,
-      createdAt: new Date().toISOString(),
-    };
+        const json = await safeJson(res);
 
-    const updated = [newItem, ...enumerations];
-    setEnumerations(updated);
-    await persistEnumerations(updated);
+        if (!res.ok) {
+          throw new Error(json?.message || `Fetch failed (HTTP ${res.status})`);
+        }
 
-    // reset
-    setZone('');
-    setCircle('');
-    setDivision('');
-    setSubDivision('');
-    setLinearType('');
-    setCanalName('');
-    setBlock('');
-    setBeat('');
-    setCompartment('');
-    setYear('');
-    setSide('');
-    setRdFrom('');
-    setRdTo('');
-    setRemarks('');
-    setEnumModalVisible(false);
+        const data = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+        const mapped = data.map(normalizeItemFromApi);
 
-    Alert.alert('Saved', 'Enumeration header has been saved offline.');
-  };
+        // newest first
+        mapped.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const navTo = (screen, params) => {
-    const parentNav = navigation.getParent?.();
-    (parentNav || navigation).navigate(screen, params);
-  };
+        setEnumerations(mapped);
+      } catch (e) {
+        console.error('fetchMySites error:', e);
+        if (!silent) Alert.alert('Error', e?.message || 'Failed to load your sites.');
+      } finally {
+        if (!silent) setLoadingList(false);
+      }
+    },
+    [token, normalizeItemFromApi],
+  );
 
-  const handleCategoryPress = (type, item) => {
-    if (!item) return;
+  // On focus, reset search/filters + fetch list
+  useFocusEffect(
+    useCallback(() => {
+      setSearch('');
+      setFilters({
+        linearType: '',
+        circle: '',
+        block: '',
+        dateFrom: '',
+        dateTo: '',
+        kmFrom: '',
+        kmTo: '',
+      });
+      fetchMySites({silent: true});
+    }, [fetchMySites]),
+  );
 
-    if (type === 'Mature Tree') return navTo('MatureTreeRecords', {enumeration: item});
-    if (type === 'Pole Crop') return navTo('PoleCropRecords', {enumeration: item});
-    if (type === 'Afforestation') return navTo('AfforestationRecords', {enumeration: item});
-    if (type === 'disposal') return navTo('Disposal', {enumeration: item});
-    if (type === 'Superdari') return navTo('Superdari', {enumeration: item});
-  };
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchMySites({silent: true});
+    setRefreshing(false);
+  }, [fetchMySites]);
 
-  const openRowActions = item => {
-    setSelectedEnum(item);
-    setActionModalVisible(true);
-  };
-
-  const iconForType = t => {
-    if (t === 'Road') return 'car-sport-outline';
-    if (t === 'Rail') return 'train-outline';
-    if (t === 'Canal') return 'water-outline';
-    return 'leaf-outline';
-  };
-
-  // ✅ Active filters count (badge)
-  const activeFilterCount = useMemo(() => {
-    const adv = Object.values(filters).filter(v => String(v || '').trim() !== '').length;
-    const s = search.trim() ? 1 : 0;
-    return adv + s;
-  }, [filters, search]);
-
-  const clearAllFilters = () => {
+  /* ===================== FILTERS ===================== */
+  const clearAllFilters = useCallback(() => {
     setSearch('');
     setFilters({
       linearType: '',
@@ -240,30 +376,31 @@ export default function AddTreeScreen({navigation}) {
       kmFrom: '',
       kmTo: '',
     });
-  };
+  }, []);
 
-  // ✅ Filtering logic
+  const activeFilterCount = useMemo(() => {
+    const adv = Object.values(filters).filter(v => String(v || '').trim() !== '').length;
+    const s = search.trim() ? 1 : 0;
+    return adv + s;
+  }, [filters, search]);
+
   const filteredEnumerations = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const hasAnyFilter = q !== '' || Object.values(filters).some(v => String(v ?? '').trim() !== '');
+    if (!hasAnyFilter) return enumerations;
 
-    // parse filter dates (YYYY-MM-DD)
-    const df = filters.dateFrom ? new Date(filters.dateFrom + 'T00:00:00') : null;
-    const dt = filters.dateTo ? new Date(filters.dateTo + 'T23:59:59') : null;
-
-    const kmF = filters.kmFrom !== '' ? Number(filters.kmFrom) : null;
-    const kmT = filters.kmTo !== '' ? Number(filters.kmTo) : null;
+    const df = toDateStart(filters.dateFrom);
+    const dt = toDateEnd(filters.dateTo);
+    const kmF = toNum(filters.kmFrom);
+    const kmT = toNum(filters.kmTo);
 
     return enumerations.filter(item => {
-      // Type
       if (filters.linearType && item.linearType !== filters.linearType) return false;
 
-      // Circle
-      if (filters.circle && item.circle !== filters.circle) return false;
+      // these are text filters in your UI (exact match)
+      if (filters.circle && (item.circle || '') !== filters.circle) return false;
+      if (filters.block && (item.block || '') !== filters.block) return false;
 
-      // Block
-      if (filters.block && item.block !== filters.block) return false;
-
-      // Date range (createdAt)
       if ((df || dt) && item.createdAt) {
         const itemDate = new Date(item.createdAt);
         if (df && itemDate < df) return false;
@@ -272,18 +409,14 @@ export default function AddTreeScreen({navigation}) {
         return false;
       }
 
-      // KM/RD range based on item.rdFrom & item.rdTo
       if (kmF !== null || kmT !== null) {
-        const a = item.rdFrom !== '' && item.rdFrom != null ? Number(item.rdFrom) : null;
-        const b = item.rdTo !== '' && item.rdTo != null ? Number(item.rdTo) : null;
-
-        // if filter applied but item has no km -> reject
+        const a = toNum(item.rdFrom);
+        const b = toNum(item.rdTo);
         if (a === null && b === null) return false;
 
         const itemFrom = a !== null ? a : b;
         const itemTo = b !== null ? b : a;
 
-        // normalize
         const minV = Math.min(itemFrom, itemTo);
         const maxV = Math.max(itemFrom, itemTo);
 
@@ -291,8 +424,8 @@ export default function AddTreeScreen({navigation}) {
         if (kmT !== null && minV > kmT) return false;
       }
 
-      // Search
       if (!q) return true;
+
       const blob = [
         item.zone,
         item.circle,
@@ -308,6 +441,7 @@ export default function AddTreeScreen({navigation}) {
         item.remarks,
         item.rdFrom,
         item.rdTo,
+        item.plantation_type,
       ]
         .filter(Boolean)
         .join(' ')
@@ -317,17 +451,186 @@ export default function AddTreeScreen({navigation}) {
     });
   }, [enumerations, search, filters]);
 
-  const sideLabel =
-    linearType === 'Road'
-      ? 'Side (Left / Right / Both / Median)'
-      : 'Side (Left / Right)';
+  /* ===================== CREATE SITE (SAVE TO DB) ===================== */
+  const saveEnumerationForm = async () => {
+    if (!zoneId || !circleId || !divisionId || !subDivisionId || !blockId || !beatId) {
+      Alert.alert(
+        'Location missing',
+        'Your login profile does not contain complete Zone/Circle/Division/SubDivision/Block/Beat. Please contact admin.',
+      );
+      return;
+    }
 
+    if (!token) {
+      Alert.alert('Session error', 'Token not found. Please logout and login again.');
+      return;
+    }
+
+    // Required fields for your API
+    if (!linearType || !year || !side || !canalName) {
+      Alert.alert('Missing data', 'Please fill all required fields (Type, Site Name, Year, Side).');
+      return;
+    }
+
+    // backend expects "Canal Side" / "Road Side" / "Rail Side"
+    const plantationTypeMap = {
+      Canal: 'Canal Side',
+      Road: 'Road Side',
+      Rail: 'Rail Side',
+    };
+    const plantation_type = plantationTypeMap[linearType] || linearType;
+
+    // backend expects numbers (not null/NaN)
+    const rFromRaw = String(rdFrom ?? '').trim();
+    const rToRaw = String(rdTo ?? '').trim();
+    const rds_from = rFromRaw === '' ? 0 : Number(rFromRaw);
+    const rds_to = rToRaw === '' ? 0 : Number(rToRaw);
+
+    if (!Number.isFinite(rds_from) || !Number.isFinite(rds_to)) {
+      Alert.alert('Invalid value', 'Please enter valid numeric values for From/To.');
+      return;
+    }
+
+    try {
+      const payload = {
+        site_name: canalName,
+        plantation_type,
+        year,
+        zoneId: Number(zoneId),
+        circleId: Number(circleId),
+        divisionId: Number(divisionId),
+        subDivisionId: Number(subDivisionId),
+        blockId: Number(blockId),
+        beatId: Number(beatId),
+        compartment: String(compartment || '').trim() || null,
+        side: side,
+        rds_from,
+        rds_to,
+      };
+
+      const res = await fetch(ENUM_CREATE_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const json = await safeJson(res);
+
+      if (!res.ok) {
+        throw new Error(json?.message || `Failed to save (HTTP ${res.status})`);
+      }
+
+      // add to list immediately
+      const saved = json?.data || {};
+      const savedItem = normalizeItemFromApi(saved);
+
+      setEnumerations(prev => [savedItem, ...prev]);
+
+      // reset editable fields
+      setLinearType('');
+      setCanalName('');
+      setCompartment('');
+      setYear('');
+      setSide('');
+      setRdFrom('');
+      setRdTo('');
+      setRemarks('');
+
+      setEnumModalVisible(false);
+      Alert.alert('Success', 'Enumeration saved successfully.');
+    } catch (e) {
+      console.error('Save enumeration error:', e);
+      Alert.alert('Error', e?.message || 'Unable to save enumeration.');
+    }
+  };
+
+  /* ===================== NAVIGATION ===================== */
+  const navTo = (screen, params) => {
+    const parentNav = navigation.getParent?.();
+    (parentNav || navigation).navigate(screen, params);
+  };
+
+  // FIX: make each branch exclusive + pass a stable site id field to downstream screens
+  const handleCategoryPress = (type, item) => {
+    if (!item) return;
+
+    // prefer explicit name_of_site_id if present, else fallback to id
+    const resolvedSiteId =
+      item?.name_of_site_id ??
+      item?.name_of_site?.id ??
+      item?.site_id ??
+      item?.siteId ??
+      item?.id;
+
+    if (type === 'Mature Tree') {
+      return navTo('MatureTreeRecords', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+      });
+    }
+
+    if (type === 'Pole Crop') {
+      return navTo('PoleCropRecords', {
+        enumeration: {
+          ...item,
+          name_of_site_id:
+            item?.name_of_site_id ??
+            item?.name_of_site?.id ??
+            item?.site_id ??
+            item?.id,
+        },
+      });
+    }
+
+
+    if (type === 'Afforestation') {
+      // pass id in the strongest form; your Afforestation screen resolver will pick it up
+      return navTo('AfforestationRecords', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+        nameOfSiteId: resolvedSiteId,
+        siteId: resolvedSiteId,
+        site: item, // optional header
+      });
+    }
+
+    if (type === 'disposal') {
+      return navTo('Disposal', {enumeration: item});
+    }
+
+    if (type === 'Superdari') {
+      return navTo('Superdari', {enumeration: item});
+    }
+  };
+
+  const openRowActions = item => {
+    setSelectedEnum(item);
+    setActionModalVisible(true);
+  };
+
+  const iconForType = t => {
+    if (t === 'Road') return 'car-sport-outline';
+    if (t === 'Rail') return 'train-outline';
+    if (t === 'Canal') return 'water-outline';
+    return 'leaf-outline';
+  };
+
+  /* ===================== RENDER ===================== */
   return (
     <View style={styles.screen}>
-      <ImageBackground source={require('../assets/images/bg.jpg')} style={styles.background} resizeMode="cover">
+      <ImageBackground
+        source={require('../assets/images/bg.jpg')}
+        style={styles.background}
+        resizeMode="cover">
         <View style={styles.overlay} />
 
-        {/* ✅ CLEAN HEADER */}
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={22} color="#fff" />
@@ -337,13 +640,23 @@ export default function AddTreeScreen({navigation}) {
             <Text style={styles.headerTitle}>Guard Site Information</Text>
             <Text style={styles.headerSubtitle}>Sites</Text>
           </View>
+
+          <TouchableOpacity
+            style={[styles.backButton, {paddingHorizontal: 10}]}
+            onPress={() => fetchMySites()}
+            activeOpacity={0.85}>
+            <Ionicons name="refresh" size={20} color="#fff" />
+          </TouchableOpacity>
         </View>
 
-        <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <ScrollView contentContainerStyle={{paddingBottom: 110}} showsVerticalScrollIndicator={false}>
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView
+            contentContainerStyle={{paddingBottom: 110}}
+            showsVerticalScrollIndicator={false}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
             <View style={styles.section}>
-
-              {/* ✅ SEARCH + FILTER BUTTON (BODY میں) */}
               <View style={styles.searchFilterRow}>
                 <View style={styles.searchBox}>
                   <Ionicons name="search" size={18} color="#6b7280" />
@@ -371,7 +684,6 @@ export default function AddTreeScreen({navigation}) {
                 </TouchableOpacity>
               </View>
 
-              {/* Summary row */}
               <View style={styles.sectionHead}>
                 <Text style={styles.sectionTitle}>Guard Enumeration Forms</Text>
                 <Text style={styles.sectionMeta}>
@@ -379,14 +691,19 @@ export default function AddTreeScreen({navigation}) {
                 </Text>
               </View>
 
-              {enumerations.length === 0 ? (
+              {loadingList ? (
+                <View style={{paddingVertical: 20, alignItems: 'center'}}>
+                  <ActivityIndicator />
+                  <Text style={{marginTop: 8, color: '#6b7280', fontWeight: '700'}}>
+                    Loading sites...
+                  </Text>
+                </View>
+              ) : enumerations.length === 0 ? (
                 <Text style={styles.emptyText}>
-                  No enumeration forms saved yet. Tap the + button to add one.
+                  No sites found yet. Tap the + button to add one.
                 </Text>
               ) : filteredEnumerations.length === 0 ? (
-                <Text style={styles.emptyText}>
-                  No record matches your search/filters.
-                </Text>
+                <Text style={styles.emptyText}>No record matches your search/filters.</Text>
               ) : (
                 filteredEnumerations.map(item => (
                   <TouchableOpacity
@@ -404,10 +721,10 @@ export default function AddTreeScreen({navigation}) {
                       </Text>
 
                       <Text style={styles.cardSub2}>
-                        {item.linearType} • {item.side} • Block {item.block} • Beat {item.beat}
+                        {item.linearType} • {item.side} • {item.block} • {item.beat}
                       </Text>
 
-                      {(item.rdFrom || item.rdTo) ? (
+                      {item.rdFrom || item.rdTo ? (
                         <Text style={styles.cardHint}>
                           {item.linearType === 'Canal'
                             ? `RDs: ${item.rdFrom || '—'} → ${item.rdTo || '—'}`
@@ -415,16 +732,20 @@ export default function AddTreeScreen({navigation}) {
                         </Text>
                       ) : null}
 
-                      {item.remarks ? (
+                      {item.canalName ? (
                         <Text style={styles.cardHint} numberOfLines={1}>
-                          Remarks: {item.remarks}
+                          Site: {item.canalName}
                         </Text>
                       ) : null}
                     </View>
 
                     <View style={styles.cardRight}>
                       <View style={styles.typeIconWrap}>
-                        <Ionicons name={iconForType(item.linearType)} size={22} color={colors.primary} />
+                        <Ionicons
+                          name={iconForType(item.linearType)}
+                          size={22}
+                          color={colors.primary}
+                        />
                       </View>
                       <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
                     </View>
@@ -432,26 +753,27 @@ export default function AddTreeScreen({navigation}) {
                 ))
               )}
 
-              {/* Optional: clear filters quick */}
-              {(activeFilterCount > 0) && (
+              {activeFilterCount > 0 && (
                 <TouchableOpacity style={styles.clearAllBtn} onPress={clearAllFilters}>
                   <Ionicons name="trash-outline" size={16} color="#fff" />
                   <Text style={styles.clearAllText}>Clear Search & Filters</Text>
                 </TouchableOpacity>
               )}
-
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
 
-        {/* FAB */}
         <TouchableOpacity style={styles.fab} onPress={() => setEnumModalVisible(true)}>
           <Ionicons name="add" size={26} color="#fff" />
         </TouchableOpacity>
       </ImageBackground>
 
       {/* ✅ Filters Modal */}
-      <Modal transparent visible={filterModalVisible} animationType="fade" onRequestClose={() => setFilterModalVisible(false)}>
+      <Modal
+        transparent
+        visible={filterModalVisible}
+        animationType="fade"
+        onRequestClose={() => setFilterModalVisible(false)}>
         <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
           <View style={styles.actionOverlay} />
         </TouchableWithoutFeedback>
@@ -467,29 +789,26 @@ export default function AddTreeScreen({navigation}) {
           <ScrollView showsVerticalScrollIndicator={false}>
             <DropdownRow
               label="Type (Road/Rail/Canal)"
-              value={filters.linearType}
-              onChange={v => setFilters(prev => ({...prev, linearType: v}))}
+              value={filters.linearType ? {id: 't', name: filters.linearType} : null}
+              onChange={opt => setFilters(prev => ({...prev, linearType: opt.name}))}
               options={linearTypeOptions}
               required={false}
             />
 
-            <DropdownRow
-              label="Circle"
+            <FormRow
+              label="Circle (exact match)"
               value={filters.circle}
-              onChange={v => setFilters(prev => ({...prev, circle: v}))}
-              options={circleOptions}
-              required={false}
+              onChangeText={v => setFilters(prev => ({...prev, circle: v}))}
+              placeholder="Type circle name"
             />
 
-            <DropdownRow
-              label="Block"
+            <FormRow
+              label="Block (exact match)"
               value={filters.block}
-              onChange={v => setFilters(prev => ({...prev, block: v}))}
-              options={blockOptions}
-              required={false}
+              onChangeText={v => setFilters(prev => ({...prev, block: v}))}
+              placeholder="Type block name"
             />
 
-            {/* Date range */}
             <View style={{flexDirection: 'row', gap: 10}}>
               <View style={{flex: 1}}>
                 <FormRow
@@ -509,7 +828,6 @@ export default function AddTreeScreen({navigation}) {
               </View>
             </View>
 
-            {/* KM/RD range */}
             <View style={{flexDirection: 'row', gap: 10}}>
               <View style={{flex: 1}}>
                 <FormRow
@@ -559,7 +877,11 @@ export default function AddTreeScreen({navigation}) {
       </Modal>
 
       {/* ✅ Row Actions Modal */}
-      <Modal transparent visible={actionModalVisible} animationType="fade" onRequestClose={() => setActionModalVisible(false)}>
+      <Modal
+        transparent
+        visible={actionModalVisible}
+        animationType="fade"
+        onRequestClose={() => setActionModalVisible(false)}>
         <TouchableWithoutFeedback onPress={() => setActionModalVisible(false)}>
           <View style={styles.actionOverlay} />
         </TouchableWithoutFeedback>
@@ -567,7 +889,9 @@ export default function AddTreeScreen({navigation}) {
         <View style={styles.actionCard}>
           <Text style={styles.actionTitle}>Select Action</Text>
           <Text style={styles.actionSub}>
-            {selectedEnum ? `${selectedEnum.division} • ${selectedEnum.subDivision} • ${selectedEnum.year}` : ''}
+            {selectedEnum
+              ? `${selectedEnum.division} • ${selectedEnum.subDivision} • ${selectedEnum.year}`
+              : ''}
           </Text>
 
           <TouchableOpacity
@@ -601,7 +925,7 @@ export default function AddTreeScreen({navigation}) {
             style={[styles.actionBtn, styles.actionBtnDanger]}
             onPress={() => {
               setActionModalVisible(false);
-              handleCategoryPress('Disposed', selectedEnum);
+              handleCategoryPress('disposal', selectedEnum);
             }}>
             <Text style={[styles.actionBtnText, styles.actionBtnDangerText]}>Disposed</Text>
           </TouchableOpacity>
@@ -621,50 +945,101 @@ export default function AddTreeScreen({navigation}) {
         </View>
       </Modal>
 
-      {/* ✅ Enumeration Header Modal */}
-      <Modal visible={enumModalVisible} animationType="slide" transparent onRequestClose={() => setEnumModalVisible(false)}>
+      {/* ✅ Enumeration Header Modal (Save to DB) */}
+      <Modal
+        visible={enumModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setEnumModalVisible(false)}>
         <View style={styles.modalRoot}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeaderEnum}>
               <Text style={styles.modalTitleEnum}>Enumeration Form</Text>
 
-              <TouchableOpacity onPress={() => setEnumModalVisible(false)} style={styles.modalCloseBtnEnum}>
+              <TouchableOpacity
+                onPress={() => setEnumModalVisible(false)}
+                style={styles.modalCloseBtnEnum}>
                 <Ionicons name="close" size={22} color="#ffffff" />
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              <DropdownRow label="Zone" value={zone} onChange={setZone} options={zoneOptions} required />
-              <DropdownRow label="Circle" value={circle} onChange={setCircle} options={circleOptions} required />
-              <DropdownRow label="Division" value={division} onChange={setDivision} options={divisionOptions} required />
-              <DropdownRow label="S.Division / Range" value={subDivision} onChange={setSubDivision} options={subDivisionOptions} required />
+              {/* Locked from login */}
+              <DropdownRow label="Zone" required lockedText={zone || '-'} />
+              <DropdownRow label="Circle" required lockedText={circle || '-'} />
+              <DropdownRow label="Division" required lockedText={division || '-'} />
+              <DropdownRow label="S.Division / Range" required lockedText={subDivision || '-'} />
+              <DropdownRow label="Block" required lockedText={block || '-'} />
+              <DropdownRow label="Beat" required lockedText={beat || '-'} />
 
+              {/* Editable fields */}
               <DropdownRow
                 label="Type of Linear Plantation (Road/Rail/Canal)"
-                value={linearType}
-                onChange={val => {
-                  setLinearType(val);
+                value={linearType ? {id: 'lt', name: linearType} : null}
+                onChange={opt => {
+                  setLinearType(opt.name);
                   setSide('');
                 }}
                 options={linearTypeOptions}
                 required
               />
 
-              <FormRow label="Name of Canal/Road/Site" value={canalName} onChangeText={setCanalName} placeholder="Enter name" />
+              <FormRow
+                label="Name of Canal/Road/Site (Site Name)"
+                value={canalName}
+                onChangeText={setCanalName}
+                placeholder="e.g. Main Canal Plantation"
+              />
 
-              <DropdownRow label="Block" value={block} onChange={setBlock} options={blockOptions} required />
-              <DropdownRow label="Beat" value={beat} onChange={setBeat} options={beatOptions} required />
+              <FormRow
+                label="Compartment (Optional)"
+                value={compartment}
+                onChangeText={setCompartment}
+                placeholder="Enter compartment (if any)"
+              />
 
-              <FormRow label="Compartment (Optional)" value={compartment} onChangeText={setCompartment} placeholder="Enter compartment (if any)" />
+              <DropdownRow
+                label="Year (Ex 2024-25)"
+                value={year ? {id: 'yr', name: year} : null}
+                onChange={opt => setYear(opt.name)}
+                options={yearOptions}
+                required
+              />
 
-              <DropdownRow label="Year (Ex 2021-22)" value={year} onChange={setYear} options={yearOptions} required />
+              <DropdownRow
+                label={sideLabel}
+                value={side ? {id: 'sd', name: side} : null}
+                onChange={opt => setSide(opt.name)}
+                options={getSideOptions(linearType).map((name, idx) => ({
+                  id: String(idx + 1),
+                  name,
+                }))}
+                required
+                disabled={!linearType}
+              />
 
-              <DropdownRow label={sideLabel} value={side} onChange={setSide} options={getSideOptions(linearType)} required />
+              <FormRow
+                label={`${rdKmLabelFrom()} (From)`}
+                value={rdFrom}
+                onChangeText={setRdFrom}
+                placeholder="0"
+                keyboardType="numeric"
+              />
+              <FormRow
+                label={`${rdKmLabelTo()} (To)`}
+                value={rdTo}
+                onChangeText={setRdTo}
+                placeholder="10"
+                keyboardType="numeric"
+              />
 
-              <FormRow label={`${rdKmLabelFrom()} (From)`} value={rdFrom} onChangeText={setRdFrom} placeholder="From" keyboardType="numeric" />
-              <FormRow label={`${rdKmLabelTo()} (To)`} value={rdTo} onChangeText={setRdTo} placeholder="To" keyboardType="numeric" />
-
-              <FormRow label="Remarks" value={remarks} onChangeText={setRemarks} placeholder="Enter remarks" multiline />
+              <FormRow
+                label="Remarks (Optional)"
+                value={remarks}
+                onChangeText={setRemarks}
+                placeholder="Enter remarks"
+                multiline
+              />
 
               <TouchableOpacity style={styles.modalSaveBtn} onPress={saveEnumerationForm}>
                 <Ionicons name="save" size={20} color="#fff" />
@@ -684,7 +1059,6 @@ const styles = StyleSheet.create({
   background: {flex: 1, width: '100%'},
   overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16, 185, 129, 0.10)'},
 
-  // Clean header
   header: {
     flexDirection: 'row',
     gap: 12,
@@ -705,7 +1079,6 @@ const styles = StyleSheet.create({
   container: {flex: 1},
   section: {paddingHorizontal: 16, paddingTop: 14},
 
-  // Search + filter row
   searchFilterRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12},
   searchBox: {
     flex: 1,
@@ -745,7 +1118,12 @@ const styles = StyleSheet.create({
   },
   filterBadgeText: {color: '#fff', fontSize: 11, fontWeight: '900'},
 
-  sectionHead: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 10},
+  sectionHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: 10,
+  },
   sectionTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
   sectionMeta: {fontSize: 12, fontWeight: '800', color: '#6b7280'},
   emptyText: {fontSize: 13, color: '#6b7280', marginTop: 4},
@@ -809,7 +1187,6 @@ const styles = StyleSheet.create({
     shadowOffset: {width: 0, height: 6},
   },
 
-  // overlays + modals
   actionOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.35)'},
   actionCard: {
     position: 'absolute',
@@ -835,14 +1212,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   actionBtnText: {fontSize: 14, fontWeight: '900', color: '#0369a1'},
-  actionBtnDanger: {backgroundColor: 'rgba(239, 68, 68, 0.10)', borderColor: 'rgba(239, 68, 68, 0.25)'},
+  actionBtnDanger: {
+    backgroundColor: 'rgba(239, 68, 68, 0.10)',
+    borderColor: 'rgba(239, 68, 68, 0.25)',
+  },
   actionBtnDangerText: {color: '#b91c1c'},
-  actionBtnWarn: {backgroundColor: 'rgba(245, 158, 11, 0.10)', borderColor: 'rgba(245, 158, 11, 0.25)'},
+  actionBtnWarn: {
+    backgroundColor: 'rgba(245, 158, 11, 0.10)',
+    borderColor: 'rgba(245, 158, 11, 0.25)',
+  },
   actionBtnWarnText: {color: '#b45309'},
   actionCancel: {alignItems: 'center', paddingVertical: 10},
   actionCancelText: {fontSize: 13, fontWeight: '900', color: '#6b7280'},
 
-  // filter modal
   filterCard: {
     position: 'absolute',
     left: 16,
@@ -856,7 +1238,12 @@ const styles = StyleSheet.create({
     elevation: 12,
     maxHeight: '78%',
   },
-  filterHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6},
+  filterHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
   filterTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
   filterApply: {
     flex: 1,
@@ -875,7 +1262,6 @@ const styles = StyleSheet.create({
   },
   filterClearText: {color: '#111827', fontWeight: '900'},
 
-  // dropdowns
   dropdownContainer: {marginHorizontal: 4, marginBottom: 12},
   dropdownLabel: {fontSize: 14, color: '#374151', marginBottom: 4, fontWeight: '700'},
   required: {color: '#dc2626'},
@@ -911,7 +1297,6 @@ const styles = StyleSheet.create({
   dropdownItemText: {fontSize: 14, color: '#111827', fontWeight: '700'},
   modalOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.3)'},
 
-  // add enumeration modal
   modalRoot: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.35)',

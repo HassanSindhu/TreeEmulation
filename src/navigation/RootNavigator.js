@@ -1,9 +1,10 @@
-import React, {useEffect, useState} from 'react';
+// /src/navigation/RootNavigator.js
+import React, {useEffect, useState, useMemo} from 'react';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
-import AuthProvider, {useAuth} from '../context/AuthContext';
+import {useAuth} from '../context/AuthContext';
 import SplashScreen from '../screens/SplashScreen';
 import LoginScreen from '../screens/LoginScreen';
 import DashboardScreen from '../screens/DashboardScreen';
@@ -17,7 +18,6 @@ import MatureTreeRecordsScreen from '../screens/MatureTreeRecordsScreen';
 import PoleCropRecordsScreen from '../screens/PoleCropRecordsScreen';
 import AfforestationRecordsScreen from '../screens/AfforestationRecordsScreen';
 
-// ✅ NEW
 import DisposalScreen from '../screens/DisposalScreen';
 import SuperdariScreen from '../screens/SuperdariScreen';
 
@@ -25,6 +25,8 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function TabsForRole({role}) {
+  const canVerify = role === 'DFO' || role === 'CCF' || role === 'ADMIN';
+
   return (
     <Tab.Navigator
       screenOptions={({route}) => ({
@@ -46,9 +48,7 @@ function TabsForRole({role}) {
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Registers" component={RegistersScreen} />
       <Tab.Screen name="Add" component={AddTreeScreen} options={{title: 'Add Tree'}} />
-      {(role === 'DFO' || role === 'CCF' || role === 'ADMIN') && (
-        <Tab.Screen name="Verification" component={VerificationScreen} />
-      )}
+      {canVerify && <Tab.Screen name="Verification" component={VerificationScreen} />}
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
@@ -57,16 +57,13 @@ function TabsForRole({role}) {
 function MainStack({role}) {
   return (
     <Stack.Navigator screenOptions={{headerShown: false}}>
-      <Stack.Screen name="Tabs">
-        {() => <TabsForRole role={role} />}
-      </Stack.Screen>
+      <Stack.Screen name="Tabs">{() => <TabsForRole role={role} />}</Stack.Screen>
 
       {/* Detail screens */}
       <Stack.Screen name="MatureTreeRecords" component={MatureTreeRecordsScreen} />
       <Stack.Screen name="PoleCropRecords" component={PoleCropRecordsScreen} />
       <Stack.Screen name="AfforestationRecords" component={AfforestationRecordsScreen} />
 
-      {/* ✅ FIX: These were missing -> caused "was not handled by any navigator" */}
       <Stack.Screen name="Disposal" component={DisposalScreen} />
       <Stack.Screen name="Superdari" component={SuperdariScreen} />
     </Stack.Navigator>
@@ -74,14 +71,22 @@ function MainStack({role}) {
 }
 
 function Gate() {
-  const {user} = useAuth();
+  const {user, booting} = useAuth();
+
+  // ✅ role normalized already in AuthContext; keep safe anyway
+  const role = useMemo(() => {
+    const r = user?.role;
+    if (!r) return '';
+    if (Array.isArray(r)) return r[0] || '';
+    return String(r);
+  }, [user]);
+
+  if (booting) return <SplashScreen />;
 
   return (
     <Stack.Navigator screenOptions={{headerShown: false}}>
       {user ? (
-        <Stack.Screen name="Main">
-          {() => <MainStack role={user.role} />}
-        </Stack.Screen>
+        <Stack.Screen name="Main">{() => <MainStack role={role} />}</Stack.Screen>
       ) : (
         <Stack.Screen name="Login" component={LoginScreen} />
       )}
@@ -99,9 +104,5 @@ export default function RootNavigator() {
 
   if (!ready) return <SplashScreen />;
 
-  return (
-    <AuthProvider>
-      <Gate />
-    </AuthProvider>
-  );
+  return <Gate />;
 }

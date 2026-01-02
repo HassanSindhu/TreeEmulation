@@ -1,3 +1,4 @@
+// /screens/LoginScreen.js
 import React, {useState} from 'react';
 import {
   View,
@@ -33,9 +34,9 @@ export default function LoginScreen() {
     }
     try {
       setLoading(true);
-      await login({email, password});
+      await login({email, password, remember});
     } catch (e) {
-      setErr('Invalid credentials');
+      setErr(e?.message || 'Invalid credentials');
     } finally {
       setLoading(false);
     }
@@ -52,10 +53,9 @@ export default function LoginScreen() {
         <View style={styles.bgOverlay} />
 
         <View style={styles.centerWrap}>
-          {/* Brand (Centered + Logo above text) */}
           <View style={styles.brandBlock}>
             <Image
-              source={require('../assets/images/logo.png')} // <-- change path if your logo file name is different
+              source={require('../assets/images/logo.png')}
               style={styles.brandLogo}
               resizeMode="contain"
             />
@@ -63,7 +63,6 @@ export default function LoginScreen() {
             <Text style={styles.brandSub}>Field · Verify · Protect</Text>
           </View>
 
-          {/* GLASS CARD */}
           <View style={styles.glassOuter}>
             <BlurView
               style={StyleSheet.absoluteFill}
@@ -83,7 +82,6 @@ export default function LoginScreen() {
                 </View>
               )}
 
-              {/* Email */}
               <View style={styles.inputRow}>
                 <Ionicons
                   name="mail"
@@ -103,7 +101,6 @@ export default function LoginScreen() {
                 />
               </View>
 
-              {/* Password */}
               <View style={styles.inputRow}>
                 <Ionicons
                   name="lock-closed"
@@ -132,7 +129,6 @@ export default function LoginScreen() {
                 </TouchableOpacity>
               </View>
 
-              {/* Remember + Forgot */}
               <View style={styles.rowJustify}>
                 <TouchableOpacity
                   style={styles.rowCenter}
@@ -148,7 +144,6 @@ export default function LoginScreen() {
                 </TouchableOpacity>
               </View>
 
-              {/* Sign in button */}
               <TouchableOpacity
                 style={styles.signInBtn}
                 onPress={onSubmit}
@@ -168,7 +163,6 @@ export default function LoginScreen() {
                 )}
               </TouchableOpacity>
 
-              {/* Help line */}
               <View style={styles.helperRow}>
                 <Ionicons
                   name="information-circle"
@@ -191,14 +185,8 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.40)',
   },
+  centerWrap: {flex: 1, justifyContent: 'center', paddingHorizontal: 16},
 
-  centerWrap: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-  },
-
-  /* NEW: centered brand block */
   brandBlock: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -209,30 +197,15 @@ const styles = StyleSheet.create({
     width: 130,
     height: 130,
     marginBottom: 10,
-
-    // White glow shadow
     shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
+    shadowOffset: {width: 0, height: 0},
     shadowOpacity: 0.9,
     shadowRadius: 12,
-
-    elevation: 10, // Android glow
+    elevation: 10,
   },
+  brandTitle: {color: '#fff', fontWeight: '900', fontSize: 20, textAlign: 'center'},
+  brandSub: {color: 'rgba(255,255,255,0.85)', marginTop: 4, fontSize: 12, textAlign: 'center'},
 
-  brandTitle: {
-    color: '#fff',
-    fontWeight: '900',
-    fontSize: 20,
-    textAlign: 'center',
-  },
-  brandSub: {
-    color: 'rgba(255,255,255,0.85)',
-    marginTop: 4,
-    fontSize: 12,
-    textAlign: 'center',
-  },
-
-  /* Glass */
   glassOuter: {
     borderRadius: 18,
     overflow: 'hidden',
@@ -244,16 +217,9 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 6,
   },
-  glassInner: {
-    padding: 16,
-    backgroundColor: 'rgba(255,255,255,0.20)',
-  },
+  glassInner: {padding: 16, backgroundColor: 'rgba(255,255,255,0.20)'},
 
-  title: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: '#111827',
-  },
+  title: {fontSize: 22, fontWeight: '900', color: '#111827'},
   subtitle: {
     marginTop: 4,
     color: 'rgba(17,24,39,0.70)',

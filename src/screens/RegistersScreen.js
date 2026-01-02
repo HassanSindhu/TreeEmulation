@@ -1,3 +1,4 @@
+// RegistersScreen.js
 import React, {useEffect, useMemo, useState} from 'react';
 import {
   View,
@@ -13,8 +14,14 @@ import {
   Modal,
   TouchableWithoutFeedback,
   Platform,
+  Alert,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// ✅ Uses SAME token key + API base as your AuthContext
+const API_BASE = 'http://be.lte.gisforestry.com';
+const STORAGE_TOKEN = 'AUTH_TOKEN';
 
 export default function RegistersScreen({navigation}) {
   const [registers, setRegisters] = useState([]);
@@ -54,6 +61,222 @@ export default function RegistersScreen({navigation}) {
     [],
   );
 
+  /* ===================== HELPERS ===================== */
+  async function safeJson(res) {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  const getToken = async () => {
+    const t = await AsyncStorage.getItem(STORAGE_TOKEN);
+    return (t || '').trim();
+  };
+
+  const normalizeDateToISO = val => {
+    if (!val) return '';
+    const s = String(val);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toISOString().slice(0, 10);
+  };
+
+  const pickFirst = (obj, keys = []) => {
+    for (const k of keys) {
+      const v = obj?.[k];
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return null;
+  };
+
+  const truthy = v => v === true || v === 'true' || v === 1 || v === '1';
+
+  /* ===================== API (DISPOSALS) ===================== */
+  const DISPOSAL_LIST_URL = `${API_BASE}/enum/disposal/user-and-enumeration-wise-disposals`;
+
+  const fetchDisposals = async () => {
+    const token = await getToken();
+    if (!token) throw new Error('Auth token not found. Please login again.');
+
+    const res = await fetch(DISPOSAL_LIST_URL, {
+      method: 'POST', // ✅ curl uses --data => POST
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({}), // ✅ empty body like curl
+    });
+
+    const json = await safeJson(res);
+
+    if (!res.ok) {
+      throw new Error(json?.message || `Disposal API failed (HTTP ${res.status})`);
+    }
+
+    // your response shape: {statusCode, message, data:[...]}
+    const list = Array.isArray(json?.data)
+      ? json.data
+      : Array.isArray(json)
+      ? json
+      : Array.isArray(json?.result)
+      ? json.result
+      : [];
+
+    return list;
+  };
+
+  /**
+   * ✅ Disposed rows:
+   * - user asked to REMOVE register/page/division from disposed
+   * - show “more details” from API response
+   */
+  const mapDisposalToRegisterRow = (d, idx) => {
+    const serverId =
+      pickFirst(d, ['id', 'disposalId', 'disposal_id', '_id']) ||
+      `disp_${idx}_${Date.now()}`;
+
+    const drDate =
+      normalizeDateToISO(pickFirst(d, ['dr_date', 'drDate'])) || '';
+    const created =
+      normalizeDateToISO(pickFirst(d, ['created_at', 'createdAt'])) || '';
+    const updated =
+      normalizeDateToISO(pickFirst(d, ['updated_at', 'updatedAt'])) || '';
+
+    const date = drDate || created || updated || '—';
+
+    const peeda = truthy(pickFirst(d, ['peeda_act', 'peedaAct']));
+    const auction = truthy(pickFirst(d, ['auction']));
+
+    const pics = pickFirst(d, ['pictures']) || [];
+    const picCount = Array.isArray(pics) ? pics.length : 0;
+
+    return {
+      id: `disposed_${String(serverId)}`,
+      status: 'disposed',
+      type: 'Disposal',
+      date: date || '—',
+
+      // ✅ removed fields (not displayed for disposed)
+      registerNo: '—',
+      pageNo: '—',
+      division: '—',
+
+      // ✅ extra details to show
+      enumerationId: String(pickFirst(d, ['enumerationId', 'enumeration_id']) ?? '—'),
+      drNo: String(pickFirst(d, ['dr_no', 'drNo']) ?? '—'),
+      drDate: drDate || '—',
+      fcNo: String(pickFirst(d, ['fc_no', 'fcNo']) ?? '—'),
+      dpcNo: String(pickFirst(d, ['dpc_no', 'dpcNo']) ?? '—'),
+      dpcDate: normalizeDateToISO(pickFirst(d, ['dpc_date', 'dpcDate'])) || '—',
+      firNo: String(pickFirst(d, ['fir_no', 'firNo']) ?? '—'),
+      firDate: normalizeDateToISO(pickFirst(d, ['fir_date', 'firDate'])) || '—',
+      remarks: String(pickFirst(d, ['remarks']) ?? '—'),
+      peedaAct: peeda ? 'YES' : 'NO',
+      officer: String(pickFirst(d, ['officer_name']) ?? '—'),
+      designation: String(pickFirst(d, ['officer_designation']) ?? '—'),
+      actDate: normalizeDateToISO(pickFirst(d, ['act_date'])) || '—',
+      auction: auction ? 'YES' : 'NO',
+      pictureCount: String(picCount),
+      createdAt: created || '—',
+      updatedAt: updated || '—',
+
+      _rawDisposal: d,
+      _serverId: String(serverId),
+    };
+  };
+
+  /* ===================== API (SUPERDARI LIST) ===================== */
+  const SUPERDARI_LIST_URL = `${API_BASE}/enum/superdari/user-enumeration-wise-superdari`;
+
+  const fetchSuperdariList = async () => {
+    const token = await getToken();
+    if (!token) throw new Error('Auth token not found. Please login again.');
+
+    const res = await fetch(SUPERDARI_LIST_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({}),
+    });
+
+    const json = await safeJson(res);
+
+    if (!res.ok) {
+      throw new Error(json?.message || `Superdari list API failed (HTTP ${res.status})`);
+    }
+
+    const list = Array.isArray(json?.data)
+      ? json.data
+      : Array.isArray(json)
+      ? json
+      : Array.isArray(json?.result)
+      ? json.result
+      : [];
+
+    return list;
+  };
+
+  const mapSuperdariToRegisterRow = (s, idx) => {
+    const serverId =
+      pickFirst(s, ['id', 'superdariId', 'superdari_id', '_id']) ||
+      `sup_${idx}_${Date.now()}`;
+
+    const created =
+      normalizeDateToISO(pickFirst(s, ['created_at', 'createdAt'])) || '';
+    const updated =
+      normalizeDateToISO(pickFirst(s, ['updated_at', 'updatedAt'])) || '';
+
+    const date = created || updated || '—';
+
+    const autoLat = pickFirst(s, ['auto_lat', 'autoLat']);
+    const autoLong = pickFirst(s, ['auto_long', 'autoLong']);
+    const manLat = pickFirst(s, ['manual_lat', 'manualLat']);
+    const manLong = pickFirst(s, ['manual_long', 'manualLong']);
+
+    const gps =
+      manLat != null && manLong != null
+        ? `${manLat}, ${manLong}`
+        : autoLat != null && autoLong != null
+        ? `${autoLat}, ${autoLong}`
+        : '—';
+
+    const pics = pickFirst(s, ['pictures']) || [];
+    const picCount = Array.isArray(pics) ? pics.length : 0;
+
+    return {
+      id: `superdari_${String(serverId)}`,
+      status: 'superdari',
+      type: 'Superdari',
+      date: date || '—',
+
+      // keep placeholders for common filters/UI (not important for superdari table)
+      registerNo: '—',
+      pageNo: '—',
+      division: '—',
+
+      // extra details to show
+      disposalId: String(pickFirst(s, ['disposalId', 'disposal_id']) ?? '—'),
+      enumerationId: String(pickFirst(s, ['enumerationId', 'enumeration_id']) ?? '—'),
+      superdarName: String(pickFirst(s, ['superdar_name', 'superdarName']) ?? '—'),
+      contactNo: String(pickFirst(s, ['contact_no', 'contactNo']) ?? '—'),
+      cnicNo: String(pickFirst(s, ['cnic_no', 'cnicNo']) ?? '—'),
+      treeConditionId: String(pickFirst(s, ['treeConditionId', 'tree_condition_id']) ?? '—'),
+      gps: String(gps),
+      pictureCount: String(picCount),
+      createdAt: created || '—',
+      updatedAt: updated || '—',
+
+      _rawSuperdari: s,
+      _serverId: String(serverId),
+    };
+  };
+
+  /* ===================== DATA LOAD ===================== */
   useEffect(() => {
     fetchRegisters();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -63,7 +286,7 @@ export default function RegistersScreen({navigation}) {
     try {
       setLoading(true);
 
-      // TODO: Replace with API later
+      // Keep your existing local/mock dataset for pending/verified etc (until you add those APIs)
       const mockData = [
         {
           id: 'reg_1',
@@ -84,24 +307,6 @@ export default function RegistersScreen({navigation}) {
           type: 'Mature Tree',
         },
         {
-          id: 'reg_3',
-          registerNo: 'REG-23-047',
-          pageNo: '18',
-          status: 'disposed', // FINAL
-          date: '2024-01-13',
-          division: 'Faisalabad',
-          type: 'Disposal',
-        },
-        {
-          id: 'reg_4',
-          registerNo: 'REG-23-048',
-          pageNo: '22',
-          status: 'superdari', // FINAL
-          date: '2024-01-12',
-          division: 'Lahore',
-          type: 'Superdari',
-        },
-        {
           id: 'reg_5',
           registerNo: 'REG-23-049',
           pageNo: '25',
@@ -112,9 +317,35 @@ export default function RegistersScreen({navigation}) {
         },
       ];
 
-      setRegisters(mockData);
+      // ✅ Pull disposals + superdari from APIs
+      let apiDisposals = [];
+      let apiSuperdari = [];
+
+      try {
+        apiDisposals = await fetchDisposals();
+      } catch (e) {
+        Alert.alert('Warning', e?.message || 'Failed to load disposals');
+      }
+
+      try {
+        apiSuperdari = await fetchSuperdariList();
+      } catch (e) {
+        Alert.alert('Warning', e?.message || 'Failed to load superdari');
+      }
+
+      const disposalRows = (apiDisposals || []).map(mapDisposalToRegisterRow);
+      const superdariRows = (apiSuperdari || []).map(mapSuperdariToRegisterRow);
+
+      // Avoid duplicates if mock already has same status/type rows
+      const nonFinalMock = mockData.filter(
+        x => x.status !== 'disposed' && x.status !== 'superdari',
+      );
+
+      // ✅ Combine: final statuses first
+      setRegisters([...disposalRows, ...superdariRows, ...nonFinalMock]);
     } catch (error) {
       console.error('Error fetching registers:', error);
+      Alert.alert('Error', error?.message || 'Failed to load registers');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -126,6 +357,7 @@ export default function RegistersScreen({navigation}) {
     fetchRegisters();
   };
 
+  /* ===================== UI HELPERS ===================== */
   const getStatusColor = status => {
     switch (status) {
       case 'pending':
@@ -168,6 +400,7 @@ export default function RegistersScreen({navigation}) {
     return m ? Number(m[0]) : null;
   };
 
+  /* ===================== FILTERING ===================== */
   const tabCounts = useMemo(() => {
     const all = registers.length;
     const pending = registers.filter(x => x.status === 'pending').length;
@@ -186,7 +419,6 @@ export default function RegistersScreen({navigation}) {
     const pageTo = filters.pageTo !== '' ? Number(filters.pageTo) : null;
 
     return registers.filter(item => {
-      // ✅ Exact tab filter (Disposed/Superdari are FINAL)
       if (statusTab === 'pending' && item.status !== 'pending') return false;
       if (statusTab === 'verified' && item.status !== 'verified') return false;
       if (statusTab === 'disposed' && item.status !== 'disposed') return false;
@@ -215,13 +447,33 @@ export default function RegistersScreen({navigation}) {
       }
 
       if (!q) return true;
+
+      // ✅ include extra fields in search blob
       const blob = [
         item.registerNo,
+        item.pageNo,
         item.division,
         item.type,
         item.status,
-        item.pageNo,
         item.date,
+
+        // disposal extras
+        item.enumerationId,
+        item.drNo,
+        item.fcNo,
+        item.dpcNo,
+        item.firNo,
+        item.remarks,
+        item.peedaAct,
+        item.auction,
+
+        // superdari extras
+        item.disposalId,
+        item.superdarName,
+        item.contactNo,
+        item.cnicNo,
+        item.treeConditionId,
+        item.gps,
       ]
         .filter(Boolean)
         .join(' ')
@@ -252,6 +504,7 @@ export default function RegistersScreen({navigation}) {
     });
   };
 
+  /* ===================== UI COMPONENTS ===================== */
   const TabPill = ({title, icon, isActive, onPress}) => (
     <TouchableOpacity
       activeOpacity={0.85}
@@ -272,59 +525,104 @@ export default function RegistersScreen({navigation}) {
     </TouchableOpacity>
   );
 
-  const renderRegisterRow = ({item, index}) => {
+  // ✅ Dynamic table columns by active tab
+  const columns = useMemo(() => {
+    if (statusTab === 'disposed') {
+      return [
+        {key: 'enumerationId', label: 'Enum ID', width: 90},
+        {key: 'drNo', label: 'DR No', width: 110},
+        {key: 'drDate', label: 'DR Date', width: 110},
+        {key: 'fcNo', label: 'FC No', width: 110},
+        {key: 'dpcNo', label: 'DPC No', width: 110},
+        {key: 'firNo', label: 'FIR No', width: 110},
+        {key: 'peedaAct', label: 'PEEDA', width: 90},
+        {key: 'auction', label: 'Auction', width: 90},
+        {key: 'pictureCount', label: 'Pics', width: 70},
+        {key: 'createdAt', label: 'Created', width: 110},
+        {key: 'status', label: 'Status', width: 130, isStatus: true},
+      ];
+    }
+
+    if (statusTab === 'superdari') {
+      return [
+        {key: 'disposalId', label: 'Disposal ID', width: 100},
+        {key: 'enumerationId', label: 'Enum ID', width: 90},
+        {key: 'superdarName', label: 'Superdar', width: 160},
+        {key: 'contactNo', label: 'Contact', width: 120},
+        {key: 'cnicNo', label: 'CNIC', width: 150},
+        {key: 'treeConditionId', label: 'Cond ID', width: 90},
+        {key: 'gps', label: 'GPS', width: 160},
+        {key: 'pictureCount', label: 'Pics', width: 70},
+        {key: 'createdAt', label: 'Created', width: 110},
+        {key: 'status', label: 'Status', width: 130, isStatus: true},
+      ];
+    }
+
+    // default (all/pending/verified)
+    return [
+      {key: 'registerNo', label: 'Register', width: 120},
+      {key: 'pageNo', label: 'Page', width: 80, format: v => (v ? `P-${v}` : '—')},
+      {key: 'division', label: 'Division', width: 130},
+      {key: 'type', label: 'Type', width: 140},
+      {key: 'date', label: 'Date', width: 110},
+      {key: 'status', label: 'Status', width: 130, isStatus: true},
+    ];
+  }, [statusTab]);
+
+  const renderRow = ({item, index}) => {
     const statusColor = getStatusColor(item.status);
 
     return (
       <TouchableOpacity
         style={[styles.row, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}
         onPress={() => {
-          // later: navigate detail
-          // navigation.navigate('RegisterDetails', {id: item.id})
+          // Optional: if you have detail screens later, use item._rawDisposal / item._rawSuperdari
+          // if (item.status === 'disposed') navigation.navigate('DisposalDetails', {disposal: item._rawDisposal});
+          // if (item.status === 'superdari') navigation.navigate('SuperdariDetails', {superdari: item._rawSuperdari});
         }}
         activeOpacity={0.8}>
-        <Text style={[styles.cell, {width: 120}]} numberOfLines={1}>
-          {item.registerNo || '—'}
-        </Text>
+        {columns.map(col => {
+          if (col.isStatus) {
+            return (
+              <View
+                key={col.key}
+                style={[
+                  styles.statusPill,
+                  {
+                    width: col.width,
+                    borderColor: `${statusColor}55`,
+                    backgroundColor: `${statusColor}15`,
+                  },
+                ]}>
+                <Ionicons name={getStatusIcon(item.status)} size={14} color={statusColor} />
+                <Text style={[styles.statusPillText, {color: statusColor}]}>
+                  {String(item.status || '').toUpperCase()}
+                </Text>
+              </View>
+            );
+          }
 
-        <Text style={[styles.cell, {width: 80}]} numberOfLines={1}>
-          {item.pageNo ? `P-${item.pageNo}` : '—'}
-        </Text>
+          const raw = item?.[col.key];
+          const value = col.format ? col.format(raw) : raw ?? '—';
 
-        <Text style={[styles.cell, {width: 130}]} numberOfLines={1}>
-          {item.division || '—'}
-        </Text>
-
-        <Text style={[styles.cell, {width: 140}]} numberOfLines={1}>
-          {item.type || '—'}
-        </Text>
-
-        <Text style={[styles.cell, {width: 110}]} numberOfLines={1}>
-          {item.date || '—'}
-        </Text>
-
-        <View
-          style={[
-            styles.statusPill,
-            {
-              width: 130,
-              borderColor: `${statusColor}55`,
-              backgroundColor: `${statusColor}15`,
-            },
-          ]}>
-          <Ionicons name={getStatusIcon(item.status)} size={14} color={statusColor} />
-          <Text style={[styles.statusPillText, {color: statusColor}]}>
-            {String(item.status || '').toUpperCase()}
-          </Text>
-        </View>
+          return (
+            <Text key={col.key} style={[styles.cell, {width: col.width}]} numberOfLines={1}>
+              {String(value || '—')}
+            </Text>
+          );
+        })}
       </TouchableOpacity>
     );
   };
 
+  /* ===================== RENDER ===================== */
   if (loading) {
     return (
       <View style={styles.screen}>
-        <ImageBackground source={require('../assets/images/bg.jpg')} style={styles.background} resizeMode="cover">
+        <ImageBackground
+          source={require('../assets/images/bg.jpg')}
+          style={styles.background}
+          resizeMode="cover">
           <View style={styles.overlay} />
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#10b981" />
@@ -337,7 +635,10 @@ export default function RegistersScreen({navigation}) {
 
   return (
     <View style={styles.screen}>
-      <ImageBackground source={require('../assets/images/bg.jpg')} style={styles.background} resizeMode="cover">
+      <ImageBackground
+        source={require('../assets/images/bg.jpg')}
+        style={styles.background}
+        resizeMode="cover">
         <View style={styles.overlay} />
 
         <View style={styles.header}>
@@ -368,7 +669,7 @@ export default function RegistersScreen({navigation}) {
             <Ionicons name="search" size={18} color="#6b7280" />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search register/division/type/page/date/status..."
+              placeholder="Search..."
               placeholderTextColor="#9ca3af"
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -380,7 +681,7 @@ export default function RegistersScreen({navigation}) {
             )}
           </View>
 
-          {/* ✅ FIXED Tabs (no more big ovals) */}
+          {/* Tabs */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -432,23 +733,22 @@ export default function RegistersScreen({navigation}) {
             )}
           </View>
 
-          {/* ✅ Table inside a card */}
+          {/* Table */}
           <View style={styles.tableCard}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View>
                 <View style={styles.tableHeader}>
-                  <Text style={[styles.th, {width: 120}]}>Register</Text>
-                  <Text style={[styles.th, {width: 80}]}>Page</Text>
-                  <Text style={[styles.th, {width: 130}]}>Division</Text>
-                  <Text style={[styles.th, {width: 140}]}>Type</Text>
-                  <Text style={[styles.th, {width: 110}]}>Date</Text>
-                  <Text style={[styles.th, {width: 130}]}>Status</Text>
+                  {columns.map(col => (
+                    <Text key={col.key} style={[styles.th, {width: col.width}]}>
+                      {col.label}
+                    </Text>
+                  ))}
                 </View>
 
                 <FlatList
                   data={filteredRegisters}
                   keyExtractor={item => item.id}
-                  renderItem={renderRegisterRow}
+                  renderItem={renderRow}
                   contentContainerStyle={{paddingBottom: 12}}
                   showsVerticalScrollIndicator={false}
                   refreshControl={
@@ -494,7 +794,10 @@ export default function RegistersScreen({navigation}) {
 
             <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.modalLabel}>Division</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{paddingBottom: 6}}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{paddingBottom: 6}}>
                 {divisionOptions.map(opt => {
                   const active = filters.division === opt;
                   return (
@@ -511,7 +814,10 @@ export default function RegistersScreen({navigation}) {
               </ScrollView>
 
               <Text style={styles.modalLabel}>Type</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{paddingBottom: 6}}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{paddingBottom: 6}}>
                 {typeOptions.map(opt => {
                   const active = filters.type === opt;
                   return (
@@ -652,17 +958,8 @@ const styles = StyleSheet.create({
   },
   searchInput: {flex: 1, marginLeft: 10, marginRight: 8, fontSize: 14, color: '#111827'},
 
-  // ✅ FIX: Force tab bar height and center items (prevents huge oval buttons)
-  tabBar: {
-    height: 48,
-    maxHeight: 48,
-    marginBottom: 8,
-  },
-  tabBarContent: {
-    alignItems: 'center',
-    paddingRight: 8,
-    paddingVertical: 6,
-  },
+  tabBar: {height: 48, maxHeight: 48, marginBottom: 8},
+  tabBarContent: {alignItems: 'center', paddingRight: 8, paddingVertical: 6},
   tabPill: {
     height: 36,
     paddingHorizontal: 12,
@@ -704,7 +1001,6 @@ const styles = StyleSheet.create({
   },
   clearBtnText: {color: '#fff', fontWeight: '900', fontSize: 12},
 
-  // ✅ Table card
   tableCard: {
     backgroundColor: 'rgba(255,255,255,0.92)',
     borderRadius: 14,
@@ -712,7 +1008,6 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
     overflow: 'hidden',
   },
-
   tableHeader: {
     flexDirection: 'row',
     backgroundColor: 'rgba(14, 165, 233, 0.12)',
@@ -767,7 +1062,6 @@ const styles = StyleSheet.create({
   emptyText: {fontSize: 16, fontWeight: '800', color: '#111827', marginTop: 14, marginBottom: 6},
   emptySubtext: {fontSize: 13, color: '#6b7280', textAlign: 'center', fontWeight: '600'},
 
-  // Modal
   modalOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.35)'},
   modalCard: {
     position: 'absolute',

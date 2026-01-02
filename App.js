@@ -1,7 +1,9 @@
+// App.js
 import React from 'react';
 import {NavigationContainer, DefaultTheme} from '@react-navigation/native';
 import RootNavigator from './src/navigation/RootNavigator';
 import colors from './src/theme/colors';
+import {AuthProvider} from './src/context/AuthContext';
 
 const navTheme = {
   ...DefaultTheme,
@@ -18,8 +20,10 @@ const navTheme = {
 
 export default function App() {
   return (
-    <NavigationContainer theme={navTheme}>
-      <RootNavigator />
-    </NavigationContainer>
+    <AuthProvider>
+      <NavigationContainer theme={navTheme}>
+        <RootNavigator />
+      </NavigationContainer>
+    </AuthProvider>
   );
 }

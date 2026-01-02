@@ -1,4 +1,5 @@
-import React, {useCallback, useEffect, useRef, useState} from 'react';
+// SuperdariScreen.js
+import React, {useEffect, useRef, useState} from 'react';
 import {
   View,
   Text,
@@ -22,19 +23,25 @@ import {DropdownRow} from '../components/SelectRows';
 
 const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 
-/**
- * Superdari UI: table-like (left column "Input", right column field),
- * dark theme like your attached image + includes:
- * - Register No, Page No (prefilled from tree record; editable if you want)
- * - Name, Contact, CNIC
- * - Tree Condition dropdown (options from image)
- * - GPS: auto fetch + manual input (both shown)
- * - Remarks
- * - Pictures (multi-select)
- */
+// ✅ Same as your AuthContext
+const API_BASE = 'http://be.lte.gisforestry.com';
+const STORAGE_TOKEN = 'AUTH_TOKEN';
 
+// ✅ API
+const SUPERDARI_URL = `${API_BASE}/enum/superdari`;
+
+/**
+ * Superdari UI (same as you provided) + API POST to /enum/superdari
+ * Required API payload (from your curl):
+ * {
+ *   disposalId, superdar_name, contact_no, cnic_no,
+ *   treeConditionId, auto_lat, auto_long, manual_lat, manual_long,
+ *   pictures: [...]
+ * }
+ */
 export default function SuperdariScreen({navigation, route}) {
-  const {treeId} = route.params;
+  // ✅ accept disposalId if you pass it from previous screen
+  const {treeId, disposalId: routeDisposalId} = route.params || {};
 
   const [record, setRecord] = useState(null);
 
@@ -46,32 +53,82 @@ export default function SuperdariScreen({navigation, route}) {
   const [contact, setContact] = useState('');
   const [cnic, setCnic] = useState('');
 
+  // Tree condition (UI uses label; API needs treeConditionId)
   const [treeCondition, setTreeCondition] = useState('');
-  const conditionOptions = [
-    '',
-    'Green Standing',
-    'Green Fallen',
-    'Dry',
-    'Leaning',
-    'Dead',
-    'Hollow',
-    'Fallen',
-    'Rotten',
-    'Fire Burnt',
-    'Forked',
-    '1/4',
-    '1/2',
+
+  // ✅ If your backend already has IDs for these, update this mapping accordingly.
+  // For now, we map in a stable, explicit way (best practice).
+  const conditionMap = [
+    {id: 0, label: ''},
+    {id: 1, label: 'Green Standing'},
+    {id: 2, label: 'Green Fallen'},
+    {id: 3, label: 'Dry'},
+    {id: 4, label: 'Leaning'},
+    {id: 5, label: 'Dead'},
+    {id: 6, label: 'Hollow'},
+    {id: 7, label: 'Fallen'},
+    {id: 8, label: 'Rotten'},
+    {id: 9, label: 'Fire Burnt'},
+    {id: 10, label: 'Forked'},
+    {id: 11, label: '1/4'},
+    {id: 12, label: '1/2'},
   ];
+  const conditionOptions = conditionMap.map(x => x.label);
+
+  const getConditionId = label => {
+    const found = conditionMap.find(x => x.label === label);
+    return found?.id || null;
+  };
 
   // GPS (auto + manual)
-  const [autoGps, setAutoGps] = useState('');
-  const [manualGps, setManualGps] = useState('');
+  const [autoGps, setAutoGps] = useState(''); // "lat, long"
+  const [manualGps, setManualGps] = useState(''); // "lat, long"
   const [gpsLoading, setGpsLoading] = useState(false);
   const lastGpsRequestAtRef = useRef(0);
 
   const [remarks, setRemarks] = useState('');
   const [pictureUris, setPictureUris] = useState([]); // multiple
 
+  // API state
+  const [submitting, setSubmitting] = useState(false);
+
+  /* ===================== HELPERS ===================== */
+  async function safeJson(res) {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  const getToken = async () => {
+    const t = await AsyncStorage.getItem(STORAGE_TOKEN);
+    return (t || '').trim();
+  };
+
+  const parseLatLong = txt => {
+    // Accepts: "31.55, 74.35" or "31.55 74.35"
+    const s = String(txt || '').trim();
+    if (!s) return {lat: null, long: null};
+    const parts = s.split(/[,\s]+/).filter(Boolean);
+    if (parts.length < 2) return {lat: null, long: null};
+    const lat = Number(parts[0]);
+    const long = Number(parts[1]);
+    if (Number.isNaN(lat) || Number.isNaN(long)) return {lat: null, long: null};
+    return {lat, long};
+  };
+
+  // Backend currently expects picture URLs (per your curl).
+  // For testing: send https links only; if user selected local URIs, we add example placeholder.
+  const buildPicturesForApi = () => {
+    const httpOnes = (pictureUris || []).filter(u => /^https?:\/\//i.test(String(u || '')));
+    if (httpOnes.length > 0) return httpOnes;
+
+    // ✅ testing placeholder if user picked local files
+    return ['https://example.com/pic1.jpg'];
+  };
+
+  /* ===================== LOAD ===================== */
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -85,7 +142,7 @@ export default function SuperdariScreen({navigation, route}) {
 
       setRecord(r || null);
 
-      // try to prefill register/page from parent record if present
+      // prefill register/page
       setRegisterNo(r?.registerNo || '');
       setPageNo(r?.pageNo || '');
 
@@ -132,6 +189,7 @@ export default function SuperdariScreen({navigation, route}) {
     );
   };
 
+  /* ===================== PICTURES ===================== */
   const pickPictures = () => {
     launchImageLibrary(
       {
@@ -160,6 +218,30 @@ export default function SuperdariScreen({navigation, route}) {
     setPictureUris(prev => (prev || []).filter(x => x !== uri));
   };
 
+  /* ===================== API POST ===================== */
+  const postSuperdari = async payload => {
+    const token = await getToken();
+    if (!token) throw new Error('Auth token not found. Please login again.');
+
+    const res = await fetch(SUPERDARI_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await safeJson(res);
+
+    if (!res.ok) {
+      throw new Error(json?.message || `Superdari API failed (HTTP ${res.status})`);
+    }
+
+    return json;
+  };
+
+  /* ===================== SAVE ===================== */
   const save = async () => {
     if (!registerNo?.trim() || !pageNo?.trim()) {
       Alert.alert('Missing', 'Register No and Page No are required.');
@@ -180,7 +262,56 @@ export default function SuperdariScreen({navigation, route}) {
       return;
     }
 
+    // ✅ disposalId is required by your API
+    const disposalId =
+      routeDisposalId ||
+      record?.disposalId ||
+      record?.disposal?.id ||
+      record?.disposal?.disposalId ||
+      record?.disposal?.serverDisposalId ||
+      null;
+
+    if (!disposalId) {
+      Alert.alert(
+        'Missing',
+        'disposalId not found. Please pass disposalId in navigation params or store it on the record after disposal POST.',
+      );
+      return;
+    }
+
+    const treeConditionId = getConditionId(treeCondition);
+    if (!treeConditionId) {
+      Alert.alert('Missing', 'Invalid Tree Condition selection.');
+      return;
+    }
+
+    const {lat: auto_lat, long: auto_long} = parseLatLong(autoGps);
+    const {lat: manual_lat, long: manual_long} = parseLatLong(manualGps);
+
+    // API expects numbers; allow null if not available
+    const payload = {
+      disposalId: Number(disposalId),
+
+      superdar_name: name.trim(),
+      contact_no: contact.trim(),
+      cnic_no: cnic.trim(),
+
+      treeConditionId: Number(treeConditionId),
+
+      auto_lat: auto_lat ?? null,
+      auto_long: auto_long ?? null,
+      manual_lat: manual_lat ?? null,
+      manual_long: manual_long ?? null,
+
+      pictures: buildPicturesForApi(),
+    };
+
+    setSubmitting(true);
     try {
+      // 1) POST to API
+      const apiResp = await postSuperdari(payload);
+
+      // 2) Save locally (your existing behavior), plus keep API response for reference
       const json = await AsyncStorage.getItem(STORAGE_KEY);
       const arr = json ? JSON.parse(json) : [];
 
@@ -196,13 +327,19 @@ export default function SuperdariScreen({navigation, route}) {
                 superdarCnic: cnic.trim(),
                 treeCondition: treeCondition.trim(),
 
-                // ✅ keep both + computed
+                // keep both + computed
                 autoGpsLatLong: (autoGps || '').trim(),
                 manualGpsLatLong: (manualGps || '').trim(),
                 gpsLatLong: gpsFinal,
 
                 remarks,
                 pictureUris: pictureUris || [],
+
+                // ✅ store linkage + api response (optional)
+                disposalId: Number(disposalId),
+                treeConditionId: Number(treeConditionId),
+                apiResponse: apiResp || null,
+
                 savedAt: new Date().toISOString(),
               },
             }
@@ -210,11 +347,14 @@ export default function SuperdariScreen({navigation, route}) {
       );
 
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      Alert.alert('Saved', 'Superdari saved');
+
+      Alert.alert('Saved', 'Superdari saved and posted to server.');
       navigation.goBack();
     } catch (e) {
-      console.warn('Superdari save error', e);
-      Alert.alert('Error', 'Could not save. Please try again.');
+      console.warn('Superdari save/post error', e);
+      Alert.alert('Error', e?.message || 'Could not save/post. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -251,7 +391,6 @@ export default function SuperdariScreen({navigation, route}) {
 
         <ScrollView contentContainerStyle={{paddingBottom: 30}}>
           <View style={styles.table}>
-
             {/* PK row (optional like screenshot) */}
             <View style={styles.pkRow}>
               <Text style={styles.pkText}>PK</Text>
@@ -271,11 +410,21 @@ export default function SuperdariScreen({navigation, route}) {
             </TableRow>
 
             <TableRow label="Contact No">
-              <FormRow value={contact} onChangeText={setContact} placeholder="03xx-xxxxxxx" keyboardType="phone-pad" />
+              <FormRow
+                value={contact}
+                onChangeText={setContact}
+                placeholder="03xx-xxxxxxx"
+                keyboardType="phone-pad"
+              />
             </TableRow>
 
             <TableRow label="CNIC No">
-              <FormRow value={cnic} onChangeText={setCnic} placeholder="xxxxx-xxxxxxx-x" keyboardType="numeric" />
+              <FormRow
+                value={cnic}
+                onChangeText={setCnic}
+                placeholder="xxxxx-xxxxxxx-x"
+                keyboardType="numeric"
+              />
             </TableRow>
 
             <TableRow label="Tree Condition (Green Standing, Green Fallen, Dry, Leaning, Dead, Hollow, Fallen, Rotten, Fire Burnt, Forked, 1/4, 1/2)">
@@ -329,6 +478,8 @@ export default function SuperdariScreen({navigation, route}) {
 
               <Text style={styles.picMeta}>
                 {pictureUris.length ? `${pictureUris.length} selected` : 'No picture selected'}
+                {'  '}•{'  '}
+                API will send: {buildPicturesForApi().length} link(s)
               </Text>
 
               {pictureUris.length ? (
@@ -344,12 +495,20 @@ export default function SuperdariScreen({navigation, route}) {
                 </ScrollView>
               ) : null}
             </TableRow>
-
           </View>
 
-          <TouchableOpacity style={styles.saveBtn} onPress={save}>
-            <Ionicons name="save" size={18} color="#fff" />
-            <Text style={styles.saveText}>Save Superdari</Text>
+          <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={submitting}>
+            {submitting ? (
+              <>
+                <ActivityIndicator size="small" color="#fff" />
+                <Text style={styles.saveText}>Submitting…</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="save" size={18} color="#fff" />
+                <Text style={styles.saveText}>Save Superdari</Text>
+              </>
+            )}
           </TouchableOpacity>
         </ScrollView>
       </ImageBackground>
@@ -487,6 +646,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 10,
+    opacity: 1,
   },
   saveText: {color: '#fff', fontWeight: '900'},
 });

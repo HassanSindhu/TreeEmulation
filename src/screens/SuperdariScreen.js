@@ -1,5 +1,5 @@
-// SuperdariScreen.js
-import React, {useEffect, useRef, useState} from 'react';
+// /screens/SuperdariScreen.js
+import React, {useEffect, useRef, useState, useMemo} from 'react';
 import {
   View,
   Text,
@@ -7,19 +7,36 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  ImageBackground,
   Platform,
   ActivityIndicator,
   Image,
+  StatusBar,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
 import {launchImageLibrary} from 'react-native-image-picker';
 
-import colors from '../theme/colors';
 import FormRow from '../components/FormRow';
 import {DropdownRow} from '../components/SelectRows';
+
+// Theme Colors (consistent with Disposal screen)
+const COLORS = {
+  primary: '#059669',
+  primaryLight: '#10b981',
+  primaryDark: '#047857',
+  secondary: '#0ea5e9',
+  success: '#16a34a',
+  warning: '#f97316',
+  danger: '#dc2626',
+  info: '#7c3aed',
+  background: '#f8fafc',
+  card: '#ffffff',
+  text: '#1f2937',
+  textLight: '#6b7280',
+  border: '#e5e7eb',
+  overlay: 'rgba(15, 23, 42, 0.7)',
+};
 
 const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 
@@ -27,70 +44,42 @@ const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 const API_BASE = 'http://be.lte.gisforestry.com';
 const STORAGE_TOKEN = 'AUTH_TOKEN';
 
-// ✅ API
+// ✅ APIs
 const SUPERDARI_URL = `${API_BASE}/enum/superdari`;
+const TREE_CONDITION_SOURCE_URL = `${API_BASE}/forest-tree-conditions`; // as per your request
 
-/**
- * Superdari UI (same as you provided) + API POST to /enum/superdari
- * Required API payload (from your curl):
- * {
- *   disposalId, superdar_name, contact_no, cnic_no,
- *   treeConditionId, auto_lat, auto_long, manual_lat, manual_long,
- *   pictures: [...]
- * }
- */
 export default function SuperdariScreen({navigation, route}) {
-  // ✅ accept disposalId if you pass it from previous screen
-  const {treeId, disposalId: routeDisposalId} = route.params || {};
+  const {treeId, disposalId: routeDisposalId, enumeration} = route.params || {};
 
   const [record, setRecord] = useState(null);
 
   // fields
-  const [registerNo, setRegisterNo] = useState('');
-  const [pageNo, setPageNo] = useState('');
-
   const [name, setName] = useState('');
   const [contact, setContact] = useState('');
   const [cnic, setCnic] = useState('');
+  const [treeCondition, setTreeCondition] = useState(''); // label selected from API
+  const [remarks, setRemarks] = useState('');
+  const [pictureUris, setPictureUris] = useState([]);
 
-  // Tree condition (UI uses label; API needs treeConditionId)
-  const [treeCondition, setTreeCondition] = useState('');
-
-  // ✅ If your backend already has IDs for these, update this mapping accordingly.
-  // For now, we map in a stable, explicit way (best practice).
-  const conditionMap = [
-    {id: 0, label: ''},
-    {id: 1, label: 'Green Standing'},
-    {id: 2, label: 'Green Fallen'},
-    {id: 3, label: 'Dry'},
-    {id: 4, label: 'Leaning'},
-    {id: 5, label: 'Dead'},
-    {id: 6, label: 'Hollow'},
-    {id: 7, label: 'Fallen'},
-    {id: 8, label: 'Rotten'},
-    {id: 9, label: 'Fire Burnt'},
-    {id: 10, label: 'Forked'},
-    {id: 11, label: '1/4'},
-    {id: 12, label: '1/2'},
-  ];
-  const conditionOptions = conditionMap.map(x => x.label);
-
-  const getConditionId = label => {
-    const found = conditionMap.find(x => x.label === label);
-    return found?.id || null;
-  };
+  // Tree condition (fetched from API)
+  const [conditionRows, setConditionRows] = useState([]); // [{id,label}]
+  const [conditionLoading, setConditionLoading] = useState(false);
 
   // GPS (auto + manual)
-  const [autoGps, setAutoGps] = useState(''); // "lat, long"
-  const [manualGps, setManualGps] = useState(''); // "lat, long"
+  const [autoGps, setAutoGps] = useState('');
+  const [manualGps, setManualGps] = useState('');
   const [gpsLoading, setGpsLoading] = useState(false);
   const lastGpsRequestAtRef = useRef(0);
 
-  const [remarks, setRemarks] = useState('');
-  const [pictureUris, setPictureUris] = useState([]); // multiple
-
   // API state
   const [submitting, setSubmitting] = useState(false);
+
+  const conditionOptions = useMemo(() => conditionRows.map(x => x.label), [conditionRows]);
+
+  const getConditionId = label => {
+    const found = conditionRows.find(x => x.label === label);
+    return found?.id ?? null;
+  };
 
   /* ===================== HELPERS ===================== */
   async function safeJson(res) {
@@ -101,13 +90,19 @@ export default function SuperdariScreen({navigation, route}) {
     }
   }
 
+  const normalizeList = json => {
+    if (!json) return [];
+    if (Array.isArray(json)) return json;
+    if (typeof json === 'object' && Array.isArray(json.data)) return json.data;
+    return [];
+  };
+
   const getToken = async () => {
     const t = await AsyncStorage.getItem(STORAGE_TOKEN);
     return (t || '').trim();
   };
 
   const parseLatLong = txt => {
-    // Accepts: "31.55, 74.35" or "31.55 74.35"
     const s = String(txt || '').trim();
     if (!s) return {lat: null, long: null};
     const parts = s.split(/[,\s]+/).filter(Boolean);
@@ -118,23 +113,22 @@ export default function SuperdariScreen({navigation, route}) {
     return {lat, long};
   };
 
-  // Backend currently expects picture URLs (per your curl).
-  // For testing: send https links only; if user selected local URIs, we add example placeholder.
   const buildPicturesForApi = () => {
     const httpOnes = (pictureUris || []).filter(u => /^https?:\/\//i.test(String(u || '')));
     if (httpOnes.length > 0) return httpOnes;
 
-    // ✅ testing placeholder if user picked local files
+    // NOTE: This is a placeholder. Ideally you upload images and send returned URLs.
     return ['https://example.com/pic1.jpg'];
   };
 
   /* ===================== LOAD ===================== */
   useEffect(() => {
-    load();
+    loadLocal();
+    fetchTreeConditionFromApi();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const load = async () => {
+  const loadLocal = async () => {
     try {
       const json = await AsyncStorage.getItem(STORAGE_KEY);
       const arr = json ? JSON.parse(json) : [];
@@ -142,13 +136,7 @@ export default function SuperdariScreen({navigation, route}) {
 
       setRecord(r || null);
 
-      // prefill register/page
-      setRegisterNo(r?.registerNo || '');
-      setPageNo(r?.pageNo || '');
-
       if (r?.superdari) {
-        setRegisterNo(r.superdari.registerNo || r?.registerNo || '');
-        setPageNo(r.superdari.pageNo || r?.pageNo || '');
         setName(r.superdari.superdarName || '');
         setContact(r.superdari.superdarContact || '');
         setCnic(r.superdari.superdarCnic || '');
@@ -165,6 +153,41 @@ export default function SuperdariScreen({navigation, route}) {
       }, 250);
     } catch (e) {
       console.warn('Superdari load error', e);
+    }
+  };
+
+  const fetchTreeConditionFromApi = async () => {
+    setConditionLoading(true);
+    try {
+      const res = await fetch(TREE_CONDITION_SOURCE_URL);
+      const json = await safeJson(res);
+
+      if (!res.ok) {
+        throw new Error(json?.message || `Tree condition API failed (HTTP ${res.status})`);
+      }
+
+      const rows = normalizeList(json);
+
+      const mapped = rows
+        .map(x => {
+          if (typeof x === 'string') return {id: null, label: x};
+          return {
+            id: x?.id ?? x?.species_id ?? null,
+            label: x?.name ?? x?.species_name ?? '',
+          };
+        })
+        .filter(x => x.label);
+
+      // Optional: add blank at top
+      const final = [{id: null, label: ''}, ...mapped];
+
+      setConditionRows(final);
+    } catch (e) {
+      console.warn('Tree condition fetch error', e);
+      setConditionRows([{id: null, label: ''}]);
+      Alert.alert('Error', e?.message || 'Failed to load Tree Condition list from API.');
+    } finally {
+      setConditionLoading(false);
     }
   };
 
@@ -195,15 +218,15 @@ export default function SuperdariScreen({navigation, route}) {
       {
         mediaType: 'photo',
         quality: 0.7,
-        selectionLimit: 0, // ✅ multiple
+        selectionLimit: 0,
       },
       res => {
-        if (res.didCancel) return;
-        if (res.errorCode) {
-          Alert.alert('Image Error', res.errorMessage || 'Could not pick images');
+        if (res?.didCancel) return;
+        if (res?.errorCode) {
+          Alert.alert('Image Error', res?.errorMessage || 'Could not pick images');
           return;
         }
-        const uris = (res.assets || []).map(a => a?.uri).filter(Boolean);
+        const uris = (res?.assets || []).map(a => a?.uri).filter(Boolean);
         if (uris.length) {
           setPictureUris(prev => {
             const set = new Set([...(prev || []), ...uris]);
@@ -243,10 +266,6 @@ export default function SuperdariScreen({navigation, route}) {
 
   /* ===================== SAVE ===================== */
   const save = async () => {
-    if (!registerNo?.trim() || !pageNo?.trim()) {
-      Alert.alert('Missing', 'Register No and Page No are required.');
-      return;
-    }
     if (!name?.trim() || !contact?.trim() || !cnic?.trim()) {
       Alert.alert('Missing', 'Name, Contact and CNIC are required.');
       return;
@@ -262,7 +281,6 @@ export default function SuperdariScreen({navigation, route}) {
       return;
     }
 
-    // ✅ disposalId is required by your API
     const disposalId =
       routeDisposalId ||
       record?.disposalId ||
@@ -280,7 +298,7 @@ export default function SuperdariScreen({navigation, route}) {
     }
 
     const treeConditionId = getConditionId(treeCondition);
-    if (!treeConditionId) {
+    if (treeConditionId === null) {
       Alert.alert('Missing', 'Invalid Tree Condition selection.');
       return;
     }
@@ -288,30 +306,23 @@ export default function SuperdariScreen({navigation, route}) {
     const {lat: auto_lat, long: auto_long} = parseLatLong(autoGps);
     const {lat: manual_lat, long: manual_long} = parseLatLong(manualGps);
 
-    // API expects numbers; allow null if not available
     const payload = {
       disposalId: Number(disposalId),
-
       superdar_name: name.trim(),
       contact_no: contact.trim(),
       cnic_no: cnic.trim(),
-
       treeConditionId: Number(treeConditionId),
-
       auto_lat: auto_lat ?? null,
       auto_long: auto_long ?? null,
       manual_lat: manual_lat ?? null,
       manual_long: manual_long ?? null,
-
       pictures: buildPicturesForApi(),
     };
 
     setSubmitting(true);
     try {
-      // 1) POST to API
       const apiResp = await postSuperdari(payload);
 
-      // 2) Save locally (your existing behavior), plus keep API response for reference
       const json = await AsyncStorage.getItem(STORAGE_KEY);
       const arr = json ? JSON.parse(json) : [];
 
@@ -320,26 +331,18 @@ export default function SuperdariScreen({navigation, route}) {
           ? {
               ...r,
               superdari: {
-                registerNo: registerNo.trim(),
-                pageNo: pageNo.trim(),
                 superdarName: name.trim(),
                 superdarContact: contact.trim(),
                 superdarCnic: cnic.trim(),
                 treeCondition: treeCondition.trim(),
-
-                // keep both + computed
+                treeConditionId: Number(treeConditionId),
                 autoGpsLatLong: (autoGps || '').trim(),
                 manualGpsLatLong: (manualGps || '').trim(),
                 gpsLatLong: gpsFinal,
-
                 remarks,
                 pictureUris: pictureUris || [],
-
-                // ✅ store linkage + api response (optional)
                 disposalId: Number(disposalId),
-                treeConditionId: Number(treeConditionId),
                 apiResponse: apiResp || null,
-
                 savedAt: new Date().toISOString(),
               },
             }
@@ -348,7 +351,7 @@ export default function SuperdariScreen({navigation, route}) {
 
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
 
-      Alert.alert('Saved', 'Superdari saved and posted to server.');
+      Alert.alert('Success', 'Superdari saved and posted to server.');
       navigation.goBack();
     } catch (e) {
       console.warn('Superdari save/post error', e);
@@ -358,295 +361,374 @@ export default function SuperdariScreen({navigation, route}) {
     }
   };
 
-  const TableRow = ({label, children}) => (
-    <View style={styles.row}>
-      <View style={styles.leftCell}>
-        <Text style={styles.leftText}>Input</Text>
-      </View>
-      <View style={styles.rightCell}>
-        <Text style={styles.label}>{label}</Text>
-        <View style={{marginTop: 8}}>{children}</View>
-      </View>
-    </View>
-  );
-
   return (
     <View style={styles.screen}>
-      <ImageBackground
-        source={require('../assets/images/bg.jpg')}
-        style={styles.background}
-        resizeMode="cover">
-        <View style={styles.overlay} />
+      <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
 
-        {/* Header bar */}
-        <View style={styles.headerBar}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={22} color="#fff" />
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerContainer}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}>
+            <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
 
-          <Text style={styles.headerTitle}>Superdari</Text>
+          <View style={styles.headerContent}>
+            <Text style={styles.headerTitle}>Superdari Record</Text>
+            <View style={styles.headerInfo}>
+              <View style={styles.infoChip}>
+                <Ionicons name="business" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.division || '—'}</Text>
+              </View>
+              <View style={styles.infoChip}>
+                <Ionicons name="cube" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.block || '—'}</Text>
+              </View>
+              <View style={styles.infoChip}>
+                <Ionicons name="calendar" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.year || '—'}</Text>
+              </View>
+            </View>
+            <Text style={styles.siteId}>Tree ID: {String(treeId ?? '—')}</Text>
+          </View>
+        </View>
+      </View>
 
-          <View style={{width: 36}} />
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}>
+
+        {/* Linking Card */}
+        <View style={styles.linkingCard}>
+          <View style={styles.linkingCardHeader}>
+            <Ionicons name="link" size={20} color={COLORS.primary} />
+            <Text style={styles.linkingCardTitle}>Record Information</Text>
+          </View>
+          <View style={styles.linkingInfo}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Tree ID:</Text>
+              <Text style={styles.infoValue}>{String(treeId ?? '—')}</Text>
+            </View>
+          </View>
         </View>
 
-        <ScrollView contentContainerStyle={{paddingBottom: 30}}>
-          <View style={styles.table}>
-            {/* PK row (optional like screenshot) */}
-            <View style={styles.pkRow}>
-              <Text style={styles.pkText}>PK</Text>
-              <Text style={styles.pkValue}>{record?.id || treeId || '—'}</Text>
+        {/* Basic Information */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Superdar Information</Text>
+
+          <FormRow
+            label="Name of Superdar"
+            value={name}
+            onChangeText={setName}
+            placeholder="Enter superdar name"
+            required
+          />
+          <FormRow
+            label="Contact No"
+            value={contact}
+            onChangeText={setContact}
+            placeholder="03xx-xxxxxxx"
+            keyboardType="phone-pad"
+            required
+          />
+          <FormRow
+            label="CNIC No"
+            value={cnic}
+            onChangeText={setCnic}
+            placeholder="xxxxx-xxxxxxx-x"
+            keyboardType="numeric"
+            required
+          />
+        </View>
+
+        {/* Tree Condition */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Tree Condition</Text>
+          <DropdownRow
+            label={conditionLoading ? 'Tree Condition (Loading...)' : 'Select Tree Condition'}
+            value={treeCondition}
+            onChange={setTreeCondition}
+            options={conditionOptions}
+            required
+            disabled={conditionLoading}
+          />
+          <Text style={styles.hintText}>
+            Options are fetched from: {TREE_CONDITION_SOURCE_URL}
+          </Text>
+        </View>
+
+        {/* GPS Coordinates */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>GPS Coordinates</Text>
+
+          <View style={styles.gpsSection}>
+            <Text style={styles.gpsLabel}>Auto GPS (Auto-fetched)</Text>
+            <View style={styles.gpsValueBox}>
+              <Text style={styles.gpsValue}>{autoGps || 'Not available'}</Text>
             </View>
-
-            <TableRow label="Register No">
-              <FormRow value={registerNo} onChangeText={setRegisterNo} placeholder="Register No" />
-            </TableRow>
-
-            <TableRow label="Page No">
-              <FormRow value={pageNo} onChangeText={setPageNo} placeholder="Page No" />
-            </TableRow>
-
-            <TableRow label="Name of Superdar">
-              <FormRow value={name} onChangeText={setName} placeholder="Name" />
-            </TableRow>
-
-            <TableRow label="Contact No">
-              <FormRow
-                value={contact}
-                onChangeText={setContact}
-                placeholder="03xx-xxxxxxx"
-                keyboardType="phone-pad"
-              />
-            </TableRow>
-
-            <TableRow label="CNIC No">
-              <FormRow
-                value={cnic}
-                onChangeText={setCnic}
-                placeholder="xxxxx-xxxxxxx-x"
-                keyboardType="numeric"
-              />
-            </TableRow>
-
-            <TableRow label="Tree Condition (Green Standing, Green Fallen, Dry, Leaning, Dead, Hollow, Fallen, Rotten, Fire Burnt, Forked, 1/4, 1/2)">
-              <DropdownRow
-                label=""
-                value={treeCondition}
-                onChange={setTreeCondition}
-                options={conditionOptions}
-              />
-            </TableRow>
-
-            <TableRow label="GPS Coordinates">
-              <View style={styles.gpsBox}>
-                <Text style={styles.gpsSmallLabel}>Auto GPS</Text>
-                <Text style={styles.gpsValue}>{autoGps || '—'}</Text>
-
-                <View style={{height: 10}} />
-
-                <Text style={styles.gpsSmallLabel}>Manual (optional)</Text>
-                <FormRow
-                  value={manualGps}
-                  onChangeText={setManualGps}
-                  placeholder="31.5204, 74.3587"
-                />
-
-                <View style={styles.gpsBtnRow}>
-                  <TouchableOpacity style={styles.gpsBtn} onPress={() => fetchAutoGps(false)}>
-                    <Ionicons name="locate" size={16} color="#fff" />
-                    <Text style={styles.gpsBtnText}>Re-Fetch</Text>
-                  </TouchableOpacity>
-
-                  {gpsLoading ? (
-                    <View style={styles.gpsLoading}>
-                      <ActivityIndicator size="small" color={colors.primary} />
-                      <Text style={styles.gpsLoadingText}>Getting location…</Text>
-                    </View>
-                  ) : null}
-                </View>
-              </View>
-            </TableRow>
-
-            <TableRow label="Remarks">
-              <FormRow value={remarks} onChangeText={setRemarks} placeholder="Remarks" multiline />
-            </TableRow>
-
-            <TableRow label="Pictures">
-              <TouchableOpacity style={styles.picBtn} onPress={pickPictures}>
-                <Ionicons name="images-outline" size={18} color="#fff" />
-                <Text style={styles.picBtnText}>Upload Pictures</Text>
-              </TouchableOpacity>
-
-              <Text style={styles.picMeta}>
-                {pictureUris.length ? `${pictureUris.length} selected` : 'No picture selected'}
-                {'  '}•{'  '}
-                API will send: {buildPicturesForApi().length} link(s)
-              </Text>
-
-              {pictureUris.length ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 10}}>
-                  {pictureUris.map(uri => (
-                    <View key={uri} style={styles.thumbWrap}>
-                      <Image source={{uri}} style={styles.thumb} />
-                      <TouchableOpacity style={styles.thumbRemove} onPress={() => removePicture(uri)}>
-                        <Ionicons name="close" size={16} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </ScrollView>
-              ) : null}
-            </TableRow>
           </View>
 
-          <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={submitting}>
-            {submitting ? (
-              <>
-                <ActivityIndicator size="small" color="#fff" />
-                <Text style={styles.saveText}>Submitting…</Text>
-              </>
-            ) : (
-              <>
-                <Ionicons name="save" size={18} color="#fff" />
-                <Text style={styles.saveText}>Save Superdari</Text>
-              </>
+          <FormRow
+            label="Manual GPS (Optional)"
+            value={manualGps}
+            onChangeText={setManualGps}
+            placeholder="31.5204, 74.3587"
+          />
+
+          <View style={styles.gpsActions}>
+            <TouchableOpacity
+              style={styles.gpsButton}
+              onPress={() => fetchAutoGps(false)}
+              activeOpacity={0.7}>
+              <Ionicons name="locate" size={18} color="#fff" />
+              <Text style={styles.gpsButtonText}>
+                {gpsLoading ? 'Fetching...' : 'Refresh GPS'}
+              </Text>
+            </TouchableOpacity>
+
+            {gpsLoading && (
+              <ActivityIndicator size="small" color={COLORS.primary} style={styles.gpsLoading} />
             )}
+          </View>
+        </View>
+
+        {/* Remarks */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Remarks</Text>
+          <FormRow
+            label="Additional Remarks"
+            value={remarks}
+            onChangeText={setRemarks}
+            multiline
+            numberOfLines={3}
+            placeholder="Enter any additional remarks"
+          />
+        </View>
+
+        {/* Pictures */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Pictures</Text>
+
+          <TouchableOpacity style={styles.picBtn} onPress={pickPictures} activeOpacity={0.7}>
+            <Ionicons name="image" size={18} color="#fff" />
+            <Text style={styles.picBtnText}>Upload Pictures</Text>
           </TouchableOpacity>
-        </ScrollView>
-      </ImageBackground>
+
+          {pictureUris.length > 0 && (
+            <>
+              <Text style={styles.picCount}>
+                {pictureUris.length} picture(s) selected • API will send: {buildPicturesForApi().length} link(s)
+              </Text>
+
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesContainer}>
+                {pictureUris.map(uri => (
+                  <View key={uri} style={styles.thumbWrap}>
+                    <Image source={{uri}} style={styles.thumb} />
+                    <TouchableOpacity
+                      style={styles.thumbClose}
+                      onPress={() => removePicture(uri)}
+                      activeOpacity={0.7}>
+                      <Ionicons name="close-circle" size={18} color={COLORS.danger} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+            </>
+          )}
+        </View>
+
+        {/* Save Button */}
+        <TouchableOpacity
+          style={[styles.saveBtn, {opacity: submitting ? 0.7 : 1}]}
+          disabled={submitting}
+          onPress={save}
+          activeOpacity={0.7}>
+          {submitting ? (
+            <>
+              <ActivityIndicator color="#fff" size="small" />
+              <Text style={styles.saveText}>Saving…</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="save-outline" size={20} color="#fff" />
+              <Text style={styles.saveText}>Save Superdari Record</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: '#0b1220'},
-  background: {flex: 1},
-  overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(2, 6, 23, 0.78)'},
+  screen: {flex: 1, backgroundColor: COLORS.background},
+  container: {flex: 1},
+  contentContainer: {paddingBottom: 40},
 
-  headerBar: {
-    paddingTop: Platform.OS === 'ios' ? 54 : 46,
-    paddingBottom: 14,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
+  header: {
+    backgroundColor: COLORS.primary,
+    paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 20,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    elevation: 8,
+    shadowColor: COLORS.primary,
+    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
   },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.10)',
-  },
-  headerTitle: {flex: 1, textAlign: 'center', color: '#fff', fontSize: 18, fontWeight: '900'},
-
-  table: {
-    margin: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    borderRadius: 14,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(2, 6, 23, 0.55)',
-  },
-
-  pkRow: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.10)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  pkText: {
-    width: 74,
-    paddingVertical: 12,
-    textAlign: 'center',
-    color: '#fff',
-    fontWeight: '900',
-    borderRightWidth: 1,
-    borderRightColor: 'rgba(255,255,255,0.10)',
-  },
-  pkValue: {flex: 1, paddingVertical: 12, paddingHorizontal: 14, color: '#fff', fontWeight: '800'},
-
-  row: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.10)',
-  },
-  leftCell: {
-    width: 74,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    borderRightWidth: 1,
-    borderRightColor: 'rgba(255,255,255,0.10)',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-  },
-  leftText: {color: 'rgba(255,255,255,0.85)', fontWeight: '900'},
-  rightCell: {flex: 1, paddingVertical: 14, paddingHorizontal: 14},
-  label: {color: '#fff', fontSize: 15, fontWeight: '900'},
-
-  gpsBox: {
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
+  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  backButton: {
+    width: 44,
+    height: 44,
     borderRadius: 12,
-    padding: 12,
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
-  gpsSmallLabel: {color: 'rgba(255,255,255,0.75)', fontSize: 12, fontWeight: '900'},
-  gpsValue: {color: '#fff', marginTop: 6, fontWeight: '900'},
-  gpsBtnRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10},
-  gpsBtn: {
+  headerContent: {flex: 1},
+  headerTitle: {fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 8, letterSpacing: 0.5},
+  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
+  infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: colors.primary,
-    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 4,
   },
-  gpsBtnText: {color: '#fff', fontWeight: '900'},
-  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  gpsLoadingText: {color: 'rgba(255,255,255,0.75)', fontWeight: '800'},
+  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
+  siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3},
+
+  linkingCard: {
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    marginTop: 20,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  linkingCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    paddingBottom: 12,
+  },
+  linkingCardTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  linkingInfo: {gap: 8},
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(31, 41, 55, 0.05)',
+  },
+  infoLabel: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  infoValue: {fontSize: 14, fontWeight: '700', color: COLORS.primary},
+
+  card: {
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    marginTop: 12,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16, letterSpacing: 0.5},
+
+  hintText: {fontSize: 12, color: COLORS.textLight, fontStyle: 'italic', marginTop: 8},
+
+  gpsSection: {marginBottom: 16},
+  gpsLabel: {fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8},
+  gpsValueBox: {
+    backgroundColor: 'rgba(31, 41, 55, 0.03)',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  gpsValue: {fontSize: 14, fontWeight: '600', color: COLORS.text},
+  gpsActions: {flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12},
+  gpsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.secondary,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 8,
+    flex: 1,
+  },
+  gpsButtonText: {color: '#fff', fontWeight: '700', fontSize: 14},
+  gpsLoading: {marginLeft: 8},
 
   picBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: '#0ea5e9',
-    alignSelf: 'flex-start',
-  },
-  picBtnText: {color: '#fff', fontWeight: '900'},
-  picMeta: {marginTop: 8, color: 'rgba(255,255,255,0.70)', fontWeight: '800'},
-
-  thumbWrap: {marginRight: 10, position: 'relative'},
-  thumb: {width: 84, height: 84, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.08)'},
-  thumbRemove: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 24,
-    height: 24,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderRadius: 12,
-    backgroundColor: 'rgba(239,68,68,0.95)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    gap: 8,
   },
+  picBtnText: {color: '#fff', fontWeight: '700', fontSize: 14},
+  picCount: {fontSize: 12, color: COLORS.textLight, marginTop: 8, marginBottom: 12, fontStyle: 'italic'},
+  imagesContainer: {marginTop: 4, paddingBottom: 4},
+  thumbWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginRight: 12,
+    borderWidth: 2,
+    borderColor: COLORS.border,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  thumb: {width: '100%', height: '100%'},
+  thumbClose: {position: 'absolute', top: 4, right: 4, backgroundColor: '#fff', borderRadius: 10, padding: 2},
 
   saveBtn: {
-    marginHorizontal: 16,
-    marginTop: 6,
-    marginBottom: 20,
-    backgroundColor: colors.primary,
-    paddingVertical: 14,
+    marginHorizontal: 20,
+    marginTop: 20,
+    marginBottom: 40,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
     borderRadius: 14,
-    alignItems: 'center',
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
-    opacity: 1,
+    shadowColor: COLORS.primary,
+    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  saveText: {color: '#fff', fontWeight: '900'},
+  saveText: {color: '#fff', fontSize: 16, fontWeight: '800'},
 });

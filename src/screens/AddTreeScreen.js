@@ -62,7 +62,10 @@ const DropdownRow = ({
         style={[styles.dropdownSelected, isDisabled && {opacity: 0.65}]}
         onPress={() => !isDisabled && setOpen(true)}
         activeOpacity={0.8}>
-        <Text style={displayText ? styles.dropdownSelectedText : styles.dropdownPlaceholder}>
+        <Text
+          style={
+            displayText ? styles.dropdownSelectedText : styles.dropdownPlaceholder
+          }>
           {loading ? 'Loading...' : displayText || 'Select...'}
         </Text>
         <Ionicons
@@ -120,7 +123,7 @@ const DropdownRow = ({
   );
 };
 
-const { width } = Dimensions.get('window');
+const {width} = Dimensions.get('window');
 const CARD_WIDTH = (width - 48) / 2; // 2 cards with padding
 
 export default function AddTreeScreen({navigation}) {
@@ -201,11 +204,14 @@ export default function AddTreeScreen({navigation}) {
     return [];
   };
 
-  const rdKmLabelFrom = () => (linearType === 'Canal' ? 'RDs for Canal' : 'KMs for Road and Rail');
+  const rdKmLabelFrom = () =>
+    linearType === 'Canal' ? 'RDs for Canal' : 'KMs for Road/Rail';
   const rdKmLabelTo = () => 'RDs/KMs To';
 
   const sideLabel =
-    linearType === 'Road' ? 'Side (Left / Right / Both / Median)' : 'Side (Left / Right / Both)';
+    linearType === 'Road'
+      ? 'Side (Left / Right / Both / Median)'
+      : 'Side (Left / Right / Both)';
 
   const toNum = v => {
     const s = String(v ?? '').trim();
@@ -231,8 +237,6 @@ export default function AddTreeScreen({navigation}) {
   /* ===================== NORMALIZE API -> UI ITEM ===================== */
   const normalizeItemFromApi = useCallback(
     apiItem => {
-      // API sample fields:
-      // zoneId,circleId,divisionId,subDivisionId,plantation_type,site_name,blockId,beatId,userId,compartment,year,side,rds_from,rds_to,id,created_at
       const pt = apiItem?.plantation_type || '';
       let lt = '';
       if (pt.toLowerCase().includes('canal')) lt = 'Canal';
@@ -247,15 +251,20 @@ export default function AddTreeScreen({navigation}) {
         apiItem?.id;
 
       return {
-        // IMPORTANT: keep stable id + also keep explicit name_of_site_id for downstream screens
-        id: resolvedId != null ? String(resolvedId) : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        id:
+          resolvedId != null
+            ? String(resolvedId)
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         name_of_site_id: resolvedId != null ? Number(resolvedId) : null,
 
         // IDs (from API)
         zoneId: apiItem?.zoneId != null ? String(apiItem.zoneId) : zoneId,
         circleId: apiItem?.circleId != null ? String(apiItem.circleId) : circleId,
         divisionId: apiItem?.divisionId != null ? String(apiItem.divisionId) : divisionId,
-        subDivisionId: apiItem?.subDivisionId != null ? String(apiItem.subDivisionId) : subDivisionId,
+        subDivisionId:
+          apiItem?.subDivisionId != null
+            ? String(apiItem.subDivisionId)
+            : subDivisionId,
         blockId: apiItem?.blockId != null ? String(apiItem.blockId) : blockId,
         beatId: apiItem?.beatId != null ? String(apiItem.beatId) : beatId,
 
@@ -552,9 +561,7 @@ export default function AddTreeScreen({navigation}) {
       setRemarks('');
 
       setEnumModalVisible(false);
-      Alert.alert('Success', 'Enumeration saved successfully.', [
-        { text: 'OK', onPress: () => {} }
-      ]);
+      Alert.alert('Success', 'Enumeration saved successfully.', [{text: 'OK'}]);
     } catch (e) {
       console.error('Save enumeration error:', e);
       Alert.alert('Error', e?.message || 'Unable to save enumeration.');
@@ -562,16 +569,17 @@ export default function AddTreeScreen({navigation}) {
   };
 
   /* ===================== NAVIGATION ===================== */
+  // IMPORTANT FIX:
+  // - Do NOT use navigation.getParent() here.
+  // - Your RootNavigator registers these names:
+  //   MatureTreeRecords, PoleCropRecords, AfforestationRecords, Disposal, Superdari
   const navTo = (screen, params) => {
-    const parentNav = navigation.getParent?.();
-    (parentNav || navigation).navigate(screen, params);
+    navigation.navigate(screen, params);
   };
 
-  // FIX: make each branch exclusive + pass a stable site id field to downstream screens
   const handleCategoryPress = (type, item) => {
     if (!item) return;
 
-    // prefer explicit name_of_site_id if present, else fallback to id
     const resolvedSiteId =
       item?.name_of_site_id ??
       item?.name_of_site?.id ??
@@ -592,17 +600,12 @@ export default function AddTreeScreen({navigation}) {
       return navTo('PoleCropRecords', {
         enumeration: {
           ...item,
-          name_of_site_id:
-            item?.name_of_site_id ??
-            item?.name_of_site?.id ??
-            item?.site_id ??
-            item?.id,
+          name_of_site_id: resolvedSiteId,
         },
       });
     }
 
     if (type === 'Afforestation') {
-      // pass id in the strongest form; your Afforestation screen resolver will pick it up
       return navTo('AfforestationRecords', {
         enumeration: {
           ...item,
@@ -610,7 +613,32 @@ export default function AddTreeScreen({navigation}) {
         },
         nameOfSiteId: resolvedSiteId,
         siteId: resolvedSiteId,
-        site: item, // optional header
+        site: item,
+      });
+    }
+
+    // ✅ NEW OPTIONS (must match RootNavigator route names EXACTLY)
+    if (type === 'Disposal') {
+      return navTo('Disposal', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+        nameOfSiteId: resolvedSiteId,
+        siteId: resolvedSiteId,
+        site: item,
+      });
+    }
+
+    if (type === 'Superdari') {
+      return navTo('Superdari', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+        nameOfSiteId: resolvedSiteId,
+        siteId: resolvedSiteId,
+        site: item,
       });
     }
   };
@@ -721,8 +749,7 @@ export default function AddTreeScreen({navigation}) {
               <Text style={styles.statNumber}>
                 {enumerations.length > 0
                   ? new Date(enumerations[0].createdAt).toLocaleDateString()
-                  : '--/--/--'
-                }
+                  : '--/--/--'}
               </Text>
               <Text style={styles.statLabel}>Latest</Text>
             </View>
@@ -1033,6 +1060,7 @@ export default function AddTreeScreen({navigation}) {
             </Text>
           </View>
 
+          {/* Enumeration */}
           <TouchableOpacity
             style={styles.actionBtn}
             onPress={() => {
@@ -1043,12 +1071,13 @@ export default function AddTreeScreen({navigation}) {
               <Ionicons name="tree" size={20} color="#059669" />
             </View>
             <View style={styles.actionBtnContent}>
-              <Text style={styles.actionBtnTitle}>Mature Tree</Text>
-              <Text style={styles.actionBtnSubtitle}>Add mature tree records</Text>
+              <Text style={styles.actionBtnTitle}>Enumeration</Text>
+              <Text style={styles.actionBtnSubtitle}>Add Enumeration records</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
           </TouchableOpacity>
 
+          {/* Pole Crop */}
           <TouchableOpacity
             style={styles.actionBtn}
             onPress={() => {
@@ -1065,6 +1094,7 @@ export default function AddTreeScreen({navigation}) {
             <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
           </TouchableOpacity>
 
+          {/* Afforestation */}
           <TouchableOpacity
             style={styles.actionBtn}
             onPress={() => {
@@ -1077,6 +1107,40 @@ export default function AddTreeScreen({navigation}) {
             <View style={styles.actionBtnContent}>
               <Text style={styles.actionBtnTitle}>Afforestation</Text>
               <Text style={styles.actionBtnSubtitle}>Add afforestation records</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+          </TouchableOpacity>
+
+          {/* ✅ NEW: Disposal */}
+          <TouchableOpacity
+            style={styles.actionBtn}
+            onPress={() => {
+              setActionModalVisible(false);
+              handleCategoryPress('Disposal', selectedEnum);
+            }}>
+            <View style={styles.actionBtnIcon}>
+              <Ionicons name="trash" size={20} color="#dc2626" />
+            </View>
+            <View style={styles.actionBtnContent}>
+              <Text style={styles.actionBtnTitle}>Disposal</Text>
+              <Text style={styles.actionBtnSubtitle}>Add disposal records</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+          </TouchableOpacity>
+
+          {/* ✅ NEW: SuperDari */}
+          <TouchableOpacity
+            style={styles.actionBtn}
+            onPress={() => {
+              setActionModalVisible(false);
+              handleCategoryPress('Superdari', selectedEnum);
+            }}>
+            <View style={styles.actionBtnIcon}>
+              <Ionicons name="document-text" size={20} color="#2563eb" />
+            </View>
+            <View style={styles.actionBtnContent}>
+              <Text style={styles.actionBtnTitle}>SuperDari</Text>
+              <Text style={styles.actionBtnSubtitle}>Add superdari records</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
           </TouchableOpacity>

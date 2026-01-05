@@ -1,6 +1,4 @@
 // /screens/MatureTreeRecordsScreen.js
-// ✅ Professional UI Update with Consistent Theme + ✅ Image Upload via tree-enum API (multipart/form-data)
-
 import React, {useCallback, useMemo, useState, useEffect} from 'react';
 import {
   View,
@@ -30,25 +28,33 @@ import LinearGradient from 'react-native-linear-gradient';
 import FormRow from '../components/FormRow';
 import {DropdownRow} from '../components/SelectRows';
 
-const {width, height} = Dimensions.get('window');
+const {height} = Dimensions.get('window');
 
+/**
+ * IMPORTANT
+ * - For production you are using: http://be.lte.gisforestry.com
+ * - For local testing like your curl: http://localhost:5000
+ *
+ * Change API_BASE accordingly.
+ */
 const API_BASE = 'http://be.lte.gisforestry.com';
+
+// Lists / enums
 const SPECIES_URL = `${API_BASE}/enum/species`;
 const CONDITIONS_URL = `${API_BASE}/forest-tree-conditions`;
-const ENUMERATION_SUBMIT_URL = `${API_BASE}/enum/enumeration`;
-const ENUMERATION_SITE_WISE_URL = `${API_BASE}/enum/enumeration/get-user-site-wise-enumeration`;
 
+// Enumeration CRUD
+const ENUMERATION_SUBMIT_URL = `${API_BASE}/enum/enumeration`; // POST create
+const ENUMERATION_LIST_URL = `${API_BASE}/enum/enumeration`; // GET list (your latest curl)
+const ENUMERATION_UPDATE_URL = id => `${API_BASE}/enum/enumeration/${id}`; // PATCH edit/resubmit
+
+// Upload
 const TREE_ENUM_UPLOAD_URL = 'https://app.eco.gisforestry.com/aws-bucket/tree-enum';
-// cURL mapping:
-// --form 'files=@...'
-// --form 'uploadPath="enumaration"'
-// --form 'isMulti="true"'
-// --form 'fileName="chan"'
 const TREE_ENUM_UPLOAD_PATH = 'enumaration';
 const TREE_ENUM_IS_MULTI = 'true';
 const TREE_ENUM_FILE_NAME = 'chan';
 
-const SUPERDARI_ROUTE = 'SuperdariScreen';
+const SUPERDARI_ROUTE = 'Superdari';
 const DISPOSAL_ROUTE = 'Disposal';
 
 // Theme Colors
@@ -112,10 +118,10 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const [gpsSource, setGpsSource] = useState('');
   const [gpsFetching, setGpsFetching] = useState(false);
 
-  // ✅ MULTI IMAGE SUPPORT + UPLOAD STATE
-  const [pictureAssets, setPictureAssets] = useState([]); // [{uri, type, fileName, ...}]
+  // Multi Image + upload state
+  const [pictureAssets, setPictureAssets] = useState([]);
   const [uploadingImages, setUploadingImages] = useState(false);
-  const [uploadedImageUrls, setUploadedImageUrls] = useState([]); // returned urls/paths (best-effort)
+  const [uploadedImageUrls, setUploadedImageUrls] = useState([]);
 
   const rdRangeText =
     enumeration?.rdFrom && enumeration?.rdTo
@@ -162,55 +168,161 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   };
 
+  // Upload response helper
   const extractUploadUrls = json => {
-    // Server response shape is unknown; this tries multiple common patterns.
-    // Returns an array of strings.
     if (!json) return [];
 
     const urls = [];
-
-    const pushIfUrl = v => {
+    const push = v => {
       if (!v) return;
       if (typeof v === 'string') urls.push(v);
+      if (Array.isArray(v)) v.forEach(x => typeof x === 'string' && urls.push(x));
     };
 
-    // direct arrays
-    if (Array.isArray(json)) {
-      json.forEach(x => pushIfUrl(x?.url ?? x?.location ?? x?.path ?? x));
+    if (Array.isArray(json?.data)) {
+      json.data.forEach(x => {
+        push(x?.url);
+        push(x?.availableSizes?.thumbnail);
+        push(x?.availableSizes?.image);
+      });
     }
 
-    // common wrappers
-    if (Array.isArray(json?.urls)) json.urls.forEach(pushIfUrl);
-    if (Array.isArray(json?.data)) json.data.forEach(x => pushIfUrl(x?.url ?? x?.location ?? x?.path ?? x));
-    if (Array.isArray(json?.data?.urls)) json.data.urls.forEach(pushIfUrl);
+    push(json?.url);
+    push(json?.data?.url);
 
-    // single url fields
-    pushIfUrl(json?.url);
-    pushIfUrl(json?.location);
-    pushIfUrl(json?.path);
-    pushIfUrl(json?.data?.url);
-    pushIfUrl(json?.data?.location);
-    pushIfUrl(json?.data?.path);
-
-    // If backend returns {data: {files:[...]}}
-    if (Array.isArray(json?.data?.files)) {
-      json.data.files.forEach(x => pushIfUrl(x?.url ?? x?.location ?? x?.path ?? x));
-    }
-
-    // Deduplicate
     return Array.from(new Set(urls.filter(Boolean)));
+  };
+
+  // ---------- STATUS / UI RULES (GUARD SCREEN) ----------
+  const hasAny = v => Array.isArray(v) && v.length > 0;
+
+  const normalizeRole = role => {
+    const r = String(role || '').trim().toLowerCase();
+    if (!r) return '';
+    if (r.includes('block')) return 'Block Officer';
+    if (r.includes('sdfo')) return 'SDFO';
+    if (r.includes('dfo')) return 'DFO';
+    if (r.includes('survey')) return 'Surveyor';
+    if (r.includes('guard') || r.includes('beat')) return 'Guard';
+    return String(role || '').trim();
+  };
+
+  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO', 'Surveyor'];
+
+  const nextRole = currentRole => {
+    const idx = ROLE_ORDER.indexOf(currentRole);
+    return idx >= 0 ? ROLE_ORDER[idx + 1] || null : null;
+  };
+
+  /**
+   * Your requirement:
+   * - If disposal/superdari empty => show Dispose & Superdari buttons
+   * - If disposal/superdari has data => status shows Disposed/Superdari and hide Edit and hide pills
+   * - Workflow status based on latestStatus:
+   *   Guard -> Block Officer -> SDFO -> DFO -> Surveyor -> Final Approved
+   * - If anyone rejects => goes back to guard with remarks; Edit shows, user can resubmit.
+   */
+  const deriveRowUi = r => {
+    const disposalExists = hasAny(r?.disposal);
+    const superdariExists = hasAny(r?.superdari);
+
+    // Dispose/Superdari overrides everything
+    if (disposalExists && superdariExists) {
+      return {
+        statusText: 'Disposed + Superdari',
+        statusColor: COLORS.warning,
+        showEdit: false,
+        showPills: false,
+        rowAccent: null,
+      };
+    }
+    if (disposalExists) {
+      return {
+        statusText: 'Disposed',
+        statusColor: COLORS.secondary,
+        showEdit: false,
+        showPills: false,
+        rowAccent: null,
+      };
+    }
+    if (superdariExists) {
+      return {
+        statusText: 'Superdari',
+        statusColor: COLORS.info,
+        showEdit: false,
+        showPills: false,
+        rowAccent: null,
+      };
+    }
+
+    // Now rely on latestStatus
+    const latest = r?.latestStatus || null;
+    const action = String(latest?.action || '').trim(); // Approved / Rejected
+    const byRole = normalizeRole(latest?.user_role || '');
+    const byDesignation = String(latest?.designation || '').trim();
+    const remarks = String(latest?.remarks || '').trim();
+
+    // No status yet => pending at Block Officer (as per your flow)
+    if (!latest || !action) {
+      return {
+        statusText: 'Pending (Block Officer)',
+        statusColor: COLORS.textLight,
+        showEdit: false,
+        // per your rule: buttons show if arrays are empty
+        showPills: true,
+        rowAccent: null,
+      };
+    }
+
+    if (action.toLowerCase() === 'rejected') {
+      const rejectBy = byDesignation || byRole || 'Officer';
+      const shortRemarks = remarks ? ` • ${remarks}` : '';
+      return {
+        statusText: `Rejected by ${rejectBy}${shortRemarks}`,
+        statusColor: COLORS.danger,
+        showEdit: true, // only rejected returns to Guard
+        showPills: true, // arrays are empty
+        rowAccent: 'rejected',
+      };
+    }
+
+    if (action.toLowerCase() === 'approved') {
+      const approver = byRole || 'Block Officer';
+      const nxt = nextRole(approver);
+
+      // Surveyor approved => final
+      if (!nxt) {
+        return {
+          statusText: 'Final Approved',
+          statusColor: COLORS.success,
+          showEdit: false,
+          showPills: true, // your rule: empty arrays => show buttons
+          rowAccent: null,
+        };
+      }
+
+      return {
+        statusText: `Approved • Pending (${nxt})`,
+        statusColor: COLORS.warning,
+        showEdit: false,
+        showPills: true, // your rule: empty arrays => show buttons
+        rowAccent: null,
+      };
+    }
+
+    return {
+      statusText: 'Pending',
+      statusColor: COLORS.textLight,
+      showEdit: false,
+      showPills: true,
+      rowAccent: null,
+    };
   };
 
   // ---------- API CALLS ----------
   const fetchServerEnumerations = useCallback(
     async ({refresh = false} = {}) => {
-      const siteId = getNameOfSiteId();
-      if (!siteId) {
-        setServerError('Missing name_of_site_id for server fetch.');
-        setServerRecords([]);
-        return;
-      }
-
+      const siteId = getNameOfSiteId(); // may be null; if null, show all
       try {
         refresh ? setServerRefreshing(true) : setServerLoading(true);
         setServerError('');
@@ -218,13 +330,12 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         const token = await getAuthToken();
         if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-        const res = await fetch(ENUMERATION_SITE_WISE_URL, {
-          method: 'POST',
+        // ✅ Latest API (your curl): GET /enum/enumeration
+        const res = await fetch(ENUMERATION_LIST_URL, {
+          method: 'GET',
           headers: {
-            'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({name_of_site_id: Number(siteId)}),
         });
 
         const json = await safeJson(res);
@@ -235,7 +346,13 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         }
 
         const rows = Array.isArray(json?.data) ? json.data : normalizeList(json);
-        setServerRecords(Array.isArray(rows) ? rows : []);
+        const list = Array.isArray(rows) ? rows : [];
+
+        // If screen is opened for a specific site, filter by name_of_site_id
+        const filtered =
+          siteId != null ? list.filter(x => String(x?.name_of_site_id) === String(siteId)) : list;
+
+        setServerRecords(filtered);
       } catch (e) {
         setServerRecords([]);
         setServerError(e?.message || 'Failed to fetch server records');
@@ -243,6 +360,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         refresh ? setServerRefreshing(false) : setServerLoading(false);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [enumeration],
   );
 
@@ -336,7 +454,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   }, []);
 
-  // ✅ Image upload (multipart/form-data) for TREE_ENUM_UPLOAD_URL
+  // Image upload
   const uploadTreeEnumImages = useCallback(async (assets = []) => {
     if (!assets?.length) return [];
 
@@ -366,8 +484,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
     const res = await fetch(TREE_ENUM_UPLOAD_URL, {
       method: 'POST',
-      // IMPORTANT: Do not set Content-Type manually in React Native for FormData.
-      // It will auto-add the correct boundary.
       body: fd,
     });
 
@@ -378,9 +494,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       throw new Error(msg);
     }
 
-    const urls = extractUploadUrls(json);
-    // If backend returns nothing parseable, still return empty and let caller decide.
-    return urls;
+    return extractUploadUrls(json);
   }, []);
 
   // ---------- EFFECTS ----------
@@ -422,7 +536,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       {
         mediaType: 'photo',
         quality: 0.7,
-        selectionLimit: 10, // allow multi-select
+        selectionLimit: 10,
       },
       res => {
         if (res?.didCancel) return;
@@ -436,7 +550,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         if (!assets.length) return;
 
         setPictureAssets(assets);
-        setUploadedImageUrls([]); // reset uploaded urls if user re-selects
+        setUploadedImageUrls([]);
       },
     );
   };
@@ -466,6 +580,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const openEditFormServer = row => {
     setIsEdit(true);
     setEditingServerId(row?.id ?? null);
+
     setRdKm(String(row?.rd_km ?? ''));
     setSpecies('');
     setSpeciesId(row?.species_id ?? null);
@@ -484,9 +599,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setGpsManual(manual || auto);
     setGpsSource(manual ? 'MANUAL' : auto ? 'GPS' : '');
 
-    // On edit, keep images empty unless user selects new images
     setPictureAssets([]);
-    setUploadedImageUrls([]);
+    setUploadedImageUrls(Array.isArray(row?.pictures) ? row.pictures : []);
+
     setModalVisible(true);
   };
 
@@ -497,6 +612,30 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
     const res = await fetch(ENUMERATION_SUBMIT_URL, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const json = await safeJson(res);
+
+    if (!res.ok) {
+      const msg = json?.message || json?.error || `API Error (${res.status})`;
+      throw new Error(msg);
+    }
+
+    return json;
+  };
+
+  const patchToApi = async (id, body) => {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
+    if (!id) throw new Error('Missing record id for update.');
+
+    const res = await fetch(ENUMERATION_UPDATE_URL(id), {
+      method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
@@ -531,7 +670,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     const rdNum = Number(String(rdKm || '').replace(/[^\d.]+/g, ''));
     const rdKmNumber = Number.isFinite(rdNum) ? rdNum : 0;
 
-    // ✅ 1) Upload images (if selected) via tree-enum API
+    // 1) Upload images (if newly selected) via tree-enum API
     let pictures = [];
     try {
       if (pictureAssets?.length) {
@@ -539,15 +678,17 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         const urls = await uploadTreeEnumImages(pictureAssets);
         setUploadedImageUrls(urls);
 
-        // If backend returns no parseable urls, we still proceed with empty pictures
-        // but we warn user to verify backend response.
         if (!urls?.length) {
           Alert.alert(
             'Upload Response',
-            'Images uploaded, but server did not return any readable URL/path. Saving record without picture URLs.',
+            'Images uploaded, but server did not return readable URLs. Saving without picture URLs.',
           );
         } else {
           pictures = urls;
+        }
+      } else {
+        if (Array.isArray(uploadedImageUrls) && uploadedImageUrls.length) {
+          pictures = uploadedImageUrls;
         }
       }
     } catch (e) {
@@ -567,33 +708,23 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       auto_long: autoLng,
       manual_lat: manualLat,
       manual_long: manualLng,
-      pictures, // ✅ now uses uploaded URLs (if any)
+      pictures,
     };
 
+    // 2) Edit: PATCH
     if (isEdit) {
-      Alert.alert(
-        'Edit not supported yet',
-        'Server update API is not provided. Currently Save will create a new record on server.',
-        [
-          {text: 'Cancel', style: 'cancel'},
-          {
-            text: 'Create New',
-            onPress: async () => {
-              try {
-                await submitToApi(apiBody);
-                setModalVisible(false);
-                fetchServerEnumerations({refresh: true});
-                Alert.alert('Success', 'Saved to server.');
-              } catch (e) {
-                Alert.alert('Error', e?.message || 'Failed to save');
-              }
-            },
-          },
-        ],
-      );
+      try {
+        await patchToApi(editingServerId, apiBody);
+        setModalVisible(false);
+        fetchServerEnumerations({refresh: true});
+        Alert.alert('Success', 'Record updated and resubmitted successfully.');
+      } catch (e) {
+        Alert.alert('Update Failed', e?.message || 'Failed to update');
+      }
       return;
     }
 
+    // 3) Add: POST
     try {
       await submitToApi(apiBody);
       setModalVisible(false);
@@ -604,45 +735,46 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   };
 
-  // ---------- UI HELPERS ----------
-  const getStatusText = r => {
-    const isDisposed = !!r?.disposal;
-    const isSuperdari = !!r?.superdari;
+  // ---------- DECORATION ----------
+  const speciesById = useMemo(() => {
+    const map = new Map();
+    speciesRows.forEach(s => map.set(String(s.id), s.name));
+    return map;
+  }, [speciesRows]);
 
-    if (isDisposed && isSuperdari) return 'Disposed + Superdari';
-    if (isDisposed) return 'Disposed';
-    if (isSuperdari) return 'Superdari';
-    return 'Pending';
-  };
-
-  const getStatusColor = status => {
-    switch (status) {
-      case 'Disposed':
-        return COLORS.secondary;
-      case 'Superdari':
-        return COLORS.info;
-      case 'Disposed + Superdari':
-        return COLORS.warning;
-      default:
-        return COLORS.textLight;
-    }
-  };
-
-  const shouldHidePills = r => !!r?.disposal || !!r?.superdari;
+  const conditionById = useMemo(() => {
+    const map = new Map();
+    conditionRows.forEach(c => map.set(String(c.id), c.name));
+    return map;
+  }, [conditionRows]);
 
   const serverRowsDecorated = useMemo(() => {
-    return serverRecords.map(r => ({
-      ...r,
-      _speciesLabel: r?.species_name ?? (r?.species_id != null ? `#${r.species_id}` : '—'),
-      _conditionLabel: r?.condition_name ?? (r?.condition_id != null ? `#${r.condition_id}` : '—'),
-      _autoGps:
-        r?.auto_lat != null && r?.auto_long != null ? `${r.auto_lat}, ${r.auto_long}` : '—',
-      _manualGps:
-        r?.manual_lat != null && r?.manual_long != null
-          ? `${r.manual_lat}, ${r.manual_long}`
-          : '—',
-    }));
-  }, [serverRecords]);
+    return serverRecords.map(r => {
+      const sp =
+        r?.species_name ||
+        r?.species?.name ||
+        (r?.species_id != null ? speciesById.get(String(r.species_id)) : null) ||
+        (r?.species_id != null ? `#${r.species_id}` : '—');
+
+      const cond =
+        r?.condition_name ||
+        r?.condition?.name ||
+        (r?.condition_id != null ? conditionById.get(String(r.condition_id)) : null) ||
+        (r?.condition_id != null ? `#${r.condition_id}` : '—');
+
+      return {
+        ...r,
+        _speciesLabel: sp,
+        _conditionLabel: cond,
+        _autoGps:
+          r?.auto_lat != null && r?.auto_long != null ? `${r.auto_lat}, ${r.auto_long}` : '—',
+        _manualGps:
+          r?.manual_lat != null && r?.manual_long != null
+            ? `${r.manual_lat}, ${r.manual_long}`
+            : '—',
+      };
+    });
+  }, [serverRecords, speciesById, conditionById]);
 
   // ---------- FILTERING ----------
   const activeFilterCount = useMemo(() => {
@@ -692,6 +824,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
       if (!q) return true;
 
+      const ui = deriveRowUi(r);
       const blob = [
         r?.id,
         r?.rd_km,
@@ -701,6 +834,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         r?._manualGps,
         r?.girth,
         r?.created_at,
+        ui?.statusText,
+        r?.nameOfSite?.site_name,
       ]
         .filter(v => v !== null && v !== undefined)
         .join(' ')
@@ -715,7 +850,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     <View style={styles.screen}>
       <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
 
-      {/* Header with Gradient */}
+      {/* Header */}
       <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.headerGradient}>
         <View style={styles.header}>
           <TouchableOpacity
@@ -726,7 +861,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
           </TouchableOpacity>
 
           <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>Mature Tree Records</Text>
+            <Text style={styles.headerTitle}>Enumeration Records</Text>
             <View style={styles.headerInfo}>
               <View style={styles.infoChip}>
                 <Ionicons name="business" size={12} color="#fff" />
@@ -755,7 +890,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         </View>
       </LinearGradient>
 
-      {/* Main Content */}
+      {/* Main */}
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.contentContainer}
@@ -774,7 +909,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search by ID, species, condition, GPS..."
+              placeholder="Search by ID, species, condition, GPS, status..."
               placeholderTextColor={COLORS.textLight}
               style={styles.searchInput}
             />
@@ -861,8 +996,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     {label: 'Girth', width: 100},
                     {label: 'Auto GPS', width: 180},
                     {label: 'Manual GPS', width: 180},
-                    {label: 'Status', width: 140},
-                    {label: 'Actions', width: 280},
+                    {label: 'Status', width: 220},
+                    {label: 'Actions', width: 320},
                   ].map((col, idx) => (
                     <View key={idx} style={[styles.thCell, {width: col.width}]}>
                       <Text style={styles.thText}>{col.label}</Text>
@@ -872,14 +1007,16 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
                 {/* Table Rows */}
                 {filteredServer.map((r, idx) => {
-                  const statusText = getStatusText(r);
-                  const statusColor = getStatusColor(statusText);
-                  const hidePills = shouldHidePills(r);
+                  const ui = deriveRowUi(r);
+
+                  const rowStyle = [
+                    styles.tableRow,
+                    idx % 2 === 0 ? styles.rowEven : styles.rowOdd,
+                    ui.rowAccent === 'rejected' ? styles.rowRejected : null,
+                  ];
 
                   return (
-                    <View
-                      key={String(r.id ?? idx)}
-                      style={[styles.tableRow, idx % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
+                    <View key={String(r.id ?? idx)} style={rowStyle}>
                       <View style={[styles.tdCell, {width: 80}]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.id ?? '—')}
@@ -922,27 +1059,27 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 140}]}>
-                        <View style={[styles.statusBadge, {backgroundColor: `${statusColor}15`}]}>
-                          <View style={[styles.statusDot, {backgroundColor: statusColor}]} />
-                          <Text style={[styles.statusText, {color: statusColor}]}>{statusText}</Text>
+                      <View style={[styles.tdCell, {width: 220}]}>
+                        <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                          <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                          <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                            {ui.statusText}
+                          </Text>
                         </View>
                       </View>
 
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 280}]}>
-                        <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
-                          <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
-                          <Text style={styles.actionButtonText}>Edit</Text>
-                        </TouchableOpacity>
+                      <View style={[styles.tdCell, styles.actionsCell, {width: 320}]}>
+                        {/* Edit only on rejected, and not disposed/superdari (already handled in deriveRowUi) */}
+                        {ui.showEdit && (
+                          <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
+                            <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
+                            <Text style={styles.actionButtonText}>Edit</Text>
+                          </TouchableOpacity>
+                        )}
 
-                        <TouchableOpacity
-                          style={[styles.actionButton, {backgroundColor: `${COLORS.danger}15`}]}
-                          onPress={() => Alert.alert('Not available', 'Delete API is not provided yet.')}>
-                          <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
-                          <Text style={[styles.actionButtonText, {color: COLORS.danger}]}>Delete</Text>
-                        </TouchableOpacity>
 
-                        {!hidePills && (
+                        {/* Dispose / Superdari pills only when BOTH arrays are empty (your requirement) */}
+                        {ui.showPills && (
                           <>
                             <TouchableOpacity
                               style={[styles.actionPill, {backgroundColor: COLORS.primaryDark}]}
@@ -1089,7 +1226,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         animationType="slide"
         onRequestClose={() => setModalVisible(false)}>
         <View style={styles.editModalOverlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.editModalContainer}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.editModalContainer}>
             <LinearGradient colors={['#fff', '#f8fafc']} style={styles.editModalContent}>
               <View style={styles.editModalHeader}>
                 <View>
@@ -1214,7 +1353,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   </View>
                 </View>
 
-                {/* ✅ Image Section (tree-enum upload integration) */}
+                {/* Image Section */}
                 <View style={styles.imageSection}>
                   <TouchableOpacity style={styles.imageButton} onPress={pickImage} disabled={uploadingImages}>
                     <Ionicons name="image-outline" size={24} color={COLORS.primary} />
@@ -1223,7 +1362,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         {pictureAssets.length ? 'Change Images' : 'Select Images'}
                       </Text>
                       <Text style={styles.imageButtonSubtitle}>
-                        Upload API: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName: {TREE_ENUM_FILE_NAME}
+                        UploadPath: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName: {TREE_ENUM_FILE_NAME}
                       </Text>
                     </View>
 
@@ -1247,7 +1386,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     <View style={styles.uploadedPreview}>
                       <Ionicons name="cloud-done-outline" size={16} color={COLORS.info} />
                       <Text style={styles.uploadedPreviewText} numberOfLines={2}>
-                        Uploaded: {uploadedImageUrls.length} file(s)
+                        Uploaded/Existing: {uploadedImageUrls.length} file(s)
                       </Text>
                     </View>
                   )}
@@ -1489,6 +1628,7 @@ const styles = StyleSheet.create({
   tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
   rowEven: {backgroundColor: '#fff'},
   rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
+  rowRejected: {backgroundColor: 'rgba(239, 68, 68, 0.06)'},
   tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
   tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
   statusBadge: {
@@ -1499,9 +1639,10 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
     gap: 6,
+    maxWidth: 210,
   },
   statusDot: {width: 8, height: 8, borderRadius: 4},
-  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5},
+  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1},
   actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
   actionButton: {
     flexDirection: 'row',
@@ -1582,7 +1723,14 @@ const styles = StyleSheet.create({
   // Edit Modal
   editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
   editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
-  editModalContent: {flex: 1, borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border},
+  editModalContent: {
+    flex: 1,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
   editModalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',

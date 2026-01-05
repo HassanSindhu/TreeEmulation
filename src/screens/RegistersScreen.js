@@ -6,7 +6,6 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  ImageBackground,
   TextInput,
   ScrollView,
   RefreshControl,
@@ -15,6 +14,7 @@ import {
   TouchableWithoutFeedback,
   Platform,
   Alert,
+  Dimensions,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -23,12 +23,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const API_BASE = 'http://be.lte.gisforestry.com';
 const STORAGE_TOKEN = 'AUTH_TOKEN';
 
+const { width } = Dimensions.get('window');
+
 export default function RegistersScreen({navigation}) {
   const [registers, setRegisters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Tabs: all | pending | verified | disposed | superdari
+  // Tabs: all | pending | verified | disapproved | disposed | superdari
   const [statusTab, setStatusTab] = useState('all');
 
   // Search + Advanced filters
@@ -131,7 +133,7 @@ export default function RegistersScreen({navigation}) {
   /**
    * ✅ Disposed rows:
    * - user asked to REMOVE register/page/division from disposed
-   * - show “more details” from API response
+   * - show "more details" from API response
    */
   const mapDisposalToRegisterRow = (d, idx) => {
     const serverId =
@@ -286,7 +288,7 @@ export default function RegistersScreen({navigation}) {
     try {
       setLoading(true);
 
-      // Keep your existing local/mock dataset for pending/verified etc (until you add those APIs)
+      // Keep your existing local/mock dataset for pending/verified/disapproved etc
       const mockData = [
         {
           id: 'reg_1',
@@ -305,6 +307,15 @@ export default function RegistersScreen({navigation}) {
           date: '2024-01-14',
           division: 'Sheikhupura',
           type: 'Mature Tree',
+        },
+        {
+          id: 'reg_3',
+          registerNo: 'REG-23-047',
+          pageNo: '18',
+          status: 'disapproved',
+          date: '2024-01-13',
+          division: 'Faisalabad',
+          type: 'Pole Crop',
         },
         {
           id: 'reg_5',
@@ -361,15 +372,17 @@ export default function RegistersScreen({navigation}) {
   const getStatusColor = status => {
     switch (status) {
       case 'pending':
-        return '#f97316';
+        return '#f97316'; // Orange
       case 'verified':
-        return '#16a34a';
+        return '#16a34a'; // Green
+      case 'disapproved':
+        return '#dc2626'; // Red
       case 'disposed':
-        return '#0ea5e9';
+        return '#0ea5e9'; // Blue
       case 'superdari':
-        return '#7c3aed';
+        return '#7c3aed'; // Purple
       default:
-        return '#6b7280';
+        return '#6b7280'; // Gray
     }
   };
 
@@ -379,6 +392,8 @@ export default function RegistersScreen({navigation}) {
         return 'time';
       case 'verified':
         return 'checkmark-done';
+      case 'disapproved':
+        return 'close-circle';
       case 'disposed':
         return 'trash';
       case 'superdari':
@@ -405,9 +420,10 @@ export default function RegistersScreen({navigation}) {
     const all = registers.length;
     const pending = registers.filter(x => x.status === 'pending').length;
     const verified = registers.filter(x => x.status === 'verified').length;
+    const disapproved = registers.filter(x => x.status === 'disapproved').length;
     const disposed = registers.filter(x => x.status === 'disposed').length;
     const superdari = registers.filter(x => x.status === 'superdari').length;
-    return {all, pending, verified, disposed, superdari};
+    return {all, pending, verified, disapproved, disposed, superdari};
   }, [registers]);
 
   const filteredRegisters = useMemo(() => {
@@ -421,6 +437,7 @@ export default function RegistersScreen({navigation}) {
     return registers.filter(item => {
       if (statusTab === 'pending' && item.status !== 'pending') return false;
       if (statusTab === 'verified' && item.status !== 'verified') return false;
+      if (statusTab === 'disapproved' && item.status !== 'disapproved') return false;
       if (statusTab === 'disposed' && item.status !== 'disposed') return false;
       if (statusTab === 'superdari' && item.status !== 'superdari') return false;
 
@@ -516,7 +533,7 @@ export default function RegistersScreen({navigation}) {
       <Ionicons
         name={icon}
         size={14}
-        color={isActive ? '#fff' : '#6b7280'}
+        color={isActive ? '#fff' : '#065f46'}
         style={{marginRight: 6}}
       />
       <Text style={[styles.tabPillText, isActive && styles.tabPillTextActive]}>
@@ -558,7 +575,7 @@ export default function RegistersScreen({navigation}) {
       ];
     }
 
-    // default (all/pending/verified)
+    // default (all/pending/verified/disapproved)
     return [
       {key: 'registerNo', label: 'Register', width: 120},
       {key: 'pageNo', label: 'Page', width: 80, format: v => (v ? `P-${v}` : '—')},
@@ -569,18 +586,16 @@ export default function RegistersScreen({navigation}) {
     ];
   }, [statusTab]);
 
+  // Calculate total table width
+  const tableWidth = useMemo(() => {
+    return columns.reduce((total, col) => total + col.width, 0);
+  }, [columns]);
+
   const renderRow = ({item, index}) => {
     const statusColor = getStatusColor(item.status);
 
     return (
-      <TouchableOpacity
-        style={[styles.row, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}
-        onPress={() => {
-          // Optional: if you have detail screens later, use item._rawDisposal / item._rawSuperdari
-          // if (item.status === 'disposed') navigation.navigate('DisposalDetails', {disposal: item._rawDisposal});
-          // if (item.status === 'superdari') navigation.navigate('SuperdariDetails', {superdari: item._rawSuperdari});
-        }}
-        activeOpacity={0.8}>
+      <View style={[styles.row, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
         {columns.map(col => {
           if (col.isStatus) {
             return (
@@ -611,7 +626,7 @@ export default function RegistersScreen({navigation}) {
             </Text>
           );
         })}
-      </TouchableOpacity>
+      </View>
     );
   };
 
@@ -619,73 +634,71 @@ export default function RegistersScreen({navigation}) {
   if (loading) {
     return (
       <View style={styles.screen}>
-        <ImageBackground
-          source={require('../assets/images/bg.jpg')}
-          style={styles.background}
-          resizeMode="cover">
-          <View style={styles.overlay} />
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#10b981" />
+        <View style={styles.loadingContainer}>
+          <View style={styles.loadingCard}>
+            <ActivityIndicator size="large" color="#059669" />
             <Text style={styles.loadingText}>Loading registers...</Text>
           </View>
-        </ImageBackground>
+        </View>
       </View>
     );
   }
 
   return (
     <View style={styles.screen}>
-      <ImageBackground
-        source={require('../assets/images/bg.jpg')}
-        style={styles.background}
-        resizeMode="cover">
-        <View style={styles.overlay} />
+      {/* Header with gradient effect */}
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <View>
+            <Text style={styles.headerTitle}>Registers</Text>
+            <Text style={styles.headerSubtitle}>
+              Pending / Verified / Disapproved / Disposed / Superdari
+            </Text>
+          </View>
 
-        <View style={styles.header}>
-          <View style={styles.headerRow}>
-            <View>
-              <Text style={styles.headerTitle}>Registers</Text>
-              <Text style={styles.headerSubtitle}>
-                Pending / Verified / Disposed / Superdari (Disposed + Superdari are final)
-              </Text>
-            </View>
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={() => setFilterModalVisible(true)}>
+            <Ionicons name="options-outline" size={22} color="#ffffff" />
+            {activeFilterCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{activeFilterCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
 
-            <TouchableOpacity
-              style={styles.headerIconBtn}
-              onPress={() => setFilterModalVisible(true)}>
-              <Ionicons name="options-outline" size={22} color="#ffffff" />
-              {activeFilterCount > 0 && (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{activeFilterCount}</Text>
-                </View>
+      {/* Main Content */}
+      <View style={styles.content}>
+        {/* Search Bar with glass effect */}
+        <View style={styles.searchContainer}>
+          <View style={styles.searchCard}>
+            <View style={styles.searchInner}>
+              <Ionicons name="search" size={18} color="#059669" />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search registers by any field..."
+                placeholderTextColor="#9ca3af"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+              {(searchQuery || '').length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  style={styles.clearSearchBtn}>
+                  <Ionicons name="close-circle" size={18} color="#dc2626" />
+                </TouchableOpacity>
               )}
-            </TouchableOpacity>
+            </View>
           </View>
         </View>
 
-        <View style={styles.content}>
-          {/* Search */}
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={18} color="#6b7280" />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search..."
-              placeholderTextColor="#9ca3af"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {(searchQuery || '').length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={18} color="#6b7280" />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Tabs */}
+        {/* Tabs Container */}
+        <View style={styles.tabsContainer}>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            style={styles.tabBar}
             contentContainerStyle={styles.tabBarContent}>
             <TabPill
               title={`All (${tabCounts.all})`}
@@ -706,6 +719,12 @@ export default function RegistersScreen({navigation}) {
               onPress={() => setStatusTab('verified')}
             />
             <TabPill
+              title={`Disapproved (${tabCounts.disapproved})`}
+              icon="close-circle"
+              isActive={statusTab === 'disapproved'}
+              onPress={() => setStatusTab('disapproved')}
+            />
+            <TabPill
               title={`Disposed (${tabCounts.disposed})`}
               icon="trash"
               isActive={statusTab === 'disposed'}
@@ -718,177 +737,239 @@ export default function RegistersScreen({navigation}) {
               onPress={() => setStatusTab('superdari')}
             />
           </ScrollView>
+        </View>
 
-          {/* Results + Clear */}
-          <View style={styles.resultsHeader}>
+        {/* Results Header */}
+        <View style={styles.resultsHeader}>
+          <View style={styles.resultsLeft}>
+            <Ionicons name="list" size={16} color="#059669" />
             <Text style={styles.resultsText}>
               {filteredRegisters.length} item{filteredRegisters.length !== 1 ? 's' : ''} found
             </Text>
-
-            {activeFilterCount > 0 && (
-              <TouchableOpacity style={styles.clearBtn} onPress={clearAll}>
-                <Ionicons name="trash-outline" size={14} color="#fff" />
-                <Text style={styles.clearBtnText}>Clear</Text>
-              </TouchableOpacity>
-            )}
           </View>
 
-          {/* Table */}
-          <View style={styles.tableCard}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View>
-                <View style={styles.tableHeader}>
-                  {columns.map(col => (
-                    <Text key={col.key} style={[styles.th, {width: col.width}]}>
-                      {col.label}
-                    </Text>
-                  ))}
-                </View>
-
-                <FlatList
-                  data={filteredRegisters}
-                  keyExtractor={item => item.id}
-                  renderItem={renderRow}
-                  contentContainerStyle={{paddingBottom: 12}}
-                  showsVerticalScrollIndicator={false}
-                  refreshControl={
-                    <RefreshControl
-                      refreshing={refreshing}
-                      onRefresh={onRefresh}
-                      colors={['#10b981']}
-                      tintColor="#10b981"
-                    />
-                  }
-                  ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                      <Ionicons name="document" size={44} color="#9ca3af" />
-                      <Text style={styles.emptyText}>No records found</Text>
-                      <Text style={styles.emptySubtext}>
-                        Try changing filters or search keywords.
-                      </Text>
-                    </View>
-                  }
-                />
-              </View>
-            </ScrollView>
-          </View>
+          {activeFilterCount > 0 && (
+            <TouchableOpacity style={styles.clearBtn} onPress={clearAll}>
+              <Ionicons name="trash-outline" size={14} color="#fff" />
+              <Text style={styles.clearBtnText}>Clear All</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* Advanced Filters Modal */}
-        <Modal
-          transparent
-          visible={filterModalVisible}
-          animationType="fade"
-          onRequestClose={() => setFilterModalVisible(false)}>
+        {/* Table Container - FIXED: Header and body scroll together in single ScrollView */}
+        <View style={styles.tableContainer}>
+          {/* Main horizontal ScrollView wrapping both header and body */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={true}
+            contentContainerStyle={styles.tableScrollContent}>
+
+            {/* Table content wrapper with calculated width */}
+            <View style={[styles.tableContentWrapper, { width: tableWidth }]}>
+
+              {/* Table Header */}
+              <View style={styles.tableHeader}>
+                {columns.map(col => (
+                  <View key={col.key} style={[styles.thContainer, {width: col.width}]}>
+                    <Text style={styles.th}>{col.label}</Text>
+                    {col.key !== 'status' && <View style={styles.thDivider} />}
+                  </View>
+                ))}
+              </View>
+
+              {/* Table Body */}
+              <FlatList
+                data={filteredRegisters}
+                keyExtractor={item => item.id}
+                renderItem={renderRow}
+                contentContainerStyle={styles.tableBodyContent}
+                showsVerticalScrollIndicator={true}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                    colors={['#059669']}
+                    tintColor="#059669"
+                  />
+                }
+                ListEmptyComponent={
+                  <View style={styles.emptyState}>
+                    <View style={styles.emptyIconContainer}>
+                      <Ionicons name="document" size={52} color="#d1fae5" />
+                    </View>
+                    <Text style={styles.emptyText}>No records found</Text>
+                    <Text style={styles.emptySubtext}>
+                      Try changing filters or search keywords.
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.emptyActionBtn}
+                      onPress={() => {
+                        setSearchQuery('');
+                        setStatusTab('all');
+                        setFilters({
+                          division: 'all',
+                          type: 'all',
+                          dateFrom: '',
+                          dateTo: '',
+                          pageFrom: '',
+                          pageTo: '',
+                          registerPrefix: '',
+                        });
+                      }}>
+                      <Text style={styles.emptyActionText}>Reset Filters</Text>
+                    </TouchableOpacity>
+                  </View>
+                }
+              />
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+
+      {/* Advanced Filters Modal with glass effect */}
+      <Modal
+        transparent
+        visible={filterModalVisible}
+        animationType="slide"
+        onRequestClose={() => setFilterModalVisible(false)}>
+        <View style={styles.modalContainer}>
           <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
             <View style={styles.modalOverlay} />
           </TouchableWithoutFeedback>
 
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Advanced Filters</Text>
-              <TouchableOpacity onPress={() => setFilterModalVisible(false)}>
+              <View style={styles.modalTitleContainer}>
+                <Ionicons name="filter" size={20} color="#059669" />
+                <Text style={styles.modalTitle}>Advanced Filters</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setFilterModalVisible(false)}
+                style={styles.modalCloseBtn}>
                 <Ionicons name="close" size={22} color="#111827" />
               </TouchableOpacity>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.modalLabel}>Division</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{paddingBottom: 6}}>
-                {divisionOptions.map(opt => {
-                  const active = filters.division === opt;
-                  return (
-                    <TouchableOpacity
-                      key={opt}
-                      style={[styles.optPill, active && styles.optPillActive]}
-                      onPress={() => setFilters(prev => ({...prev, division: opt}))}>
-                      <Text style={[styles.optPillText, active && styles.optPillTextActive]}>
-                        {opt === 'all' ? 'All' : opt}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.modalScrollContent}>
 
-              <Text style={styles.modalLabel}>Type</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{paddingBottom: 6}}>
-                {typeOptions.map(opt => {
-                  const active = filters.type === opt;
-                  return (
-                    <TouchableOpacity
-                      key={opt}
-                      style={[styles.optPill, active && styles.optPillActive]}
-                      onPress={() => setFilters(prev => ({...prev, type: opt}))}>
-                      <Text style={[styles.optPillText, active && styles.optPillTextActive]}>
-                        {opt === 'all' ? 'All' : opt}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-
-              <Text style={styles.modalLabel}>Register Prefix (optional)</Text>
-              <TextInput
-                value={filters.registerPrefix}
-                onChangeText={t => setFilters(prev => ({...prev, registerPrefix: t}))}
-                placeholder="e.g. REG-23"
-                placeholderTextColor="#9ca3af"
-                style={styles.modalInput}
-                autoCapitalize="characters"
-              />
-
-              <Text style={styles.modalLabel}>Date Range (YYYY-MM-DD)</Text>
-              <View style={styles.twoCol}>
-                <TextInput
-                  value={filters.dateFrom}
-                  onChangeText={t => setFilters(prev => ({...prev, dateFrom: t}))}
-                  placeholder="From: 2024-01-01"
-                  placeholderTextColor="#9ca3af"
-                  style={[styles.modalInput, {flex: 1}]}
-                />
-                <TextInput
-                  value={filters.dateTo}
-                  onChangeText={t => setFilters(prev => ({...prev, dateTo: t}))}
-                  placeholder="To: 2024-12-31"
-                  placeholderTextColor="#9ca3af"
-                  style={[styles.modalInput, {flex: 1}]}
-                />
+              <View style={styles.filterSection}>
+                <Text style={styles.modalLabel}>Division</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.filterOptions}>
+                  {divisionOptions.map(opt => {
+                    const active = filters.division === opt;
+                    return (
+                      <TouchableOpacity
+                        key={opt}
+                        style={[styles.optPill, active && styles.optPillActive]}
+                        onPress={() => setFilters(prev => ({...prev, division: opt}))}>
+                        <Text style={[styles.optPillText, active && styles.optPillTextActive]}>
+                          {opt === 'all' ? 'All' : opt}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
               </View>
 
-              <Text style={styles.modalLabel}>Page Range</Text>
-              <View style={styles.twoCol}>
-                <TextInput
-                  value={filters.pageFrom}
-                  onChangeText={t => setFilters(prev => ({...prev, pageFrom: t}))}
-                  placeholder="From: 1"
-                  placeholderTextColor="#9ca3af"
-                  style={[styles.modalInput, {flex: 1}]}
-                  keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
-                />
-                <TextInput
-                  value={filters.pageTo}
-                  onChangeText={t => setFilters(prev => ({...prev, pageTo: t}))}
-                  placeholder="To: 200"
-                  placeholderTextColor="#9ca3af"
-                  style={[styles.modalInput, {flex: 1}]}
-                  keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
-                />
+              <View style={styles.filterSection}>
+                <Text style={styles.modalLabel}>Type</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.filterOptions}>
+                  {typeOptions.map(opt => {
+                    const active = filters.type === opt;
+                    return (
+                      <TouchableOpacity
+                        key={opt}
+                        style={[styles.optPill, active && styles.optPillActive]}
+                        onPress={() => setFilters(prev => ({...prev, type: opt}))}>
+                        <Text style={[styles.optPillText, active && styles.optPillTextActive]}>
+                          {opt === 'all' ? 'All' : opt}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.modalLabel}>Register Prefix</Text>
+                <View style={styles.inputWithLabel}>
+                  <Ionicons name="document" size={16} color="#059669" style={styles.inputIcon} />
+                  <TextInput
+                    value={filters.registerPrefix}
+                    onChangeText={t => setFilters(prev => ({...prev, registerPrefix: t}))}
+                    placeholder="e.g. REG-23"
+                    placeholderTextColor="#9ca3af"
+                    style={styles.modalInput}
+                    autoCapitalize="characters"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.modalLabel}>Date Range</Text>
+                <View style={styles.twoCol}>
+                  <View style={styles.inputWithLabel}>
+                    <Ionicons name="calendar" size={16} color="#059669" style={styles.inputIcon} />
+                    <TextInput
+                      value={filters.dateFrom}
+                      onChangeText={t => setFilters(prev => ({...prev, dateFrom: t}))}
+                      placeholder="From: 2024-01-01"
+                      placeholderTextColor="#9ca3af"
+                      style={[styles.modalInput, styles.modalInputWithIcon]}
+                    />
+                  </View>
+                  <View style={styles.inputWithLabel}>
+                    <Ionicons name="calendar" size={16} color="#059669" style={styles.inputIcon} />
+                    <TextInput
+                      value={filters.dateTo}
+                      onChangeText={t => setFilters(prev => ({...prev, dateTo: t}))}
+                      placeholder="To: 2024-12-31"
+                      placeholderTextColor="#9ca3af"
+                      style={[styles.modalInput, styles.modalInputWithIcon]}
+                    />
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.modalLabel}>Page Range</Text>
+                <View style={styles.twoCol}>
+                  <View style={styles.inputWithLabel}>
+                    <Ionicons name="document-text" size={16} color="#059669" style={styles.inputIcon} />
+                    <TextInput
+                      value={filters.pageFrom}
+                      onChangeText={t => setFilters(prev => ({...prev, pageFrom: t}))}
+                      placeholder="From: 1"
+                      placeholderTextColor="#9ca3af"
+                      style={[styles.modalInput, styles.modalInputWithIcon]}
+                      keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                    />
+                  </View>
+                  <View style={styles.inputWithLabel}>
+                    <Ionicons name="document-text" size={16} color="#059669" style={styles.inputIcon} />
+                    <TextInput
+                      value={filters.pageTo}
+                      onChangeText={t => setFilters(prev => ({...prev, pageTo: t}))}
+                      placeholder="To: 200"
+                      placeholderTextColor="#9ca3af"
+                      style={[styles.modalInput, styles.modalInputWithIcon]}
+                      keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                    />
+                  </View>
+                </View>
               </View>
 
               <View style={styles.modalActionsRow}>
                 <TouchableOpacity
-                  style={styles.modalApplyBtn}
-                  onPress={() => setFilterModalVisible(false)}>
-                  <Text style={styles.modalApplyText}>Apply</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.modalClearBtn}
+                  style={styles.modalResetBtn}
                   onPress={() =>
                     setFilters({
                       division: 'all',
@@ -900,214 +981,598 @@ export default function RegistersScreen({navigation}) {
                       registerPrefix: '',
                     })
                   }>
-                  <Text style={styles.modalClearText}>Reset Filters</Text>
+                  <Ionicons name="refresh" size={16} color="#059669" />
+                  <Text style={styles.modalResetText}>Reset</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.modalApplyBtn}
+                  onPress={() => setFilterModalVisible(false)}>
+                  <Ionicons name="checkmark" size={18} color="#ffffff" />
+                  <Text style={styles.modalApplyText}>Apply Filters</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
           </View>
-        </Modal>
-      </ImageBackground>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: '#ffffff'},
-  background: {flex: 1, width: '100%'},
-  overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16, 185, 129, 0.1)'},
+  screen: {
+    flex: 1,
+    backgroundColor: '#f0fdf4',
+  },
 
-  header: {padding: 20, paddingTop: 50, backgroundColor: 'rgba(16, 185, 129, 0.8)'},
-  headerRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
-  headerTitle: {fontSize: 22, fontWeight: '800', color: '#ffffff', marginBottom: 2},
-  headerSubtitle: {fontSize: 12, color: 'rgba(255,255,255,0.92)', fontWeight: '600'},
-
+  // Header with gradient effect
+  header: {
+    backgroundColor: '#059669',
+    paddingTop: 50,
+    paddingHorizontal: 0,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    elevation: 8,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+  },
+  headerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+  },
+  headerTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#ffffff',
+    marginBottom: 6,
+    textShadowColor: 'rgba(0, 0, 0, 0.1)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  headerSubtitle: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.9)',
+    fontWeight: '500',
+    letterSpacing: 0.3,
+  },
   headerIconBtn: {
-    width: 42,
-    height: 42,
+    width: 46,
+    height: 46,
     borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   badge: {
     position: 'absolute',
     top: -6,
     right: -6,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#ef4444',
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#dc2626',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 4,
+    paddingHorizontal: 6,
+    borderWidth: 2,
+    borderColor: '#059669',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
   },
-  badgeText: {color: '#fff', fontSize: 11, fontWeight: '900'},
+  badgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
 
-  content: {flex: 1, padding: 16},
+  // Main Content
+  content: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 20,
+  },
 
+  // Search with glass effect
   searchContainer: {
+    marginBottom: 20,
+  },
+  searchCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 16,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  searchInner: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
     borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  searchInput: {flex: 1, marginLeft: 10, marginRight: 8, fontSize: 14, color: '#111827'},
-
-  tabBar: {height: 48, maxHeight: 48, marginBottom: 8},
-  tabBarContent: {alignItems: 'center', paddingRight: 8, paddingVertical: 6},
-  tabPill: {
-    height: 36,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
+  searchInput: {
+    flex: 1,
+    marginLeft: 12,
     marginRight: 8,
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+  clearSearchBtn: {
+    padding: 4,
+  },
+
+  // Tabs
+  tabsContainer: {
+    marginBottom: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 16,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  tabBarContent: {
+    alignItems: 'center',
+    paddingRight: 4,
+  },
+  tabPill: {
+    height: 40,
+    paddingHorizontal: 18,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginRight: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
   },
-  tabPillIdle: {backgroundColor: 'rgba(255,255,255,0.92)', borderColor: '#e5e7eb'},
-  tabPillActive: {backgroundColor: '#10b981', borderColor: '#10b981'},
-  tabPillText: {fontSize: 13, fontWeight: '800', color: '#6b7280'},
-  tabPillTextActive: {color: '#ffffff'},
+  tabPillIdle: {
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+  },
+  tabPillActive: {
+    backgroundColor: '#059669',
+    borderColor: '#059669',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  tabPillText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#065f46',
+    letterSpacing: 0.3,
+  },
+  tabPillTextActive: {
+    color: '#ffffff',
+  },
 
+  // Results Header
   resultsHeader: {
-    marginBottom: 10,
-    paddingHorizontal: 4,
+    marginBottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 4,
+  },
+  resultsLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   resultsText: {
-    fontSize: 13,
-    color: '#ffffff',
-    fontWeight: '800',
-    textShadowColor: 'rgba(0,0,0,0.25)',
-    textShadowOffset: {width: 0, height: 1},
-    textShadowRadius: 2,
+    fontSize: 14,
+    color: '#065f46',
+    fontWeight: '700',
   },
   clearBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#ef4444',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    gap: 8,
+    backgroundColor: '#dc2626',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderRadius: 12,
+    shadowColor: '#dc2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  clearBtnText: {color: '#fff', fontWeight: '900', fontSize: 12},
+  clearBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
 
-  tableCard: {
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    borderRadius: 14,
+  // Table Container
+  tableContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: 'rgba(5, 150, 105, 0.1)',
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 5,
   },
+
+  // Table Scroll Content
+  tableScrollContent: {
+    flexGrow: 1,
+  },
+
+  // Table Content Wrapper
+  tableContentWrapper: {
+    minHeight: 400, // Minimum height for empty state
+  },
+
+  // Table Header
   tableHeader: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(14, 165, 233, 0.12)',
+    minHeight: 48,
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
     borderBottomWidth: 1,
-    borderBottomColor: '#cbd5e1',
+    borderBottomColor: 'rgba(5, 150, 105, 0.1)',
   },
-  th: {paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontWeight: '900', color: '#0f172a'},
+  thContainer: {
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  th: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#065f46',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  thDivider: {
+    position: 'absolute',
+    right: 0,
+    top: 8,
+    bottom: 8,
+    width: 1,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+  },
 
+  // Table Body
+  tableBodyContent: {
+    paddingBottom: 16,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    minHeight: 44,
-    paddingVertical: 4,
+    borderBottomColor: 'rgba(5, 150, 105, 0.05)',
+    minHeight: 56,
+    paddingVertical: 0,
   },
-  rowEven: {backgroundColor: '#ffffff'},
-  rowOdd: {backgroundColor: 'rgba(2, 132, 199, 0.03)'},
-  cell: {paddingHorizontal: 10, fontSize: 12, fontWeight: '700', color: '#111827'},
-
+  rowEven: {
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+  },
+  rowOdd: {
+    backgroundColor: 'rgba(5, 150, 105, 0.03)',
+  },
+  cell: {
+    paddingHorizontal: 14,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1f2937',
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(5, 150, 105, 0.05)',
+    lineHeight: 56,
+  },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    marginHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+    marginHorizontal: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
     borderWidth: 1,
+    height: 36,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  statusPillText: {fontSize: 11, fontWeight: '900'},
+  statusPillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
 
-  loadingContainer: {flex: 1, alignItems: 'center', justifyContent: 'center'},
+  // Loading
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0fdf4',
+  },
+  loadingCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    padding: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
   loadingText: {
-    marginTop: 12,
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: {width: 0, height: 1},
-    textShadowRadius: 2,
+    marginTop: 16,
+    color: '#065f46',
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.3,
   },
 
+  // Empty State
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 36,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 16,
-    marginTop: 20,
+    padding: 60,
+    width: width - 32,
   },
-  emptyText: {fontSize: 16, fontWeight: '800', color: '#111827', marginTop: 14, marginBottom: 6},
-  emptySubtext: {fontSize: 13, color: '#6b7280', textAlign: 'center', fontWeight: '600'},
+  emptyIconContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+    borderWidth: 2,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#065f46',
+    marginBottom: 8,
+    letterSpacing: 0.3,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    fontWeight: '500',
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  emptyActionBtn: {
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+  },
+  emptyActionText: {
+    color: '#065f46',
+    fontWeight: '700',
+    fontSize: 14,
+  },
 
-  modalOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.35)'},
+  // Modal
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+  },
   modalCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    maxHeight: '85%',
+    paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 22,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(5, 150, 105, 0.1)',
+  },
+  modalTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#065f46',
+    letterSpacing: 0.3,
+  },
+  modalCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalScrollContent: {
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+  },
+  filterSection: {
+    marginBottom: 24,
+  },
+  modalLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#065f46',
+    marginBottom: 12,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  filterOptions: {
+    paddingBottom: 8,
+  },
+  optPill: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    marginRight: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  optPillActive: {
+    backgroundColor: '#059669',
+    borderColor: '#059669',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  optPillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#4b5563',
+  },
+  optPillTextActive: {
+    color: '#fff',
+  },
+  inputWithLabel: {
+    position: 'relative',
+  },
+  inputIcon: {
     position: 'absolute',
     left: 16,
-    right: 16,
-    top: '14%',
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    elevation: 12,
-    maxHeight: '78%',
+    top: '50%',
+    transform: [{ translateY: -8 }],
+    zIndex: 1,
   },
-  modalHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6},
-  modalTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
-  modalLabel: {fontSize: 12, fontWeight: '900', color: '#111827', marginTop: 12, marginBottom: 6},
-
-  optPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    backgroundColor: '#f9fafb',
-    marginRight: 8,
-  },
-  optPillActive: {backgroundColor: '#10b981', borderColor: '#10b981'},
-  optPillText: {fontSize: 12, fontWeight: '800', color: '#111827'},
-  optPillTextActive: {color: '#fff'},
-
   modalInput: {
-    backgroundColor: '#f9fafb',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 15,
     color: '#111827',
+    fontWeight: '500',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  twoCol: {flexDirection: 'row', gap: 10},
-
-  modalActionsRow: {flexDirection: 'row', gap: 10, marginTop: 14},
-  modalApplyBtn: {flex: 1, backgroundColor: '#10b981', paddingVertical: 12, borderRadius: 12, alignItems: 'center'},
-  modalApplyText: {color: '#fff', fontWeight: '900'},
-  modalClearBtn: {flex: 1, backgroundColor: '#f3f4f6', paddingVertical: 12, borderRadius: 12, alignItems: 'center'},
-  modalClearText: {color: '#111827', fontWeight: '900'},
+  modalInputWithIcon: {
+    paddingLeft: 44,
+  },
+  twoCol: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  modalActionsRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 32,
+    marginBottom: 8,
+  },
+  modalResetBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+  },
+  modalResetText: {
+    color: '#065f46',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  modalApplyBtn: {
+    flex: 2,
+    backgroundColor: '#059669',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  modalApplyText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+    letterSpacing: 0.3,
+  },
 });

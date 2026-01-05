@@ -1,9 +1,5 @@
 // /screens/PoleCropRecordsScreen.js
-// ✅ Server-only Pole Crop (offline AsyncStorage removed)
-// ✅ Integrated APIs (GET list + POST create)
-// ✅ Removed: Register No, Page No, System Generated ID, Remarks
-// ✅ Uses Species API to show human-readable names + send species_ids[]
-// ✅ Fixes React error "Objects are not valid as a React child" by keeping dropdown/multiselect values as STRINGS only
+// ✅ Professional UI Update
 
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
@@ -12,7 +8,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  ImageBackground,
   Modal,
   Alert,
   Platform,
@@ -21,24 +16,53 @@ import {
   TextInput,
   ActivityIndicator,
   RefreshControl,
+  Dimensions,
+  StatusBar,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
 import {useFocusEffect} from '@react-navigation/native';
+import {launchImageLibrary} from 'react-native-image-picker';
 
-import colors from '../theme/colors';
 import FormRow from '../components/FormRow';
 import {MultiSelectRow} from '../components/SelectRows';
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const {width, height} = Dimensions.get('window');
 
-// Species (same as your other screens)
+// Theme Colors
+const COLORS = {
+  primary: '#059669',
+  primaryLight: '#10b981',
+  primaryDark: '#047857',
+  secondary: '#0ea5e9',
+  success: '#16a34a',
+  warning: '#f97316',
+  danger: '#dc2626',
+  info: '#7c3aed',
+  background: '#f8fafc',
+  card: '#ffffff',
+  text: '#1f2937',
+  textLight: '#6b7280',
+  border: '#e5e7eb',
+  overlay: 'rgba(15, 23, 42, 0.7)',
+};
+
+// ✅ LATEST BASE
+const API_BASE = 'http://be.lte.gisforestry.com';
+const AWS_Base = 'https://app.eco.gisforestry.com';
+// Species
 const SPECIES_URL = `${API_BASE}/enum/species`;
 
-// Pole Crop APIs you provided
+// Pole Crop APIs
 const POLE_CROP_LIST_URL = `${API_BASE}/enum/pole-crop/user-site-wise-pole-crop`;
 const POLE_CROP_CREATE_URL = `${API_BASE}/enum/pole-crop`;
+
+// ✅ Bucket Upload API (Polecrop)
+const BUCKET_UPLOAD_URL = `${AWS_Base}/aws-bucket/tree-enum`;
+const BUCKET_UPLOAD_PATH = 'Polecrop';
+const BUCKET_IS_MULTI = 'true';
+const BUCKET_FILE_NAME = 'chan';
 
 const getToken = async () => (await AsyncStorage.getItem('AUTH_TOKEN')) || '';
 
@@ -65,20 +89,28 @@ const parseLatLng = str => {
   return {lat, lng};
 };
 
+// RN form-data file helper
+const toFormFile = asset => {
+  const uri = asset?.uri;
+  if (!uri) return null;
+
+  const name =
+    asset?.fileName ||
+    `polecrop_${Date.now()}${asset?.type?.includes('png') ? '.png' : '.jpg'}`;
+
+  const type = asset?.type || 'image/jpeg';
+
+  return {uri, name, type};
+};
+
 export default function PoleCropRecordsScreen({navigation, route}) {
   const enumeration = route?.params?.enumeration;
 
-  // ---------------------------
-  // SERVER RECORDS
-  // ---------------------------
+  // ---------- STATE ----------
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [serverError, setServerError] = useState('');
-
-  // ---------------------------
-  // SEARCH + FILTERS (server-side filtering in UI)
-  // ---------------------------
   const [search, setSearch] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filters, setFilters] = useState({
@@ -91,43 +123,92 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     totalTo: '',
     status: '',
   });
-
-  // ---------------------------
-  // SPECIES (server)
-  // Keep UI values as STRING NAMES only (to avoid React child object error)
-  // ---------------------------
-  const [speciesRows, setSpeciesRows] = useState([]); // [{id,name}]
-  const [speciesOptions, setSpeciesOptions] = useState([]); // string[]
+  const [speciesRows, setSpeciesRows] = useState([]);
+  const [speciesOptions, setSpeciesOptions] = useState([]);
   const [speciesLoading, setSpeciesLoading] = useState(false);
-
-  // ---------------------------
-  // MODAL + FORM
-  // ---------------------------
   const [modalVisible, setModalVisible] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   const [editingServerId, setEditingServerId] = useState(null);
-
   const [rdFrom, setRdFrom] = useState('');
   const [rdTo, setRdTo] = useState('');
   const [count, setCount] = useState('');
-
-  // Multi-select species names (strings)
   const [selectedSpeciesNames, setSelectedSpeciesNames] = useState([]);
-
-  // GPS (auto + manual)
   const [autoGps, setAutoGps] = useState('');
   const [manualGps, setManualGps] = useState('');
   const [gpsLoading, setGpsLoading] = useState(false);
+  const [pickedAssets, setPickedAssets] = useState([]);
+
   const lastGpsRequestAtRef = useRef(0);
 
   const nameOfSiteId = useMemo(() => {
-    // use same logic as your other screens
     return enumeration?.name_of_site_id ?? enumeration?.id ?? null;
   }, [enumeration]);
 
-  // ---------------------------
-  // FETCH: Species
-  // ---------------------------
+  // ---------- IMAGE HANDLERS ----------
+  const pickImages = () => {
+    launchImageLibrary(
+      {
+        mediaType: 'photo',
+        quality: 0.8,
+        selectionLimit: 0,
+      },
+      res => {
+        if (res?.didCancel) return;
+        if (res?.errorCode) {
+          Alert.alert('Image Error', res.errorMessage || res.errorCode);
+          return;
+        }
+        const assets = Array.isArray(res?.assets) ? res.assets : [];
+        if (!assets.length) return;
+        setPickedAssets(assets);
+      },
+    );
+  };
+
+  const clearImages = () => setPickedAssets([]);
+
+  // ---------- UPLOAD IMAGES ----------
+  const uploadPoleCropImages = async () => {
+    if (!pickedAssets.length) return [];
+
+    const form = new FormData();
+    pickedAssets.forEach(a => {
+      const f = toFormFile(a);
+      if (f) form.append('files', f);
+    });
+
+    form.append('uploadPath', BUCKET_UPLOAD_PATH);
+    form.append('isMulti', BUCKET_IS_MULTI);
+    form.append('fileName', BUCKET_FILE_NAME);
+
+    const res = await fetch(BUCKET_UPLOAD_URL, {
+      method: 'POST',
+      body: form,
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.status) {
+      const msg = json?.message || json?.error || `Bucket upload failed (${res.status})`;
+      throw new Error(msg);
+    }
+
+    const data = Array.isArray(json?.data) ? json.data : [];
+    const urls = [];
+
+    data.forEach(item => {
+      const img = item?.availableSizes?.image;
+      if (img) urls.push(img);
+
+      const arr = Array.isArray(item?.url) ? item.url : [];
+      arr.forEach(u => {
+        if (u && !urls.includes(u)) urls.push(u);
+      });
+    });
+
+    return urls;
+  };
+
+  // ---------- SPECIES FETCH ----------
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
@@ -146,7 +227,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         .filter(x => x.name);
 
       setSpeciesRows(normalized);
-      setSpeciesOptions(normalized.map(x => x.name)); // ✅ string[] only
+      setSpeciesOptions(normalized.map(x => x.name));
     } catch (e) {
       setSpeciesRows([]);
       setSpeciesOptions([]);
@@ -159,9 +240,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     fetchSpecies();
   }, [fetchSpecies]);
 
-  // ---------------------------
-  // FETCH: Pole Crop records (server)
-  // ---------------------------
+  // ---------- RECORDS FETCH ----------
   const fetchPoleCropRecords = useCallback(
     async ({refresh = false} = {}) => {
       if (!nameOfSiteId) {
@@ -215,9 +294,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     }, [fetchPoleCropRecords]),
   );
 
-  // ---------------------------
-  // GPS helpers
-  // ---------------------------
+  // ---------- GPS ----------
   const fetchGps = useCallback((silent = false) => {
     const now = Date.now();
     if (now - lastGpsRequestAtRef.current < 1200) return;
@@ -240,25 +317,20 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
   const resolveFinalGps = () => {
     const m = String(manualGps || '').trim();
-    const a = String(autoGps || '').trim();
-    return m ? m : a;
+    return m || String(autoGps || '').trim();
   };
 
-  // ---------------------------
-  // FORM: open / reset / edit
-  // ---------------------------
+  // ---------- FORM HANDLERS ----------
   const resetFormForAdd = () => {
     setIsEdit(false);
     setEditingServerId(null);
-
     setRdFrom('');
     setRdTo('');
     setCount('');
-
     setSelectedSpeciesNames([]);
-
     setAutoGps('');
     setManualGps('');
+    setPickedAssets([]);
   };
 
   const openAddForm = () => {
@@ -270,12 +342,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const openEditFormServer = row => {
     setIsEdit(true);
     setEditingServerId(row?.id ?? null);
-
     setRdFrom(String(row?.rds_from ?? row?.rd_from ?? row?.rdFrom ?? ''));
     setRdTo(String(row?.rds_to ?? row?.rd_to ?? row?.rdTo ?? ''));
     setCount(String(row?.count ?? ''));
 
-    // species_ids -> map to names for MultiSelectRow
     const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
     const names = ids
       .map(id => speciesRows.find(s => String(s.id) === String(id))?.name)
@@ -283,7 +353,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
     setSelectedSpeciesNames(names);
 
-    // GPS
     const auto =
       row?.auto_lat != null && row?.auto_long != null ? `${row.auto_lat}, ${row.auto_long}` : '';
     const manual =
@@ -292,36 +361,15 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         : '';
 
     setAutoGps(auto);
-    setManualGps(manual || '');
-
+    const availableGps = manual || auto || '';
+    setManualGps(availableGps);
+    setPickedAssets([]);
     setModalVisible(true);
 
     if (!auto) setTimeout(() => fetchGps(true), 250);
   };
 
-  // If species list arrives after opening edit modal, re-map IDs -> names
-  useEffect(() => {
-    if (!modalVisible || !isEdit) return;
-    if (!editingServerId) return;
-
-    const row = records.find(r => String(r.id) === String(editingServerId));
-    if (!row) return;
-
-    const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
-    if (!ids.length) return;
-
-    const names = ids
-      .map(id => speciesRows.find(s => String(s.id) === String(id))?.name)
-      .filter(Boolean);
-
-    if (names.length && !selectedSpeciesNames.length) {
-      setSelectedSpeciesNames(names);
-    }
-  }, [speciesRows, modalVisible, isEdit, editingServerId, records, selectedSpeciesNames.length]);
-
-  // ---------------------------
-  // VALIDATION + POST
-  // ---------------------------
+  // ---------- VALIDATION ----------
   const validate = () => {
     if (!nameOfSiteId) {
       Alert.alert('Error', 'Parent site id missing.');
@@ -344,14 +392,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       Alert.alert('Missing', 'Please select at least one species.');
       return false;
     }
-
-    // GPS not mandatory (as per your previous behavior) but warn
-    if (!resolveFinalGps()) {
-      Alert.alert('GPS', 'GPS is empty. You can save, but please add coordinates if required.');
-    }
     return true;
   };
 
+  // ---------- SUBMIT ----------
   const submitToApi = async body => {
     const token = await getToken();
     if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
@@ -377,7 +421,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const upsertRecord = async () => {
     if (!validate()) return;
 
-    // species names -> ids
     const speciesIds = selectedSpeciesNames
       .map(n => speciesRows.find(s => s.name === n)?.id)
       .filter(id => id !== null && id !== undefined);
@@ -398,43 +441,46 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     const finalGps = resolveFinalGps();
     const {lat: manualLat, lng: manualLng} = parseLatLng(finalGps);
 
-    const payload = {
-      nameOfSiteId: String(nameOfSiteId),
-      rds_from: rdFromNum,
-      rds_to: rdToNum,
-      count: Number(count),
-      auto_lat: autoLat,
-      auto_long: autoLng,
-      manual_lat: manualLat,
-      manual_long: manualLng,
-      species_ids: speciesIds.map(Number),
-    };
-
-    if (isEdit) {
-      Alert.alert(
-        'Edit not supported',
-        'Update API is not provided. Saving will create a NEW pole-crop record on server.',
-        [
-          {text: 'Cancel', style: 'cancel'},
-          {
-            text: 'Create New',
-            onPress: async () => {
-              try {
-                await submitToApi(payload);
-                setModalVisible(false);
-                fetchPoleCropRecords({refresh: true});
-                Alert.alert('Success', 'Saved to server.');
-              } catch (e) {
-                Alert.alert('Error', e?.message || 'Failed to save');
-              }
-            },
-          },
-        ],
-      );
-      return;
-    }
-
     try {
+      const uploadedUrls = await uploadPoleCropImages();
+
+      const payload = {
+        nameOfSiteId: String(nameOfSiteId),
+        rds_from: rdFromNum,
+        rds_to: rdToNum,
+        count: Number(count),
+        auto_lat: autoLat,
+        auto_long: autoLng,
+        manual_lat: manualLat,
+        manual_long: manualLng,
+        species_ids: speciesIds.map(Number),
+        pictures: uploadedUrls,
+      };
+
+      if (isEdit) {
+        Alert.alert(
+          'Edit not supported',
+          'Update API is not provided. Saving will create a NEW pole-crop record on server.',
+          [
+            {text: 'Cancel', style: 'cancel'},
+            {
+              text: 'Create New',
+              onPress: async () => {
+                try {
+                  await submitToApi(payload);
+                  setModalVisible(false);
+                  fetchPoleCropRecords({refresh: true});
+                  Alert.alert('Success', 'Saved to server.');
+                } catch (e) {
+                  Alert.alert('Error', e?.message || 'Failed to save');
+                }
+              },
+            },
+          ],
+        );
+        return;
+      }
+
       await submitToApi(payload);
       setModalVisible(false);
       fetchPoleCropRecords({refresh: true});
@@ -444,29 +490,30 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     }
   };
 
-  // ---------------------------
-  // UI computed: decorate rows
-  // ---------------------------
+  // ---------- UI HELPERS ----------
   const getSpeciesLabel = r => {
     const ids = Array.isArray(r?.species_ids) ? r.species_ids : [];
     if (!ids.length) return '—';
     const names = ids
       .map(id => speciesRows.find(s => String(s.id) === String(id))?.name || `#${id}`)
       .filter(Boolean);
-    return names.length ? names.join(', ') : '—';
+    return names.length > 2 
+      ? `${names.slice(0, 2).join(', ')} +${names.length - 2} more`
+      : names.join(', ');
   };
 
   const getGpsLabel = r => {
-    const m = r?.manual_lat != null && r?.manual_long != null ? `${r.manual_lat}, ${r.manual_long}` : '';
+    const m =
+      r?.manual_lat != null && r?.manual_long != null ? `${r.manual_lat}, ${r.manual_long}` : '';
     const a = r?.auto_lat != null && r?.auto_long != null ? `${r.auto_lat}, ${r.auto_long}` : '';
     return m || a || '—';
   };
 
-  const statusBadge = st => {
+  const getStatusInfo = st => {
     const key = String(st || 'pending').toLowerCase();
-    if (key === 'approved') return {label: 'Approved', color: '#16a34a', icon: 'checkmark-done'};
-    if (key === 'returned') return {label: 'Returned', color: '#ef4444', icon: 'arrow-undo'};
-    return {label: 'Pending', color: '#f97316', icon: 'time'};
+    if (key === 'approved') return {label: 'Approved', color: COLORS.success, icon: 'checkmark-done'};
+    if (key === 'returned') return {label: 'Returned', color: COLORS.danger, icon: 'arrow-undo'};
+    return {label: 'Pending', color: COLORS.warning, icon: 'time'};
   };
 
   const activeFilterCount = useMemo(() => {
@@ -491,13 +538,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
   const filteredRecords = useMemo(() => {
     const q = search.trim().toLowerCase();
-
     const df = filters.dateFrom ? new Date(filters.dateFrom + 'T00:00:00') : null;
     const dt = filters.dateTo ? new Date(filters.dateTo + 'T23:59:59') : null;
-
     const rdF = filters.rdFrom !== '' ? Number(filters.rdFrom) : null;
     const rdT = filters.rdTo !== '' ? Number(filters.rdTo) : null;
-
     const totF = filters.totalFrom !== '' ? Number(filters.totalFrom) : null;
     const totT = filters.totalTo !== '' ? Number(filters.totalTo) : null;
 
@@ -553,172 +597,288 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     });
   }, [records, search, filters, speciesRows]);
 
-  // ---------------------------
-  // RENDER
-  // ---------------------------
+  // ---------- RENDER ----------
   return (
     <View style={styles.screen}>
-      <ImageBackground
-        source={require('../assets/images/bg.jpg')}
-        style={styles.background}
-        resizeMode="cover">
-        <View style={styles.overlay} />
-
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={22} color="#fff" />
+      <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
+      
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerContainer}>
+          <TouchableOpacity 
+            style={styles.backButton} 
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}>
+            <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
+
           <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>Pole Crop</Text>
-            <Text style={styles.headerSubtitle}>
-              {enumeration?.division} • {enumeration?.block} • {enumeration?.year}
+            <Text style={styles.headerTitle}>Pole Crop Records</Text>
+            <View style={styles.headerInfo}>
+              <View style={styles.infoChip}>
+                <Ionicons name="business" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.division || '—'}</Text>
+              </View>
+              <View style={styles.infoChip}>
+                <Ionicons name="cube" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.block || '—'}</Text>
+              </View>
+              <View style={styles.infoChip}>
+                <Ionicons name="calendar" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.year || '—'}</Text>
+              </View>
+            </View>
+            <Text style={styles.siteId}>Site ID: {String(nameOfSiteId ?? '—')}</Text>
+          </View>
+
+          <TouchableOpacity 
+            style={styles.refreshButton}
+            onPress={() => fetchPoleCropRecords({refresh: true})}
+            activeOpacity={0.7}>
+            <Ionicons name="refresh" size={22} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Main Content */}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => fetchPoleCropRecords({refresh: true})}
+            colors={[COLORS.primary]}
+            tintColor={COLORS.primary}
+          />
+        }
+        showsVerticalScrollIndicator={false}>
+        
+        {/* Search Section */}
+        <View style={styles.searchSection}>
+          <View style={styles.searchContainer}>
+            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search by ID, RDS range, species, GPS..."
+              placeholderTextColor={COLORS.textLight}
+              style={styles.searchInput}
+            />
+            {!!search && (
+              <TouchableOpacity 
+                onPress={() => setSearch('')}
+                style={styles.searchClear}>
+                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <TouchableOpacity 
+            style={styles.filterButton}
+            onPress={() => setFilterModalVisible(true)}
+            activeOpacity={0.7}>
+            <Ionicons name="filter" size={22} color="#fff" />
+            {activeFilterCount > 0 && (
+              <View style={styles.filterBadge}>
+                <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Stats Card */}
+        <View style={styles.statsCard}>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{filteredRecords.length}</Text>
+            <Text style={styles.statLabel}>Filtered</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{records.length}</Text>
+            <Text style={styles.statLabel}>Total</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Ionicons 
+              name={loading ? "refresh" : "checkmark-circle"} 
+              size={24} 
+              color={loading ? COLORS.warning : COLORS.success} 
+            />
+            <Text style={styles.statLabel}>
+              {loading ? 'Loading...' : 'Ready'}
             </Text>
-            <Text style={styles.headerSubtitle2}>Site ID: {String(nameOfSiteId ?? '—')}</Text>
           </View>
         </View>
 
-        <ScrollView
-          contentContainerStyle={{paddingBottom: 110}}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => fetchPoleCropRecords({refresh: true})}
-            />
-          }>
-          <View style={styles.section}>
-            {/* Search + Filter */}
-            <View style={styles.searchFilterRow}>
-              <View style={styles.searchBox}>
-                <Ionicons name="search" size={18} color="#6b7280" />
-                <TextInput
-                  value={search}
-                  onChangeText={setSearch}
-                  placeholder="Search here..."
-                  placeholderTextColor="#9ca3af"
-                  style={styles.searchInput}
-                />
-                {!!search && (
-                  <TouchableOpacity onPress={() => setSearch('')}>
-                    <Ionicons name="close-circle" size={18} color="#9ca3af" />
-                  </TouchableOpacity>
-                )}
-              </View>
-
-              <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterModalVisible(true)}>
-                <Ionicons name="options-outline" size={20} color="#111827" />
-                {activeFilterCount > 0 && (
-                  <View style={styles.filterBadge}>
-                    <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
+        {/* Error Banner */}
+        {!!serverError && (
+          <View style={styles.errorCard}>
+            <View style={styles.errorHeader}>
+              <Ionicons name="warning" size={20} color={COLORS.danger} />
+              <Text style={styles.errorTitle}>Server Error</Text>
             </View>
+            <Text style={styles.errorMessage}>{serverError}</Text>
+            <TouchableOpacity
+              style={styles.errorButton}
+              onPress={() => fetchPoleCropRecords({refresh: true})}
+              activeOpacity={0.7}>
+              <Text style={styles.errorButtonText}>Retry Connection</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-            {/* Title */}
-            <View style={styles.sectionHead}>
-              <Text style={styles.sectionTitle}>Server Records</Text>
-              <Text style={styles.sectionMeta}>
-                {loading ? 'Loading...' : `${filteredRecords.length} / ${records.length}`}
+        {/* Records Section */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Pole Crop Records</Text>
+            <Text style={styles.sectionSubtitle}>
+              {filteredRecords.length} of {records.length} records
+            </Text>
+          </View>
+
+          {records.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="cut-outline" size={64} color={COLORS.border} />
+              <Text style={styles.emptyTitle}>No Records Yet</Text>
+              <Text style={styles.emptyText}>
+                Start by adding pole crop records for this site
               </Text>
             </View>
-
-            {!!serverError && (
-              <View style={styles.errorBox}>
-                <Text style={styles.errorText}>Server fetch error: {serverError}</Text>
-                <TouchableOpacity
-                  style={styles.retryBtn}
-                  onPress={() => fetchPoleCropRecords({refresh: true})}>
-                  <Text style={styles.retryText}>Retry</Text>
+          ) : filteredRecords.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="search" size={64} color={COLORS.border} />
+              <Text style={styles.emptyTitle}>No Results Found</Text>
+              <Text style={styles.emptyText}>
+                No records match your search criteria
+              </Text>
+              {activeFilterCount > 0 && (
+                <TouchableOpacity style={styles.emptyAction} onPress={clearAll}>
+                  <Text style={styles.emptyActionText}>Clear Filters</Text>
                 </TouchableOpacity>
-              </View>
-            )}
+              )}
+            </View>
+          ) : (
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={true}
+              style={styles.tableContainer}>
+              <View style={styles.table}>
+                {/* Table Header */}
+                <View style={styles.tableHeader}>
+                  {[
+                    {label: 'ID', width: 80},
+                    {label: 'RDS From', width: 110},
+                    {label: 'RDS To', width: 110},
+                    {label: 'Count', width: 100},
+                    {label: 'Species', width: 220},
+                    {label: 'GPS', width: 200},
+                    {label: 'Status', width: 140},
+                    {label: 'Actions', width: 140},
+                  ].map((col, idx) => (
+                    <View key={idx} style={[styles.thCell, {width: col.width}]}>
+                      <Text style={styles.thText}>{col.label}</Text>
+                    </View>
+                  ))}
+                </View>
 
-            {!serverError && records.length === 0 ? (
-              <Text style={styles.emptyText}>No records yet. Tap + to add.</Text>
-            ) : filteredRecords.length === 0 ? (
-              <Text style={styles.emptyText}>No record matches your search/filters.</Text>
-            ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={styles.tableWrap}>
-                  <View style={[styles.tr, styles.thRow]}>
-                    <Text style={[styles.th, {width: 70}]}>ID</Text>
-                    <Text style={[styles.th, {width: 110}]}>RDS From</Text>
-                    <Text style={[styles.th, {width: 110}]}>RDS To</Text>
-                    <Text style={[styles.th, {width: 90}]}>Count</Text>
-                    <Text style={[styles.th, {width: 200}]}>Species</Text>
-                    <Text style={[styles.th, {width: 180}]}>GPS</Text>
-                    <Text style={[styles.th, {width: 170}]}>Status</Text>
-                    <Text style={[styles.th, {width: 120}]}>Actions</Text>
-                  </View>
-
-                  {filteredRecords.map((r, idx) => {
-                    const sb = statusBadge(r?.status);
-                    return (
-                      <View
-                        key={String(r?.id ?? idx)}
-                        style={[styles.tr, idx % 2 === 0 ? styles.trEven : styles.trOdd]}>
-                        <Text style={[styles.td, {width: 70}]} numberOfLines={1}>
+                {/* Table Rows */}
+                {filteredRecords.map((r, idx) => {
+                  const statusInfo = getStatusInfo(r?.status);
+                  
+                  return (
+                    <View 
+                      key={String(r?.id ?? idx)} 
+                      style={[
+                        styles.tableRow,
+                        idx % 2 === 0 ? styles.rowEven : styles.rowOdd
+                      ]}>
+                      
+                      <View style={[styles.tdCell, {width: 80}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r?.id ?? '—')}
                         </Text>
-                        <Text style={[styles.td, {width: 110}]} numberOfLines={1}>
+                      </View>
+
+                      <View style={[styles.tdCell, {width: 110}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r?.rds_from ?? '—')}
                         </Text>
-                        <Text style={[styles.td, {width: 110}]} numberOfLines={1}>
+                      </View>
+
+                      <View style={[styles.tdCell, {width: 110}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r?.rds_to ?? '—')}
                         </Text>
-                        <Text style={[styles.td, {width: 90}]} numberOfLines={1}>
-                          {String(r?.count ?? '—')}
-                        </Text>
-                        <Text style={[styles.td, {width: 200}]} numberOfLines={1}>
-                          {getSpeciesLabel(r)}
-                        </Text>
-                        <Text style={[styles.td, {width: 180}]} numberOfLines={1}>
-                          {getGpsLabel(r)}
-                        </Text>
+                      </View>
 
-                        <View style={[styles.statusCell, {width: 170}]}>
-                          <View
-                            style={[
-                              styles.statusPill,
-                              {backgroundColor: `${sb.color}15`, borderColor: `${sb.color}40`},
-                            ]}>
-                            <Ionicons name={sb.icon} size={14} color={sb.color} />
-                            <Text style={[styles.statusText, {color: sb.color}]}>{sb.label}</Text>
-                          </View>
-                        </View>
-
-                        <View style={[styles.actionsCell, {width: 120}]}>
-                          <TouchableOpacity style={styles.iconBtn} onPress={() => openEditFormServer(r)}>
-                            <Ionicons name="create-outline" size={18} color="#0ea5e9" />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.iconBtn}
-                            onPress={() =>
-                              Alert.alert('Not available', 'Delete API is not provided yet.')
-                            }>
-                            <Ionicons name="trash-outline" size={18} color="#ef4444" />
-                          </TouchableOpacity>
+                      <View style={[styles.tdCell, {width: 100}]}>
+                        <View style={styles.countBadge}>
+                          <Text style={styles.countText}>
+                            {String(r?.count ?? '—')}
+                          </Text>
                         </View>
                       </View>
-                    );
-                  })}
-                </View>
-              </ScrollView>
-            )}
 
-            {activeFilterCount > 0 && (
-              <TouchableOpacity style={styles.clearAllBtn} onPress={clearAll}>
-                <Ionicons name="trash-outline" size={16} color="#fff" />
-                <Text style={styles.clearAllText}>Clear Search & Filters</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </ScrollView>
+                      <View style={[styles.tdCell, {width: 220}]}>
+                        <Text style={styles.tdText} numberOfLines={2}>
+                          {getSpeciesLabel(r)}
+                        </Text>
+                      </View>
 
-        <TouchableOpacity style={styles.fab} onPress={openAddForm}>
-          <Ionicons name="add" size={26} color="#fff" />
-        </TouchableOpacity>
-      </ImageBackground>
+                      <View style={[styles.tdCell, {width: 200}]}>
+                        <Text style={styles.gpsText} numberOfLines={1}>
+                          {getGpsLabel(r)}
+                        </Text>
+                      </View>
+
+                      <View style={[styles.tdCell, {width: 140}]}>
+                        <View style={[
+                          styles.statusBadge,
+                          {backgroundColor: `${statusInfo.color}15`}
+                        ]}>
+                          <Ionicons name={statusInfo.icon} size={12} color={statusInfo.color} />
+                          <Text style={[styles.statusText, {color: statusInfo.color}]}>
+                            {statusInfo.label}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={[styles.tdCell, styles.actionsCell, {width: 140}]}>
+                        <TouchableOpacity 
+                          style={styles.actionButton}
+                          onPress={() => openEditFormServer(r)}
+                          activeOpacity={0.7}>
+                          <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
+                          <Text style={styles.actionButtonText}>Edit</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity 
+                          style={[styles.actionButton, {backgroundColor: `${COLORS.danger}15`}]}
+                          onPress={() => Alert.alert('Not available', 'Delete API is not provided yet.')}
+                          activeOpacity={0.7}>
+                          <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
+                          <Text style={[styles.actionButtonText, {color: COLORS.danger}]}>Delete</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </ScrollView>
+
+      {/* Add Button */}
+      <TouchableOpacity 
+        style={styles.fab}
+        onPress={openAddForm}
+        activeOpacity={0.8}>
+        <View style={styles.fabContent}>
+          <Ionicons name="add" size={28} color="#fff" />
+        </View>
+      </TouchableOpacity>
 
       {/* Filters Modal */}
       <Modal
@@ -726,132 +886,167 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         visible={filterModalVisible}
         animationType="fade"
         onRequestClose={() => setFilterModalVisible(false)}>
-        <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
-          <View style={styles.actionOverlay} />
-        </TouchableWithoutFeedback>
-
-        <View style={styles.filterCard}>
-          <View style={styles.filterHeader}>
-            <Text style={styles.filterTitle}>Filters</Text>
-            <TouchableOpacity onPress={() => setFilterModalVisible(false)}>
-              <Ionicons name="close" size={22} color="#111827" />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <Text style={styles.filterHint}>Status</Text>
-            <View style={styles.pillsRow}>
-              <TouchableOpacity
-                style={[styles.pill, !filters.status ? styles.pillActive : styles.pillInactive]}
-                onPress={() => setFilters(prev => ({...prev, status: ''}))}>
-                <Text style={!filters.status ? styles.pillTextActive : styles.pillTextInactive}>
-                  All
-                </Text>
-              </TouchableOpacity>
-
-              {['pending', 'approved', 'returned'].map(st => (
-                <TouchableOpacity
-                  key={st}
-                  style={[styles.pill, filters.status === st ? styles.pillActive : styles.pillInactive]}
-                  onPress={() => setFilters(prev => ({...prev, status: st}))}>
-                  <Text style={filters.status === st ? styles.pillTextActive : styles.pillTextInactive}>
-                    {st.charAt(0).toUpperCase() + st.slice(1)}
-                  </Text>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
+            <View style={styles.modalBackdrop} />
+          </TouchableWithoutFeedback>
+          
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="filter" size={24} color={COLORS.primary} />
+                  <Text style={styles.modalTitle}>Advanced Filters</Text>
+                </View>
+                <TouchableOpacity 
+                  style={styles.modalClose}
+                  onPress={() => setFilterModalVisible(false)}
+                  activeOpacity={0.7}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
                 </TouchableOpacity>
-              ))}
+              </View>
+
+              <ScrollView 
+                style={styles.modalBody}
+                showsVerticalScrollIndicator={false}>
+                
+                <View style={styles.filterSection}>
+                  <Text style={styles.filterSectionTitle}>Status</Text>
+                  <View style={styles.filterPills}>
+                    <TouchableOpacity
+                      style={[
+                        styles.filterPill,
+                        !filters.status ? styles.filterPillActive : styles.filterPillInactive
+                      ]}
+                      onPress={() => setFilters(prev => ({...prev, status: ''}))}>
+                      <Text style={!filters.status ? styles.filterPillTextActive : styles.filterPillTextInactive}>
+                        All
+                      </Text>
+                    </TouchableOpacity>
+
+                    {['pending', 'approved', 'returned'].map(st => (
+                      <TouchableOpacity
+                        key={st}
+                        style={[
+                          styles.filterPill,
+                          filters.status === st ? styles.filterPillActive : styles.filterPillInactive
+                        ]}
+                        onPress={() => setFilters(prev => ({...prev, status: st}))}>
+                        <Text style={filters.status === st ? styles.filterPillTextActive : styles.filterPillTextInactive}>
+                          {st.charAt(0).toUpperCase() + st.slice(1)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                <View style={styles.filterSection}>
+                  <Text style={styles.filterSectionTitle}>Species Filter</Text>
+                  <FormRow
+                    label="Species contains"
+                    value={filters.speciesOne}
+                    onChangeText={v => setFilters(prev => ({...prev, speciesOne: v}))}
+                    placeholder="Type e.g. Shisham"
+                  />
+                </View>
+
+                <View style={styles.filterSection}>
+                  <Text style={styles.filterSectionTitle}>Date Range</Text>
+                  <View style={styles.filterRow}>
+                    <View style={styles.filterColumn}>
+                      <FormRow
+                        label="From (YYYY-MM-DD)"
+                        value={filters.dateFrom}
+                        onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
+                        placeholder="2025-12-01"
+                      />
+                    </View>
+                    <View style={styles.filterColumn}>
+                      <FormRow
+                        label="To (YYYY-MM-DD)"
+                        value={filters.dateTo}
+                        onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
+                        placeholder="2025-12-31"
+                      />
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.filterSection}>
+                  <Text style={styles.filterSectionTitle}>RDS Range</Text>
+                  <View style={styles.filterRow}>
+                    <View style={styles.filterColumn}>
+                      <FormRow
+                        label="RDS From (>=)"
+                        value={filters.rdFrom}
+                        onChangeText={v => setFilters(prev => ({...prev, rdFrom: v}))}
+                        placeholder="e.g. 10"
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    <View style={styles.filterColumn}>
+                      <FormRow
+                        label="RDS To (<=)"
+                        value={filters.rdTo}
+                        onChangeText={v => setFilters(prev => ({...prev, rdTo: v}))}
+                        placeholder="e.g. 50"
+                        keyboardType="numeric"
+                      />
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.filterSection}>
+                  <Text style={styles.filterSectionTitle}>Count Range</Text>
+                  <View style={styles.filterRow}>
+                    <View style={styles.filterColumn}>
+                      <FormRow
+                        label="Count From (>=)"
+                        value={filters.totalFrom}
+                        onChangeText={v => setFilters(prev => ({...prev, totalFrom: v}))}
+                        placeholder="e.g. 100"
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    <View style={styles.filterColumn}>
+                      <FormRow
+                        label="Count To (<=)"
+                        value={filters.totalTo}
+                        onChangeText={v => setFilters(prev => ({...prev, totalTo: v}))}
+                        placeholder="e.g. 500"
+                        keyboardType="numeric"
+                      />
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity 
+                    style={styles.modalButtonSecondary}
+                    onPress={() => setFilters({
+                      speciesOne: '',
+                      dateFrom: '',
+                      dateTo: '',
+                      rdFrom: '',
+                      rdTo: '',
+                      totalFrom: '',
+                      totalTo: '',
+                      status: '',
+                    })}
+                    activeOpacity={0.7}>
+                    <Text style={styles.modalButtonSecondaryText}>Reset All</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={styles.modalButtonPrimary}
+                    onPress={() => setFilterModalVisible(false)}
+                    activeOpacity={0.7}>
+                    <Text style={styles.modalButtonPrimaryText}>Apply Filters</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
             </View>
-
-            <FormRow
-              label="Species contains"
-              value={filters.speciesOne}
-              onChangeText={v => setFilters(prev => ({...prev, speciesOne: v}))}
-              placeholder="Type e.g. Shisham"
-            />
-
-            <View style={{flexDirection: 'row', gap: 10}}>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="Saved Date From (YYYY-MM-DD)"
-                  value={filters.dateFrom}
-                  onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
-                  placeholder="2025-12-01"
-                />
-              </View>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="Saved Date To (YYYY-MM-DD)"
-                  value={filters.dateTo}
-                  onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
-                  placeholder="2025-12-31"
-                />
-              </View>
-            </View>
-
-            <View style={{flexDirection: 'row', gap: 10}}>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="RDS From (>=)"
-                  value={filters.rdFrom}
-                  onChangeText={v => setFilters(prev => ({...prev, rdFrom: v}))}
-                  placeholder="e.g. 10"
-                  keyboardType="numeric"
-                />
-              </View>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="RDS To (<=)"
-                  value={filters.rdTo}
-                  onChangeText={v => setFilters(prev => ({...prev, rdTo: v}))}
-                  placeholder="e.g. 50"
-                  keyboardType="numeric"
-                />
-              </View>
-            </View>
-
-            <View style={{flexDirection: 'row', gap: 10}}>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="Count From (>=)"
-                  value={filters.totalFrom}
-                  onChangeText={v => setFilters(prev => ({...prev, totalFrom: v}))}
-                  placeholder="e.g. 100"
-                  keyboardType="numeric"
-                />
-              </View>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="Count To (<=)"
-                  value={filters.totalTo}
-                  onChangeText={v => setFilters(prev => ({...prev, totalTo: v}))}
-                  placeholder="e.g. 500"
-                  keyboardType="numeric"
-                />
-              </View>
-            </View>
-
-            <View style={{flexDirection: 'row', gap: 10, marginTop: 10}}>
-              <TouchableOpacity style={styles.filterApply} onPress={() => setFilterModalVisible(false)}>
-                <Text style={styles.filterApplyText}>Apply</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.filterClear}
-                onPress={() =>
-                  setFilters({
-                    speciesOne: '',
-                    dateFrom: '',
-                    dateTo: '',
-                    rdFrom: '',
-                    rdTo: '',
-                    totalFrom: '',
-                    totalTo: '',
-                    status: '',
-                  })
-                }>
-                <Text style={styles.filterClearText}>Clear</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
+          </View>
         </View>
       </Modal>
 
@@ -861,23 +1056,38 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         transparent
         animationType="slide"
         onRequestClose={() => setModalVisible(false)}>
-        <View style={styles.modalRoot}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {isEdit ? `Edit (Server ID: ${editingServerId ?? '—'})` : 'Add Pole Crop'}
-              </Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={22} color="#6b7280" />
-              </TouchableOpacity>
-            </View>
+        <View style={styles.editModalOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.editModalContainer}>
+            
+            <View style={styles.editModalContent}>
+              <View style={styles.editModalHeader}>
+                <View>
+                  <Text style={styles.editModalTitle}>
+                    {isEdit ? 'Edit Pole Crop Record' : 'Add Pole Crop Record'}
+                  </Text>
+                  {isEdit && editingServerId && (
+                    <Text style={styles.editModalSubtitle}>Record ID: {editingServerId}</Text>
+                  )}
+                </View>
+                <TouchableOpacity 
+                  style={styles.editModalClose}
+                  onPress={() => setModalVisible(false)}
+                  activeOpacity={0.7}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
 
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-              <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-                <View style={styles.groupCard}>
-                  <Text style={styles.groupTitle}>RD / KM</Text>
-                  <View style={styles.row}>
-                    <View style={styles.half}>
+              <ScrollView 
+                style={styles.editModalBody}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled">
+                
+                <View style={styles.formSection}>
+                  <Text style={styles.formSectionTitle}>RDS / KM Information</Text>
+                  <View style={styles.formRow}>
+                    <View style={styles.formColumn}>
                       <FormRow
                         label="RDS From"
                         value={rdFrom}
@@ -887,7 +1097,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         required
                       />
                     </View>
-                    <View style={styles.half}>
+                    <View style={styles.formColumn}>
                       <FormRow
                         label="RDS To"
                         value={rdTo}
@@ -909,61 +1119,129 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   />
                 </View>
 
-                <View style={styles.groupCard}>
-                  <Text style={styles.groupTitle}>Species</Text>
+                <View style={styles.formSection}>
+                  <Text style={styles.formSectionTitle}>Species Selection</Text>
                   <MultiSelectRow
-                    label={speciesLoading ? 'Species (Loading...)' : 'Species (Multiple)'}
-                    values={selectedSpeciesNames} // ✅ strings only
+                    label={speciesLoading ? 'Species (Loading...)' : 'Select Species (Multiple)'}
+                    values={selectedSpeciesNames}
                     onChange={vals => setSelectedSpeciesNames(Array.isArray(vals) ? vals : [])}
-                    options={speciesOptions} // ✅ strings only
+                    options={speciesOptions}
                     disabled={speciesLoading}
                   />
+                  {selectedSpeciesNames.length > 0 && (
+                    <View style={styles.selectedSpeciesBadge}>
+                      <Text style={styles.selectedSpeciesText}>
+                        {selectedSpeciesNames.length} species selected
+                      </Text>
+                    </View>
+                  )}
                   <Text style={styles.helperText}>
-                    Selected species will be sent as species_ids[] to the API.
+                    Selected species will be sent as species_ids[] to the API
                   </Text>
                 </View>
 
-                <View style={styles.groupCard}>
-                  <Text style={styles.groupTitle}>Location (Auto + Manual)</Text>
-
-                  <View style={styles.readonlyRow}>
-                    <Text style={styles.readonlyLabel}>Auto GPS (Fetched)</Text>
-                    <Text style={styles.readonlyValue}>{autoGps || '—'}</Text>
+                <View style={styles.formSection}>
+                  <Text style={styles.formSectionTitle}>Location Coordinates</Text>
+                  
+                  <View style={styles.gpsCard}>
+                    <View style={styles.gpsCardHeader}>
+                      <Text style={styles.gpsCardTitle}>Auto GPS Coordinates</Text>
+                      <TouchableOpacity
+                        style={styles.gpsFetchButton}
+                        onPress={() => fetchGps(false)}
+                        activeOpacity={0.7}>
+                        <Ionicons name="locate" size={16} color="#fff" />
+                        <Text style={styles.gpsFetchButtonText}>Fetch GPS</Text>
+                      </TouchableOpacity>
+                    </View>
+                    
+                    <View style={styles.gpsCardBody}>
+                      <Text style={styles.gpsValue}>{autoGps || 'No coordinates fetched'}</Text>
+                      {gpsLoading && (
+                        <View style={styles.gpsLoading}>
+                          <ActivityIndicator size="small" color={COLORS.primary} />
+                          <Text style={styles.gpsLoadingText}>Fetching location...</Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
 
                   <FormRow
-                    label="Manual Coordinates (Optional)"
-                    value={manualGps}
+                    label="Coordinates (Auto-fetched, editable)"
+                    value={manualGps || autoGps}
                     onChangeText={setManualGps}
-                    placeholder="e.g. 31.560000, 74.360000"
+                    placeholder={autoGps || "e.g. 31.560000, 74.360000"}
                   />
 
-                  <View style={styles.gpsRow}>
-                    <TouchableOpacity style={styles.gpsBtn} onPress={() => fetchGps(false)}>
-                      <Ionicons name="locate" size={18} color="#fff" />
-                      <Text style={styles.gpsBtnText}>Re-Fetch Auto GPS</Text>
-                    </TouchableOpacity>
-
-                    {gpsLoading && (
-                      <View style={styles.gpsLoading}>
-                        <ActivityIndicator size="small" color={colors.primary} />
-                        <Text style={styles.gpsLoadingText}>Getting location…</Text>
-                      </View>
-                    )}
-                  </View>
-
                   <Text style={styles.gpsNote}>
-                    Saved GPS will be: Manual (if provided) otherwise Auto GPS.
+                    Auto-fetched coordinates are pre-filled. Edit if needed.
                   </Text>
                 </View>
 
-                <TouchableOpacity style={styles.saveBtn} onPress={upsertRecord}>
-                  <Ionicons name="save" size={20} color="#fff" />
-                  <Text style={styles.saveText}>{isEdit ? 'Save as New' : 'Save'}</Text>
-                </TouchableOpacity>
+                <View style={styles.formSection}>
+                  <Text style={styles.formSectionTitle}>Images</Text>
+                  <View style={styles.imageUploadSection}>
+                    <View style={styles.imageUploadButtons}>
+                      <TouchableOpacity
+                        style={styles.imageUploadButton}
+                        onPress={pickImages}
+                        activeOpacity={0.7}>
+                        <View style={styles.imageUploadButtonContent}>
+                          <Ionicons name="image-outline" size={20} color="#fff" />
+                          <Text style={styles.imageUploadButtonText}>Select Images</Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      {pickedAssets.length > 0 && (
+                        <TouchableOpacity
+                          style={styles.imageClearButton}
+                          onPress={clearImages}
+                          activeOpacity={0.7}>
+                          <Ionicons name="trash-outline" size={20} color={COLORS.danger} />
+                          <Text style={styles.imageClearButtonText}>Clear</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    
+                    {pickedAssets.length > 0 && (
+                      <View style={styles.imagePreview}>
+                        <View style={styles.imagePreviewHeader}>
+                          <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                          <Text style={styles.imagePreviewTitle}>
+                            {pickedAssets.length} image{pickedAssets.length !== 1 ? 's' : ''} selected
+                          </Text>
+                        </View>
+                        <Text style={styles.imagePreviewText}>
+                          Upload Path: "{BUCKET_UPLOAD_PATH}"
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
               </ScrollView>
-            </KeyboardAvoidingView>
-          </View>
+
+              <View style={styles.editModalFooter}>
+                <TouchableOpacity 
+                  style={styles.footerButtonSecondary}
+                  onPress={() => setModalVisible(false)}
+                  activeOpacity={0.7}>
+                  <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.footerButtonPrimary}
+                  onPress={upsertRecord}
+                  activeOpacity={0.7}>
+                  <View style={styles.footerButtonContent}>
+                    <Ionicons name={isEdit ? "save-outline" : "add-circle-outline"} size={20} color="#fff" />
+                    <Text style={styles.footerButtonPrimaryText}>
+                      {isEdit ? 'Create New' : 'Save Record'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
     </View>
@@ -971,232 +1249,818 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 }
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: '#fff'},
-  background: {flex: 1, width: '100%'},
-  overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16, 185, 129, 0.1)'},
+  // Base
+  screen: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  container: {
+    flex: 1,
+  },
+  contentContainer: {
+    paddingBottom: 100,
+  },
 
+  // Header
   header: {
+    backgroundColor: COLORS.primary,
+    paddingTop: Platform.OS === 'ios' ? 50 : StatusBar.currentHeight + 20,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    elevation: 8,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+  },
+  headerContainer: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    padding: 20,
-    paddingTop: 50,
-    backgroundColor: 'rgba(16, 185, 129, 0.8)',
+    alignItems: 'center',
+    paddingHorizontal: 20,
   },
   backButton: {
-    padding: 8,
-    borderRadius: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 22, fontWeight: '800', color: '#fff'},
-  headerSubtitle: {fontSize: 13, color: 'rgba(255,255,255,0.9)', marginTop: 2},
-  headerSubtitle2: {fontSize: 12, color: '#d1fae5', marginTop: 2, fontWeight: '800'},
-
-  section: {marginHorizontal: 16, marginTop: 12},
-  sectionHead: {
+  headerContent: {
+    flex: 1,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  headerInfo: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 10,
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
   },
-  sectionTitle: {fontSize: 18, fontWeight: '800', color: '#111827'},
-  sectionMeta: {fontSize: 12, fontWeight: '900', color: '#6b7280'},
-  emptyText: {fontSize: 13, color: '#6b7280'},
-
-  errorBox: {
-    backgroundColor: 'rgba(239,68,68,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(239,68,68,0.35)',
-    padding: 12,
+  infoChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 4,
+  },
+  infoChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  siteId: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.9)',
+    letterSpacing: 0.3,
+  },
+  refreshButton: {
+    width: 44,
+    height: 44,
     borderRadius: 12,
-    marginBottom: 10,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  errorText: {color: '#7f1d1d', fontWeight: '800'},
-  retryBtn: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    backgroundColor: '#ef4444',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  retryText: {color: '#fff', fontWeight: '900'},
 
-  searchFilterRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12},
-  searchBox: {
+  // Search
+  searchSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 16,
+    gap: 12,
+  },
+  searchContainer: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    height: 44,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    height: 56,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  searchInput: {flex: 1, fontSize: 14, color: '#111827'},
-  filterBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+  searchIcon: {
+    marginRight: 12,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '500',
+    color: COLORS.text,
+  },
+  searchClear: {
+    padding: 4,
+  },
+  filterButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   filterBadge: {
     position: 'absolute',
-    top: -6,
-    right: -6,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#ef4444',
+    top: -4,
+    right: -4,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: COLORS.danger,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+  },
+  filterBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '900',
     paddingHorizontal: 4,
   },
-  filterBadgeText: {color: '#fff', fontSize: 11, fontWeight: '900'},
 
-  clearAllBtn: {
-    marginTop: 10,
-    backgroundColor: '#ef4444',
-    borderRadius: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
+  // Stats Card
+  statsCard: {
     flexDirection: 'row',
-    gap: 8,
-  },
-  clearAllText: {color: '#fff', fontWeight: '900'},
-
-  tableWrap: {
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: COLORS.primary,
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textLight,
+  },
+  statDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: COLORS.border,
+  },
+
+  // Error Card
+  errorCard: {
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+  },
+  errorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.danger,
+  },
+  errorMessage: {
+    fontSize: 14,
+    color: COLORS.text,
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  errorButton: {
+    backgroundColor: COLORS.danger,
     borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  errorButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  // Section
+  section: {
+    marginHorizontal: 20,
+    marginBottom: 20,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.textLight,
+  },
+
+  // Empty State
+  emptyState: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 40,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderStyle: 'dashed',
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.textLight,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  emptyAction: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  emptyActionText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  // Table
+  tableContainer: {
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  table: {
+    borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  tr: {
+  tableHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    minHeight: 44,
+    borderBottomColor: COLORS.border,
+    minHeight: 56,
   },
-  thRow: {backgroundColor: 'rgba(14, 165, 233, 0.15)', borderBottomColor: '#cbd5e1'},
-  th: {paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontWeight: '900', color: '#0f172a'},
-  td: {paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontWeight: '700', color: '#111827'},
-  trEven: {backgroundColor: '#ffffff'},
-  trOdd: {backgroundColor: 'rgba(2, 132, 199, 0.04)'},
-
-  actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, paddingVertical: 10},
-  iconBtn: {padding: 8, borderRadius: 10, backgroundColor: '#f3f4f6'},
-
-  statusCell: {paddingHorizontal: 10, paddingVertical: 10},
-  statusPill: {
+  thCell: {
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: COLORS.border,
+  },
+  thText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.text,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    minHeight: 60,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  rowEven: {
+    backgroundColor: '#fff',
+  },
+  rowOdd: {
+    backgroundColor: 'rgba(5, 150, 105, 0.02)',
+  },
+  tdCell: {
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: COLORS.border,
+  },
+  tdText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  gpsText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.text,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  countBadge: {
+    backgroundColor: 'rgba(14, 165, 233, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+  },
+  countText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.secondary,
+  },
+  statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 999,
-    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
     alignSelf: 'flex-start',
   },
-  statusText: {fontSize: 12, fontWeight: '900'},
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  actionsCell: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(14, 165, 233, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+  },
+  actionButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.secondary,
+  },
 
+  // FAB
   fab: {
     position: 'absolute',
     right: 20,
     bottom: 30,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primary,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  fabContent: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 9,
   },
 
-  actionOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.35)'},
-  filterCard: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    top: '14%',
+  // Modals
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: COLORS.overlay,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalContent: {
     backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 14,
+    borderRadius: 24,
+    overflow: 'hidden',
+    maxHeight: height * 0.8,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    elevation: 12,
-    maxHeight: '78%',
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
   },
-  filterHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6},
-  filterTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
-  filterApply: {flex: 1, backgroundColor: colors.primary, paddingVertical: 12, borderRadius: 12, alignItems: 'center'},
-  filterApplyText: {color: '#fff', fontWeight: '900'},
-  filterClear: {flex: 1, backgroundColor: '#f3f4f6', paddingVertical: 12, borderRadius: 12, alignItems: 'center'},
-  filterClearText: {color: '#111827', fontWeight: '900'},
-  filterHint: {fontSize: 12, color: '#374151', fontWeight: '900', marginBottom: 6},
-  pillsRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
-  pill: {paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, borderWidth: 1},
-  pillInactive: {backgroundColor: '#fff', borderColor: '#e5e7eb'},
-  pillActive: {backgroundColor: 'rgba(16,185,129,0.15)', borderColor: 'rgba(16,185,129,0.35)'},
-  pillTextInactive: {fontSize: 12, fontWeight: '800', color: '#374151'},
-  pillTextActive: {fontSize: 12, fontWeight: '900', color: '#065f46'},
-
-  modalRoot: {flex: 1, backgroundColor: 'rgba(15,23,42,0.35)', justifyContent: 'center', paddingHorizontal: 16},
-  modalCard: {backgroundColor: '#fff', borderRadius: 20, padding: 16, maxHeight: '88%'},
-  modalHeader: {flexDirection: 'row', alignItems: 'center', marginBottom: 8},
-  modalTitle: {flex: 1, fontSize: 18, fontWeight: '900', color: '#111827'},
-  modalCloseBtn: {padding: 4, borderRadius: 999},
-
-  groupCard: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 10,
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
   },
-  groupTitle: {fontSize: 13, fontWeight: '900', color: '#111827', marginBottom: 8},
-  helperText: {fontSize: 12, color: '#6b7280', fontWeight: '700', marginTop: 6},
-
-  readonlyRow: {marginHorizontal: 4, marginBottom: 8},
-  readonlyLabel: {fontSize: 12, color: '#374151', fontWeight: '800', marginBottom: 2},
-  readonlyValue: {fontSize: 12, color: '#4b5563', fontWeight: '800'},
-
-  gpsRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6},
-  gpsBtn: {
+  modalTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  modalClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalBody: {
+    padding: 20,
+  },
+
+  // Filter Sections
+  filterSection: {
+    marginBottom: 20,
+  },
+  filterSectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  filterPills: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  filterPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  filterPillInactive: {
+    backgroundColor: '#fff',
+  },
+  filterPillActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  filterPillTextInactive: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  filterPillTextActive: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  filterColumn: {
+    flex: 1,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  modalButtonSecondary: {
+    flex: 1,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  modalButtonSecondaryText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  modalButtonPrimary: {
+    flex: 2,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  modalButtonPrimaryText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#fff',
+  },
+
+  // Edit Modal
+  editModalOverlay: {
+    flex: 1,
+    backgroundColor: COLORS.overlay,
+  },
+  editModalContainer: {
+    flex: 1,
+    marginTop: Platform.OS === 'ios' ? 40 : 20,
+  },
+  editModalContent: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  editModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: 24,
+    paddingTop: 28,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  editModalTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: 4,
+  },
+  editModalSubtitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.textLight,
+  },
+  editModalClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editModalBody: {
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 20,
+  },
+  editModalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+
+  // Form Sections
+  formSection: {
+    marginBottom: 24,
+  },
+  formSectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 16,
+    letterSpacing: 0.5,
+  },
+  formRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  formColumn: {
+    flex: 1,
+  },
+  helperText: {
+    fontSize: 12,
+    color: COLORS.textLight,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  selectedSpeciesBadge: {
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginTop: 8,
     alignSelf: 'flex-start',
+  },
+  selectedSpeciesText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+
+  // GPS Card
+  gpsCard: {
+    backgroundColor: 'rgba(5, 150, 105, 0.03)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  gpsCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(5, 150, 105, 0.1)',
+  },
+  gpsCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  gpsFetchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: colors.primary,
+    borderRadius: 8,
+    gap: 6,
   },
-  gpsBtnText: {fontSize: 12, color: '#fff', marginLeft: 6, fontWeight: '900'},
-  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10},
-  gpsLoadingText: {fontSize: 12, color: '#374151', fontWeight: '800'},
-  gpsNote: {fontSize: 12, color: '#6b7280', fontWeight: '700', marginTop: 8},
+  gpsFetchButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  gpsCardBody: {
+    padding: 16,
+  },
+  gpsValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginBottom: 8,
+  },
+  gpsLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  gpsLoadingText: {
+    fontSize: 12,
+    color: COLORS.textLight,
+    fontWeight: '600',
+  },
+  gpsNote: {
+    fontSize: 12,
+    color: COLORS.textLight,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
 
-  saveBtn: {
-    marginTop: 6,
+  // Image Upload
+  imageUploadSection: {
+    marginBottom: 8,
+  },
+  imageUploadButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  imageUploadButton: {
+    flex: 2,
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  imageUploadButtonContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: colors.primary,
+    paddingVertical: 14,
+    gap: 8,
   },
-  saveText: {fontSize: 15, fontWeight: '900', color: '#fff', marginLeft: 8},
+  imageUploadButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  imageClearButton: {
+    flex: 1,
+    backgroundColor: 'rgba(239,68,68,0.1)',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+  },
+  imageClearButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.danger,
+  },
+  imagePreview: {
+    backgroundColor: 'rgba(22, 163, 74, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(22, 163, 74, 0.2)',
+    borderRadius: 12,
+    padding: 12,
+  },
+  imagePreviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  imagePreviewTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.success,
+  },
+  imagePreviewText: {
+    fontSize: 12,
+    color: COLORS.textLight,
+  },
 
-  row: {flexDirection: 'row', gap: 10},
-  half: {flex: 1},
+  // Footer Buttons
+  footerButtonSecondary: {
+    flex: 1,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  footerButtonSecondaryText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  footerButtonPrimary: {
+    flex: 2,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 14,
+  },
+  footerButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  footerButtonPrimaryText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#fff',
+  },
 });

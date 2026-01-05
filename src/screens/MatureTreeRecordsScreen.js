@@ -1,17 +1,5 @@
 // /screens/MatureTreeRecordsScreen.js
-// ✅ Server-only version (offline removed)
-//
-// Uses APIs:
-// - GET  /species
-// - GET  /forest-tree-conditions
-// - POST /enum/enumeration
-// - POST /enum/enumeration/get-user-site-wise-enumeration   { name_of_site_id }
-//
-// Notes:
-// - Bearer token is read from AsyncStorage key: AUTH_TOKEN
-// - Site id is taken from route params: enumeration.name_of_site_id (fallback enumeration.id)
-// - Actions (Dispose/Superdari) are enabled for server rows
-// - Edit/Delete icons are shown but will alert (no API provided yet)
+// ✅ Professional UI Update with Consistent Theme + ✅ Image Upload via tree-enum API (multipart/form-data)
 
 import React, {useCallback, useMemo, useState, useEffect} from 'react';
 import {
@@ -20,7 +8,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  ImageBackground,
   Modal,
   Alert,
   Platform,
@@ -28,6 +15,9 @@ import {
   TouchableWithoutFeedback,
   TextInput,
   RefreshControl,
+  Dimensions,
+  StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -35,37 +25,63 @@ import Geolocation from '@react-native-community/geolocation';
 import NetInfo from '@react-native-community/netinfo';
 import {launchImageLibrary} from 'react-native-image-picker';
 import {useFocusEffect} from '@react-navigation/native';
+import LinearGradient from 'react-native-linear-gradient';
 
-import colors from '../theme/colors';
 import FormRow from '../components/FormRow';
-import {DropdownRow} from '../components/SelectRows'; // IMPORTANT: expects string value + string[] options
+import {DropdownRow} from '../components/SelectRows';
+
+const {width, height} = Dimensions.get('window');
 
 const API_BASE = 'http://be.lte.gisforestry.com';
-
 const SPECIES_URL = `${API_BASE}/enum/species`;
 const CONDITIONS_URL = `${API_BASE}/forest-tree-conditions`;
-
 const ENUMERATION_SUBMIT_URL = `${API_BASE}/enum/enumeration`;
 const ENUMERATION_SITE_WISE_URL = `${API_BASE}/enum/enumeration/get-user-site-wise-enumeration`;
+
+const TREE_ENUM_UPLOAD_URL = 'https://app.eco.gisforestry.com/aws-bucket/tree-enum';
+// cURL mapping:
+// --form 'files=@...'
+// --form 'uploadPath="enumaration"'
+// --form 'isMulti="true"'
+// --form 'fileName="chan"'
+const TREE_ENUM_UPLOAD_PATH = 'enumaration';
+const TREE_ENUM_IS_MULTI = 'true';
+const TREE_ENUM_FILE_NAME = 'chan';
 
 const SUPERDARI_ROUTE = 'SuperdariScreen';
 const DISPOSAL_ROUTE = 'Disposal';
 
+// Theme Colors
+const COLORS = {
+  primary: '#059669',
+  primaryLight: '#10b981',
+  primaryDark: '#047857',
+  secondary: '#0ea5e9',
+  success: '#16a34a',
+  warning: '#f97316',
+  danger: '#dc2626',
+  info: '#7c3aed',
+  background: '#f8fafc',
+  card: '#ffffff',
+  text: '#1f2937',
+  textLight: '#6b7280',
+  border: '#e5e7eb',
+  overlay: 'rgba(15, 23, 42, 0.7)',
+};
+
 export default function MatureTreeRecordsScreen({navigation, route}) {
   const enumeration = route?.params?.enumeration;
 
-  // ---------- SERVER RECORDS ----------
+  // ---------- STATE ----------
   const [serverRecords, setServerRecords] = useState([]);
   const [serverLoading, setServerLoading] = useState(false);
   const [serverRefreshing, setServerRefreshing] = useState(false);
   const [serverError, setServerError] = useState('');
 
-  // ---------- MODAL ----------
   const [modalVisible, setModalVisible] = useState(false);
-  const [isEdit, setIsEdit] = useState(false); // UI only (real edit API not provided)
+  const [isEdit, setIsEdit] = useState(false);
   const [editingServerId, setEditingServerId] = useState(null);
 
-  // ---------- SEARCH + FILTERS ----------
   const [search, setSearch] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filters, setFilters] = useState({
@@ -77,30 +93,29 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     kmTo: '',
   });
 
-  // ---------- DROPDOWNS ----------
-  const [speciesRows, setSpeciesRows] = useState([]); // [{id,name}]
-  const [conditionRows, setConditionRows] = useState([]); // [{id,name}]
-  const [speciesOptions, setSpeciesOptions] = useState([]); // string[]
-  const [conditionOptions, setConditionOptions] = useState([]); // string[]
+  const [speciesRows, setSpeciesRows] = useState([]);
+  const [conditionRows, setConditionRows] = useState([]);
+  const [speciesOptions, setSpeciesOptions] = useState([]);
+  const [conditionOptions, setConditionOptions] = useState([]);
   const [speciesLoading, setSpeciesLoading] = useState(false);
   const [conditionLoading, setConditionLoading] = useState(false);
 
-  // ---------- FORM FIELDS ----------
   const [rdKm, setRdKm] = useState('');
-  const [species, setSpecies] = useState(''); // ✅ ALWAYS keep string name here
+  const [species, setSpecies] = useState('');
   const [speciesId, setSpeciesId] = useState(null);
   const [girth, setGirth] = useState('');
-  const [condition, setCondition] = useState(''); // ✅ ALWAYS keep string name here
+  const [condition, setCondition] = useState('');
   const [conditionId, setConditionId] = useState(null);
 
-  // ---------- GPS ----------
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
   const [gpsSource, setGpsSource] = useState('');
   const [gpsFetching, setGpsFetching] = useState(false);
 
-  // ---------- IMAGE (UI only; API uses placeholder test.com) ----------
-  const [pictureUri, setPictureUri] = useState(null);
+  // ✅ MULTI IMAGE SUPPORT + UPLOAD STATE
+  const [pictureAssets, setPictureAssets] = useState([]); // [{uri, type, fileName, ...}]
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadedImageUrls, setUploadedImageUrls] = useState([]); // returned urls/paths (best-effort)
 
   const rdRangeText =
     enumeration?.rdFrom && enumeration?.rdTo
@@ -139,7 +154,54 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     return {lat, lng};
   };
 
-  // ---------- SERVER FETCH ----------
+  const safeJson = async res => {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  };
+
+  const extractUploadUrls = json => {
+    // Server response shape is unknown; this tries multiple common patterns.
+    // Returns an array of strings.
+    if (!json) return [];
+
+    const urls = [];
+
+    const pushIfUrl = v => {
+      if (!v) return;
+      if (typeof v === 'string') urls.push(v);
+    };
+
+    // direct arrays
+    if (Array.isArray(json)) {
+      json.forEach(x => pushIfUrl(x?.url ?? x?.location ?? x?.path ?? x));
+    }
+
+    // common wrappers
+    if (Array.isArray(json?.urls)) json.urls.forEach(pushIfUrl);
+    if (Array.isArray(json?.data)) json.data.forEach(x => pushIfUrl(x?.url ?? x?.location ?? x?.path ?? x));
+    if (Array.isArray(json?.data?.urls)) json.data.urls.forEach(pushIfUrl);
+
+    // single url fields
+    pushIfUrl(json?.url);
+    pushIfUrl(json?.location);
+    pushIfUrl(json?.path);
+    pushIfUrl(json?.data?.url);
+    pushIfUrl(json?.data?.location);
+    pushIfUrl(json?.data?.path);
+
+    // If backend returns {data: {files:[...]}}
+    if (Array.isArray(json?.data?.files)) {
+      json.data.files.forEach(x => pushIfUrl(x?.url ?? x?.location ?? x?.path ?? x));
+    }
+
+    // Deduplicate
+    return Array.from(new Set(urls.filter(Boolean)));
+  };
+
+  // ---------- API CALLS ----------
   const fetchServerEnumerations = useCallback(
     async ({refresh = false} = {}) => {
       const siteId = getNameOfSiteId();
@@ -165,7 +227,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
           body: JSON.stringify({name_of_site_id: Number(siteId)}),
         });
 
-        const json = await res.json().catch(() => null);
+        const json = await safeJson(res);
 
         if (!res.ok) {
           const msg = json?.message || json?.error || `API Error (${res.status})`;
@@ -181,26 +243,14 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         refresh ? setServerRefreshing(false) : setServerLoading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [enumeration],
   );
 
-  useEffect(() => {
-    fetchServerEnumerations();
-  }, [fetchServerEnumerations]);
-
-  useFocusEffect(
-    useCallback(() => {
-      fetchServerEnumerations({refresh: true});
-    }, [fetchServerEnumerations]),
-  );
-
-  // ---------- DROPDOWNS ----------
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
       const res = await fetch(SPECIES_URL);
-      const json = await res.json().catch(() => null);
+      const json = await safeJson(res);
       const rows = normalizeList(json);
 
       const normalized = rows
@@ -226,13 +276,11 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const fetchConditions = useCallback(async () => {
     try {
       setConditionLoading(true);
-
-      // token may or may not be required
       const token = await getAuthToken();
       const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
 
       const res = await fetch(CONDITIONS_URL, {headers});
-      const json = await res.json().catch(() => null);
+      const json = await safeJson(res);
       const rows = normalizeList(json);
 
       const normalized = rows
@@ -255,27 +303,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   }, []);
 
-  useEffect(() => {
-    fetchSpecies();
-    fetchConditions();
-  }, [fetchSpecies, fetchConditions]);
-
-  // ✅ When editing, you have IDs from server. Once lists load, map ID -> name to show selected in dropdown.
-  useEffect(() => {
-    if (speciesId && !species && speciesRows.length) {
-      const row = speciesRows.find(x => String(x.id) === String(speciesId));
-      if (row?.name) setSpecies(row.name);
-    }
-  }, [speciesId, species, speciesRows]);
-
-  useEffect(() => {
-    if (conditionId && !condition && conditionRows.length) {
-      const row = conditionRows.find(x => String(x.id) === String(conditionId));
-      if (row?.name) setCondition(row.name);
-    }
-  }, [conditionId, condition, conditionRows]);
-
-  // ---------- GPS ----------
   const fetchLocationSmart = useCallback(async ({silent = false} = {}) => {
     try {
       setGpsFetching(true);
@@ -309,29 +336,126 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   }, []);
 
-  // ---------- IMAGE ----------
-  const pickImage = () => {
-    launchImageLibrary({mediaType: 'photo', quality: 0.7}, res => {
-      if (res.assets?.[0]?.uri) setPictureUri(res.assets[0].uri);
+  // ✅ Image upload (multipart/form-data) for TREE_ENUM_UPLOAD_URL
+  const uploadTreeEnumImages = useCallback(async (assets = []) => {
+    if (!assets?.length) return [];
+
+    const net = await NetInfo.fetch();
+    const online = !!net.isConnected && (net.isInternetReachable ?? true);
+    if (!online) throw new Error('No internet connection. Please connect to internet to upload images.');
+
+    const fd = new FormData();
+
+    assets.forEach((a, idx) => {
+      const uri = a?.uri;
+      if (!uri) return;
+
+      const name =
+        a?.fileName ||
+        a?.name ||
+        `tree_${Date.now()}_${idx}.${String(a?.type || 'image/jpeg').includes('png') ? 'png' : 'jpg'}`;
+
+      const type = a?.type || 'image/jpeg';
+
+      fd.append('files', {uri, type, name});
     });
+
+    fd.append('uploadPath', TREE_ENUM_UPLOAD_PATH);
+    fd.append('isMulti', TREE_ENUM_IS_MULTI);
+    fd.append('fileName', TREE_ENUM_FILE_NAME);
+
+    const res = await fetch(TREE_ENUM_UPLOAD_URL, {
+      method: 'POST',
+      // IMPORTANT: Do not set Content-Type manually in React Native for FormData.
+      // It will auto-add the correct boundary.
+      body: fd,
+    });
+
+    const json = await safeJson(res);
+
+    if (!res.ok) {
+      const msg = json?.message || json?.error || `Upload API Error (${res.status})`;
+      throw new Error(msg);
+    }
+
+    const urls = extractUploadUrls(json);
+    // If backend returns nothing parseable, still return empty and let caller decide.
+    return urls;
+  }, []);
+
+  // ---------- EFFECTS ----------
+  useEffect(() => {
+    fetchServerEnumerations();
+    fetchSpecies();
+    fetchConditions();
+  }, [fetchServerEnumerations, fetchSpecies, fetchConditions]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchServerEnumerations({refresh: true});
+    }, [fetchServerEnumerations]),
+  );
+
+  useEffect(() => {
+    if (speciesId && !species && speciesRows.length) {
+      const row = speciesRows.find(x => String(x.id) === String(speciesId));
+      if (row?.name) setSpecies(row.name);
+    }
+  }, [speciesId, species, speciesRows]);
+
+  useEffect(() => {
+    if (conditionId && !condition && conditionRows.length) {
+      const row = conditionRows.find(x => String(x.id) === String(conditionId));
+      if (row?.name) setCondition(row.name);
+    }
+  }, [conditionId, condition, conditionRows]);
+
+  useEffect(() => {
+    if (!modalVisible) return;
+    if (isEdit) return;
+    fetchLocationSmart({silent: true});
+  }, [modalVisible, isEdit, fetchLocationSmart]);
+
+  // ---------- FORM HANDLERS ----------
+  const pickImage = () => {
+    launchImageLibrary(
+      {
+        mediaType: 'photo',
+        quality: 0.7,
+        selectionLimit: 10, // allow multi-select
+      },
+      res => {
+        if (res?.didCancel) return;
+
+        if (res?.errorCode) {
+          Alert.alert('Image Error', res?.errorMessage || res.errorCode);
+          return;
+        }
+
+        const assets = Array.isArray(res?.assets) ? res.assets : [];
+        if (!assets.length) return;
+
+        setPictureAssets(assets);
+        setUploadedImageUrls([]); // reset uploaded urls if user re-selects
+      },
+    );
   };
 
-  // ---------- ADD / EDIT (UI) ----------
   const resetForm = () => {
     setIsEdit(false);
     setEditingServerId(null);
-
     setRdKm(rdRangeText || '');
     setSpecies('');
     setSpeciesId(null);
     setGirth('');
     setCondition('');
     setConditionId(null);
-
     setGpsAuto('');
     setGpsManual('');
     setGpsSource('');
-    setPictureUri(null);
+    setPictureAssets([]);
+    setUploadingImages(false);
+    setUploadedImageUrls([]);
   };
 
   const openAddForm = () => {
@@ -342,15 +466,10 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const openEditFormServer = row => {
     setIsEdit(true);
     setEditingServerId(row?.id ?? null);
-
     setRdKm(String(row?.rd_km ?? ''));
-
-    // ✅ set ID first; name will be auto-filled by useEffect after lists exist
     setSpecies('');
     setSpeciesId(row?.species_id ?? null);
-
     setGirth(String(row?.girth ?? ''));
-
     setCondition('');
     setConditionId(row?.condition_id ?? null);
 
@@ -365,15 +484,11 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setGpsManual(manual || auto);
     setGpsSource(manual ? 'MANUAL' : auto ? 'GPS' : '');
 
-    setPictureUri(null);
+    // On edit, keep images empty unless user selects new images
+    setPictureAssets([]);
+    setUploadedImageUrls([]);
     setModalVisible(true);
   };
-
-  useEffect(() => {
-    if (!modalVisible) return;
-    if (isEdit) return;
-    fetchLocationSmart({silent: true});
-  }, [modalVisible, isEdit, fetchLocationSmart]);
 
   // ---------- SUBMIT ----------
   const submitToApi = async body => {
@@ -389,7 +504,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       body: JSON.stringify(body),
     });
 
-    const json = await res.json().catch(() => null);
+    const json = await safeJson(res);
 
     if (!res.ok) {
       const msg = json?.message || json?.error || `API Error (${res.status})`;
@@ -403,10 +518,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     const siteId = getNameOfSiteId();
     if (!siteId) return Alert.alert('Missing', 'name_of_site_id not found.');
 
-    // ✅ Ensure IDs (from selection or map)
-    const chosenSpeciesId =
-      speciesId ?? (speciesRows.find(x => x.name === species)?.id ?? null);
-
+    const chosenSpeciesId = speciesId ?? (speciesRows.find(x => x.name === species)?.id ?? null);
     const chosenConditionId =
       conditionId ?? (conditionRows.find(x => x.name === condition)?.id ?? null);
 
@@ -419,6 +531,32 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     const rdNum = Number(String(rdKm || '').replace(/[^\d.]+/g, ''));
     const rdKmNumber = Number.isFinite(rdNum) ? rdNum : 0;
 
+    // ✅ 1) Upload images (if selected) via tree-enum API
+    let pictures = [];
+    try {
+      if (pictureAssets?.length) {
+        setUploadingImages(true);
+        const urls = await uploadTreeEnumImages(pictureAssets);
+        setUploadedImageUrls(urls);
+
+        // If backend returns no parseable urls, we still proceed with empty pictures
+        // but we warn user to verify backend response.
+        if (!urls?.length) {
+          Alert.alert(
+            'Upload Response',
+            'Images uploaded, but server did not return any readable URL/path. Saving record without picture URLs.',
+          );
+        } else {
+          pictures = urls;
+        }
+      }
+    } catch (e) {
+      setUploadingImages(false);
+      return Alert.alert('Upload Failed', e?.message || 'Failed to upload images');
+    } finally {
+      setUploadingImages(false);
+    }
+
     const apiBody = {
       name_of_site_id: Number(siteId),
       rd_km: rdKmNumber,
@@ -429,7 +567,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       auto_long: autoLng,
       manual_lat: manualLat,
       manual_long: manualLng,
-      pictures: ['http://test.com/tree1.jpg'],
+      pictures, // ✅ now uses uploaded URLs (if any)
     };
 
     if (isEdit) {
@@ -466,7 +604,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   };
 
-  // ---------- STATUS + ACTIONS (SERVER ROWS) ----------
+  // ---------- UI HELPERS ----------
   const getStatusText = r => {
     const isDisposed = !!r?.disposal;
     const isSuperdari = !!r?.superdari;
@@ -477,14 +615,26 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     return 'Pending';
   };
 
+  const getStatusColor = status => {
+    switch (status) {
+      case 'Disposed':
+        return COLORS.secondary;
+      case 'Superdari':
+        return COLORS.info;
+      case 'Disposed + Superdari':
+        return COLORS.warning;
+      default:
+        return COLORS.textLight;
+    }
+  };
+
   const shouldHidePills = r => !!r?.disposal || !!r?.superdari;
 
   const serverRowsDecorated = useMemo(() => {
     return serverRecords.map(r => ({
       ...r,
       _speciesLabel: r?.species_name ?? (r?.species_id != null ? `#${r.species_id}` : '—'),
-      _conditionLabel:
-        r?.condition_name ?? (r?.condition_id != null ? `#${r.condition_id}` : '—'),
+      _conditionLabel: r?.condition_name ?? (r?.condition_id != null ? `#${r.condition_id}` : '—'),
       _autoGps:
         r?.auto_lat != null && r?.auto_long != null ? `${r.auto_lat}, ${r.auto_long}` : '—',
       _manualGps:
@@ -494,7 +644,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }));
   }, [serverRecords]);
 
-  // ---------- FILTERING (SERVER ONLY) ----------
+  // ---------- FILTERING ----------
   const activeFilterCount = useMemo(() => {
     const adv = Object.values(filters).filter(v => String(v || '').trim() !== '').length;
     const s = search.trim() ? 1 : 0;
@@ -560,202 +710,269 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     });
   }, [serverRowsDecorated, search, filters]);
 
-  // ---------- UI ----------
+  // ---------- RENDER ----------
   return (
     <View style={styles.screen}>
-      <ImageBackground source={require('../assets/images/bg.jpg')} style={styles.background}>
-        <View style={styles.overlay} />
+      <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
 
-        {/* Header */}
+      {/* Header with Gradient */}
+      <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.headerGradient}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
 
-          <View style={{flex: 1}}>
-            <Text style={styles.headerTitle}>Mature Tree</Text>
-            <Text style={styles.headerSubtitle}>
-              {enumeration?.division} • {enumeration?.block} • {enumeration?.year}
-            </Text>
-            <Text style={styles.headerSubtitle2}>Site ID: {String(getNameOfSiteId() ?? '—')}</Text>
+          <View style={styles.headerContent}>
+            <Text style={styles.headerTitle}>Mature Tree Records</Text>
+            <View style={styles.headerInfo}>
+              <View style={styles.infoChip}>
+                <Ionicons name="business" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.division || '—'}</Text>
+              </View>
+              <View style={styles.infoChip}>
+                <Ionicons name="cube" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.block || '—'}</Text>
+              </View>
+              <View style={styles.infoChip}>
+                <Ionicons name="calendar" size={12} color="#fff" />
+                <Text style={styles.infoChipText}>{enumeration?.year || '—'}</Text>
+              </View>
+            </View>
+            <Text style={styles.siteId}>Site ID: {String(getNameOfSiteId() ?? '—')}</Text>
+          </View>
+
+          <TouchableOpacity style={styles.headerAction} onPress={() => setFilterModalVisible(true)}>
+            <Ionicons name="filter" size={22} color="#fff" />
+            {activeFilterCount > 0 && (
+              <View style={styles.headerBadge}>
+                <Text style={styles.headerBadgeText}>{activeFilterCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
+
+      {/* Main Content */}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+        refreshControl={
+          <RefreshControl
+            refreshing={serverRefreshing}
+            onRefresh={() => fetchServerEnumerations({refresh: true})}
+            colors={[COLORS.primary]}
+            tintColor={COLORS.primary}
+          />
+        }>
+        {/* Search Bar */}
+        <View style={styles.searchSection}>
+          <View style={styles.searchContainer}>
+            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search by ID, species, condition, GPS..."
+              placeholderTextColor={COLORS.textLight}
+              style={styles.searchInput}
+            />
+            {!!search && (
+              <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
+                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
-        <ScrollView
-          contentContainerStyle={{paddingBottom: 110}}
-          refreshControl={
-            <RefreshControl
-              refreshing={serverRefreshing}
-              onRefresh={() => fetchServerEnumerations({refresh: true})}
+        {/* Stats Card */}
+        <View style={styles.statsCard}>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{filteredServer.length}</Text>
+            <Text style={styles.statLabel}>Filtered</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{serverRecords.length}</Text>
+            <Text style={styles.statLabel}>Total</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Ionicons
+              name={serverLoading ? 'refresh' : 'checkmark-circle'}
+              size={24}
+              color={serverLoading ? COLORS.warning : COLORS.success}
             />
-          }>
+            <Text style={styles.statLabel}>{serverLoading ? 'Loading...' : 'Ready'}</Text>
+          </View>
+        </View>
 
-          <View style={styles.section}>
-            {/* Search + Filter row */}
-            <View style={styles.searchFilterRow}>
-              <View style={styles.searchBox}>
-                <Ionicons name="search" size={18} color="#6b7280" />
-                <TextInput
-                  value={search}
-                  onChangeText={setSearch}
-                  placeholder="Search here..."
-                  placeholderTextColor="#9ca3af"
-                  style={styles.searchInput}
-                />
-                {!!search && (
-                  <TouchableOpacity onPress={() => setSearch('')}>
-                    <Ionicons name="close-circle" size={18} color="#9ca3af" />
-                  </TouchableOpacity>
-                )}
-              </View>
-
-              <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterModalVisible(true)}>
-                <Ionicons name="options-outline" size={20} color="#111827" />
-                {activeFilterCount > 0 && (
-                  <View style={styles.filterBadge}>
-                    <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
+        {/* Error Banner */}
+        {!!serverError && (
+          <View style={styles.errorCard}>
+            <View style={styles.errorHeader}>
+              <Ionicons name="warning" size={20} color={COLORS.danger} />
+              <Text style={styles.errorTitle}>Server Error</Text>
             </View>
+            <Text style={styles.errorMessage}>{serverError}</Text>
+            <TouchableOpacity
+              style={styles.errorButton}
+              onPress={() => fetchServerEnumerations({refresh: true})}>
+              <Text style={styles.errorButtonText}>Retry Connection</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-            {/* Server Records */}
-            <View style={styles.sectionHead}>
-              <Text style={styles.sectionTitle}>Server Records</Text>
-              <Text style={styles.sectionMeta}>
-                {serverLoading ? 'Loading...' : `${filteredServer.length} / ${serverRecords.length}`}
+        {/* Records Section */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Tree Records</Text>
+            <Text style={styles.sectionSubtitle}>
+              {filteredServer.length} of {serverRecords.length} records
+            </Text>
+          </View>
+
+          {filteredServer.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="leaf-outline" size={64} color={COLORS.border} />
+              <Text style={styles.emptyTitle}>No Records Found</Text>
+              <Text style={styles.emptyText}>
+                {serverRecords.length === 0
+                  ? 'No tree records for this site yet.'
+                  : 'No records match your search criteria.'}
               </Text>
-            </View>
-
-            {!!serverError && (
-              <View style={styles.errorBox}>
-                <Text style={styles.errorText}>Server fetch error: {serverError}</Text>
-                <TouchableOpacity
-                  style={styles.retryBtn}
-                  onPress={() => fetchServerEnumerations({refresh: true})}>
-                  <Text style={styles.retryText}>Retry</Text>
+              {activeFilterCount > 0 && (
+                <TouchableOpacity style={styles.emptyAction} onPress={clearAll}>
+                  <Text style={styles.emptyActionText}>Clear Filters</Text>
                 </TouchableOpacity>
-              </View>
-            )}
+              )}
+            </View>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator style={styles.tableContainer}>
+              <View style={styles.table}>
+                {/* Table Header */}
+                <View style={styles.tableHeader}>
+                  {[
+                    {label: 'ID', width: 80},
+                    {label: 'RD/KM', width: 90},
+                    {label: 'Species', width: 140},
+                    {label: 'Condition', width: 140},
+                    {label: 'Girth', width: 100},
+                    {label: 'Auto GPS', width: 180},
+                    {label: 'Manual GPS', width: 180},
+                    {label: 'Status', width: 140},
+                    {label: 'Actions', width: 280},
+                  ].map((col, idx) => (
+                    <View key={idx} style={[styles.thCell, {width: col.width}]}>
+                      <Text style={styles.thText}>{col.label}</Text>
+                    </View>
+                  ))}
+                </View>
 
-            {!serverError && serverRecords.length === 0 ? (
-              <Text style={styles.emptyText}>No server records for this site.</Text>
-            ) : filteredServer.length === 0 ? (
-              <Text style={styles.emptyText}>No record matches your search/filters.</Text>
-            ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={styles.tableWrap}>
-                  {/* Header Row */}
-                  <View style={[styles.tr, styles.thRow]}>
-                    <Text style={[styles.th, {width: 70}]}>ID</Text>
-                    <Text style={[styles.th, {width: 90}]}>RD/KM</Text>
-                    <Text style={[styles.th, {width: 120}]}>Species</Text>
-                    <Text style={[styles.th, {width: 120}]}>Condition</Text>
-                    <Text style={[styles.th, {width: 110}]}>Girth</Text>
-                    <Text style={[styles.th, {width: 170}]}>Auto GPS</Text>
-                    <Text style={[styles.th, {width: 170}]}>Manual GPS</Text>
-                    <Text style={[styles.th, {width: 260}]}>Actions</Text>
-                    <Text style={[styles.th, {width: 140}]}>Status</Text>
-                  </View>
+                {/* Table Rows */}
+                {filteredServer.map((r, idx) => {
+                  const statusText = getStatusText(r);
+                  const statusColor = getStatusColor(statusText);
+                  const hidePills = shouldHidePills(r);
 
-                  {/* Rows */}
-                  {filteredServer.map((r, idx) => {
-                    const statusText = getStatusText(r);
-                    const hidePills = shouldHidePills(r);
-
-                    return (
-                      <View
-                        key={String(r.id ?? idx)}
-                        style={[styles.tr, idx % 2 === 0 ? styles.trEven : styles.trOdd]}>
-
-                        <Text style={[styles.td, {width: 70}]} numberOfLines={1}>
+                  return (
+                    <View
+                      key={String(r.id ?? idx)}
+                      style={[styles.tableRow, idx % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
+                      <View style={[styles.tdCell, {width: 80}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.id ?? '—')}
                         </Text>
+                      </View>
 
-                        <Text style={[styles.td, {width: 90}]} numberOfLines={1}>
+                      <View style={[styles.tdCell, {width: 90}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.rd_km ?? '—')}
                         </Text>
+                      </View>
 
-                        <Text style={[styles.td, {width: 120}]} numberOfLines={1}>
+                      <View style={[styles.tdCell, {width: 140}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r._speciesLabel ?? '—')}
                         </Text>
+                      </View>
 
-                        <Text style={[styles.td, {width: 120}]} numberOfLines={1}>
+                      <View style={[styles.tdCell, {width: 140}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r._conditionLabel ?? '—')}
                         </Text>
+                      </View>
 
-                        <Text style={[styles.td, {width: 110}]} numberOfLines={1}>
+                      <View style={[styles.tdCell, {width: 100}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.girth ?? '—')}
                         </Text>
+                      </View>
 
-                        <Text style={[styles.td, {width: 170}]} numberOfLines={1}>
+                      <View style={[styles.tdCell, {width: 180}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r._autoGps ?? '—')}
                         </Text>
+                      </View>
 
-                        <Text style={[styles.td, {width: 170}]} numberOfLines={1}>
+                      <View style={[styles.tdCell, {width: 180}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
                           {String(r._manualGps ?? '—')}
                         </Text>
-
-                        <View style={[styles.actionsCell, {width: 260}]}>
-                          {/* Edit (UI only) */}
-                          <TouchableOpacity onPress={() => openEditFormServer(r)} style={styles.iconBtn}>
-                            <Ionicons name="create-outline" size={18} color="#0ea5e9" />
-                          </TouchableOpacity>
-
-                          {/* Delete (no API yet) */}
-                          <TouchableOpacity
-                            onPress={() =>
-                              Alert.alert('Not available', 'Delete API is not provided yet.')
-                            }
-                            style={styles.iconBtn}>
-                            <Ionicons name="trash-outline" size={18} color="#ef4444" />
-                          </TouchableOpacity>
-
-                          {!hidePills && (
-                            <>
-                              <TouchableOpacity
-                                onPress={() =>
-                                  navigation.navigate(DISPOSAL_ROUTE, {treeId: r.id, enumeration})
-                                }
-                                style={[styles.smallPill, {backgroundColor: '#0f766e'}]}>
-                                <Text style={styles.smallPillText}>Dispose</Text>
-                              </TouchableOpacity>
-
-                              <TouchableOpacity
-                                onPress={() =>
-                                  navigation.navigate(SUPERDARI_ROUTE, {treeId: r.id, enumeration})
-                                }
-                                style={[styles.smallPill, {backgroundColor: '#7c3aed'}]}>
-                                <Text style={styles.smallPillText}>Superdari</Text>
-                              </TouchableOpacity>
-                            </>
-                          )}
-                        </View>
-
-                        <Text style={[styles.td, {width: 140}]} numberOfLines={1}>
-                          {statusText}
-                        </Text>
                       </View>
-                    );
-                  })}
-                </View>
-              </ScrollView>
-            )}
 
-            {activeFilterCount > 0 && (
-              <TouchableOpacity style={styles.clearAllBtn} onPress={clearAll}>
-                <Ionicons name="trash-outline" size={16} color="#fff" />
-                <Text style={styles.clearAllText}>Clear Search & Filters</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </ScrollView>
+                      <View style={[styles.tdCell, {width: 140}]}>
+                        <View style={[styles.statusBadge, {backgroundColor: `${statusColor}15`}]}>
+                          <View style={[styles.statusDot, {backgroundColor: statusColor}]} />
+                          <Text style={[styles.statusText, {color: statusColor}]}>{statusText}</Text>
+                        </View>
+                      </View>
 
-        {/* FAB */}
-        <TouchableOpacity style={styles.fab} onPress={openAddForm}>
-          <Ionicons name="add" size={26} color="#fff" />
-        </TouchableOpacity>
-      </ImageBackground>
+                      <View style={[styles.tdCell, styles.actionsCell, {width: 280}]}>
+                        <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
+                          <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
+                          <Text style={styles.actionButtonText}>Edit</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.actionButton, {backgroundColor: `${COLORS.danger}15`}]}
+                          onPress={() => Alert.alert('Not available', 'Delete API is not provided yet.')}>
+                          <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
+                          <Text style={[styles.actionButtonText, {color: COLORS.danger}]}>Delete</Text>
+                        </TouchableOpacity>
+
+                        {!hidePills && (
+                          <>
+                            <TouchableOpacity
+                              style={[styles.actionPill, {backgroundColor: COLORS.primaryDark}]}
+                              onPress={() => navigation.navigate(DISPOSAL_ROUTE, {treeId: r.id, enumeration})}>
+                              <Text style={styles.actionPillText}>Dispose</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={[styles.actionPill, {backgroundColor: COLORS.info}]}
+                              onPress={() => navigation.navigate(SUPERDARI_ROUTE, {treeId: r.id, enumeration})}>
+                              <Text style={styles.actionPillText}>Superdari</Text>
+                            </TouchableOpacity>
+                          </>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </ScrollView>
+
+      {/* Add Button */}
+      <TouchableOpacity style={styles.fab} onPress={openAddForm} activeOpacity={0.8}>
+        <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.fabGradient}>
+          <Ionicons name="add" size={28} color="#fff" />
+        </LinearGradient>
+      </TouchableOpacity>
 
       {/* Filters Modal */}
       <Modal
@@ -763,98 +980,105 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         visible={filterModalVisible}
         animationType="fade"
         onRequestClose={() => setFilterModalVisible(false)}>
-        <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
-          <View style={styles.actionOverlay} />
-        </TouchableWithoutFeedback>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
+            <View style={styles.modalBackdrop} />
+          </TouchableWithoutFeedback>
 
-        <View style={styles.filterCard}>
-          <View style={styles.filterHeader}>
-            <Text style={styles.filterTitle}>Filters</Text>
-            <TouchableOpacity onPress={() => setFilterModalVisible(false)}>
-              <Ionicons name="close" size={22} color="#111827" />
-            </TouchableOpacity>
+          <View style={styles.modalContainer}>
+            <LinearGradient colors={['#fff', '#f8fafc']} style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="filter" size={24} color={COLORS.primary} />
+                  <Text style={styles.modalTitle}>Advanced Filters</Text>
+                </View>
+                <TouchableOpacity style={styles.modalClose} onPress={() => setFilterModalVisible(false)}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+                <DropdownRow
+                  label={speciesLoading ? 'Species (Loading...)' : 'Species'}
+                  value={filters.species}
+                  onChange={v => setFilters(prev => ({...prev, species: v}))}
+                  options={speciesOptions}
+                  disabled={speciesLoading}
+                />
+
+                <DropdownRow
+                  label={conditionLoading ? 'Condition (Loading...)' : 'Condition'}
+                  value={filters.condition}
+                  onChange={v => setFilters(prev => ({...prev, condition: v}))}
+                  options={conditionOptions}
+                  disabled={conditionLoading}
+                />
+
+                <View style={styles.filterRow}>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Date From (YYYY-MM-DD)"
+                      value={filters.dateFrom}
+                      onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
+                      placeholder="2025-12-01"
+                    />
+                  </View>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Date To (YYYY-MM-DD)"
+                      value={filters.dateTo}
+                      onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
+                      placeholder="2025-12-31"
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.filterRow}>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="RD/KM From"
+                      value={filters.kmFrom}
+                      onChangeText={v => setFilters(prev => ({...prev, kmFrom: v}))}
+                      placeholder="e.g. 10"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="RD/KM To"
+                      value={filters.kmTo}
+                      onChangeText={v => setFilters(prev => ({...prev, kmTo: v}))}
+                      placeholder="e.g. 50"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.modalButtonSecondary}
+                    onPress={() =>
+                      setFilters({
+                        species: '',
+                        condition: '',
+                        dateFrom: '',
+                        dateTo: '',
+                        kmFrom: '',
+                        kmTo: '',
+                      })
+                    }>
+                    <Text style={styles.modalButtonSecondaryText}>Reset All</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.modalButtonPrimary}
+                    onPress={() => setFilterModalVisible(false)}>
+                    <Text style={styles.modalButtonPrimaryText}>Apply Filters</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </LinearGradient>
           </View>
-
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <DropdownRow
-              label={speciesLoading ? 'Species (Loading...)' : 'Species'}
-              value={filters.species}
-              onChange={v => setFilters(prev => ({...prev, species: v}))}
-              options={speciesOptions}
-              disabled={speciesLoading}
-            />
-
-            <DropdownRow
-              label={conditionLoading ? 'Condition (Loading...)' : 'Condition'}
-              value={filters.condition}
-              onChange={v => setFilters(prev => ({...prev, condition: v}))}
-              options={conditionOptions}
-              disabled={conditionLoading}
-            />
-
-            <View style={{flexDirection: 'row', gap: 10}}>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="Saved Date From (YYYY-MM-DD)"
-                  value={filters.dateFrom}
-                  onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
-                  placeholder="2025-12-01"
-                />
-              </View>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="Saved Date To (YYYY-MM-DD)"
-                  value={filters.dateTo}
-                  onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
-                  placeholder="2025-12-31"
-                />
-              </View>
-            </View>
-
-            <View style={{flexDirection: 'row', gap: 10}}>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="RD/KM From"
-                  value={filters.kmFrom}
-                  onChangeText={v => setFilters(prev => ({...prev, kmFrom: v}))}
-                  placeholder="e.g. 10"
-                  keyboardType="numeric"
-                />
-              </View>
-              <View style={{flex: 1}}>
-                <FormRow
-                  label="RD/KM To"
-                  value={filters.kmTo}
-                  onChangeText={v => setFilters(prev => ({...prev, kmTo: v}))}
-                  placeholder="e.g. 50"
-                  keyboardType="numeric"
-                />
-              </View>
-            </View>
-
-            <View style={{flexDirection: 'row', gap: 10, marginTop: 10}}>
-              <TouchableOpacity
-                style={styles.filterApply}
-                onPress={() => setFilterModalVisible(false)}>
-                <Text style={styles.filterApplyText}>Apply</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.filterClear}
-                onPress={() =>
-                  setFilters({
-                    species: '',
-                    condition: '',
-                    dateFrom: '',
-                    dateTo: '',
-                    kmFrom: '',
-                    kmTo: '',
-                  })
-                }>
-                <Text style={styles.filterClearText}>Clear</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
         </View>
       </Modal>
 
@@ -864,95 +1088,90 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         transparent
         animationType="slide"
         onRequestClose={() => setModalVisible(false)}>
-        <View style={styles.modalRoot}>
-          <TouchableWithoutFeedback onPress={() => {}}>
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>
-                  {isEdit ? `Edit (Server ID: ${editingServerId ?? '—'})` : 'Add Mature Tree'}
-                </Text>
-                <TouchableOpacity onPress={() => setModalVisible(false)}>
-                  <Ionicons name="close" size={24} color="#111827" />
+        <View style={styles.editModalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.editModalContainer}>
+            <LinearGradient colors={['#fff', '#f8fafc']} style={styles.editModalContent}>
+              <View style={styles.editModalHeader}>
+                <View>
+                  <Text style={styles.editModalTitle}>{isEdit ? 'Edit Tree Record' : 'Add New Tree'}</Text>
+                  {isEdit && editingServerId && (
+                    <Text style={styles.editModalSubtitle}>ID: {editingServerId}</Text>
+                  )}
+                </View>
+                <TouchableOpacity style={styles.editModalClose} onPress={() => setModalVisible(false)}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
                 </TouchableOpacity>
               </View>
 
-              <KeyboardAvoidingView
-                style={{flex: 1}}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}>
-                <ScrollView
-                  style={{flex: 1}}
-                  contentContainerStyle={{paddingBottom: 16}}
-                  keyboardShouldPersistTaps="handled"
-                  showsVerticalScrollIndicator={false}>
+              <ScrollView
+                style={styles.editModalBody}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled">
+                <FormRow label="RD/KM" value={rdKm} onChangeText={setRdKm} />
 
-                  <FormRow label="RD/KM" value={rdKm} onChangeText={setRdKm} />
+                <DropdownRow
+                  label={speciesLoading ? 'Species (Loading...)' : 'Species'}
+                  value={species}
+                  onChange={name => {
+                    setSpecies(name);
+                    const row = speciesRows.find(x => x.name === name);
+                    setSpeciesId(row?.id ?? null);
+                  }}
+                  options={speciesOptions}
+                  disabled={speciesLoading}
+                  required
+                />
 
-                  {/* ✅ DropdownRow uses STRING value + STRING[] options */}
-                  <DropdownRow
-                    label={speciesLoading ? 'Species (Loading...)' : 'Species'}
-                    value={species}
-                    onChange={name => {
-                      setSpecies(name);
-                      const row = speciesRows.find(x => x.name === name);
-                      setSpeciesId(row?.id ?? null);
-                    }}
-                    options={speciesOptions}
-                    disabled={speciesLoading}
-                    required
-                  />
+                <FormRow label="Girth" value={girth} onChangeText={setGirth} placeholder='e.g. "24 inches"' />
 
-                  <FormRow
-                    label="Girth"
-                    value={girth}
-                    onChangeText={setGirth}
-                    placeholder='e.g. "24 inches"'
-                  />
+                <DropdownRow
+                  label={conditionLoading ? 'Condition (Loading...)' : 'Condition'}
+                  value={condition}
+                  onChange={name => {
+                    setCondition(name);
+                    const row = conditionRows.find(x => x.name === name);
+                    setConditionId(row?.id ?? null);
+                  }}
+                  options={conditionOptions}
+                  disabled={conditionLoading}
+                  required
+                />
 
-                  <DropdownRow
-                    label={conditionLoading ? 'Condition (Loading...)' : 'Condition'}
-                    value={condition}
-                    onChange={name => {
-                      setCondition(name);
-                      const row = conditionRows.find(x => x.name === name);
-                      setConditionId(row?.id ?? null);
-                    }}
-                    options={conditionOptions}
-                    disabled={conditionLoading}
-                    required
-                  />
+                {/* GPS Section */}
+                <View style={styles.gpsSection}>
+                  <Text style={styles.sectionLabel}>Location Coordinates</Text>
 
-                  {/* Auto GPS */}
-                  <View style={styles.gpsBox}>
-                    <View
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}>
+                  <View style={styles.gpsAutoCard}>
+                    <View style={styles.gpsHeader}>
                       <Text style={styles.gpsLabel}>Auto Coordinates</Text>
-                      <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
+                      <View style={styles.gpsStatus}>
                         {!!gpsSource && (
-                          <View style={styles.gpsChip}>
-                            <Text style={styles.gpsChipText}>{gpsSource}</Text>
+                          <View style={styles.gpsSource}>
+                            <Text style={styles.gpsSourceText}>{gpsSource}</Text>
                           </View>
                         )}
-                        {gpsFetching && <Text style={styles.gpsSmall}>Fetching…</Text>}
+                        {gpsFetching && (
+                          <View style={styles.gpsLoading}>
+                            <Ionicons name="refresh" size={14} color={COLORS.warning} />
+                            <Text style={styles.gpsLoadingText}>Fetching...</Text>
+                          </View>
+                        )}
                       </View>
                     </View>
 
-                    <Text style={styles.gpsValue}>{gpsAuto ? gpsAuto : '—'}</Text>
+                    <Text style={styles.gpsValue}>{gpsAuto || '—'}</Text>
 
-                    <View style={{flexDirection: 'row', gap: 10, marginTop: 10}}>
+                    <View style={styles.gpsButtons}>
                       <TouchableOpacity
-                        style={[styles.gpsBtn, {opacity: gpsFetching ? 0.6 : 1}]}
+                        style={[styles.gpsButton, gpsFetching && styles.gpsButtonDisabled]}
                         disabled={gpsFetching}
                         onPress={() => fetchLocationSmart()}>
-                        <Text style={styles.gpsBtnText}>Auto Fetch</Text>
+                        <Ionicons name="locate" size={16} color="#fff" />
+                        <Text style={styles.gpsButtonText}>Auto Fetch</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
-                        style={styles.gpsBtnAlt}
+                        style={[styles.gpsButton, styles.gpsButtonAlt]}
                         onPress={() => {
                           setGpsFetching(true);
                           Geolocation.getCurrentPosition(
@@ -971,13 +1190,14 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                             {enableHighAccuracy: true, timeout: 18000, maximumAge: 5000},
                           );
                         }}>
-                        <Text style={styles.gpsBtnAltText}>Use GPS</Text>
+                        <Ionicons name="navigate" size={16} color="#fff" />
+                        <Text style={styles.gpsButtonText}>High Accuracy</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
 
                   <FormRow
-                    label="Coordinates (Manual) lat, long"
+                    label="Manual Coordinates (lat, long)"
                     value={gpsManual}
                     onChangeText={t => {
                       setGpsManual(t);
@@ -986,38 +1206,89 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     placeholder="e.g. 31.520370, 74.358749"
                   />
 
-                  <View style={styles.finalGpsRow}>
+                  <View style={styles.finalGpsPreview}>
                     <Text style={styles.finalGpsLabel}>Will Save:</Text>
                     <Text style={styles.finalGpsValue}>
-                      {(gpsManual || '').trim() || (gpsAuto || '').trim() || '—'}
+                      {(gpsManual || '').trim() || (gpsAuto || '').trim() || 'No coordinates'}
                     </Text>
                   </View>
-
-                  <TouchableOpacity style={styles.imageBtn} onPress={pickImage}>
-                    <Text style={styles.imageBtnText}>
-                      Pick Image (local) — API sends http://test.com/tree1.jpg
-                    </Text>
-                  </TouchableOpacity>
-
-                  {!!pictureUri && (
-                    <Text style={{marginTop: 8, fontSize: 12, color: '#6b7280'}}>
-                      Selected (local): {pictureUri}
-                    </Text>
-                  )}
-                </ScrollView>
-
-                <View style={styles.modalFooter}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
-                    <Text style={styles.cancelText}>Cancel</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity style={styles.saveBtn} onPress={saveRecord}>
-                    <Text style={styles.saveText}>Save</Text>
-                  </TouchableOpacity>
                 </View>
-              </KeyboardAvoidingView>
-            </View>
-          </TouchableWithoutFeedback>
+
+                {/* ✅ Image Section (tree-enum upload integration) */}
+                <View style={styles.imageSection}>
+                  <TouchableOpacity style={styles.imageButton} onPress={pickImage} disabled={uploadingImages}>
+                    <Ionicons name="image-outline" size={24} color={COLORS.primary} />
+                    <View style={styles.imageButtonContent}>
+                      <Text style={styles.imageButtonTitle}>
+                        {pictureAssets.length ? 'Change Images' : 'Select Images'}
+                      </Text>
+                      <Text style={styles.imageButtonSubtitle}>
+                        Upload API: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName: {TREE_ENUM_FILE_NAME}
+                      </Text>
+                    </View>
+
+                    {uploadingImages && (
+                      <View style={styles.inlineLoader}>
+                        <ActivityIndicator size="small" color={COLORS.primary} />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+
+                  {!!pictureAssets?.length && (
+                    <View style={styles.imagePreview}>
+                      <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                      <Text style={styles.imagePreviewText} numberOfLines={1}>
+                        Selected: {pictureAssets.length} image(s)
+                      </Text>
+                    </View>
+                  )}
+
+                  {!!uploadedImageUrls?.length && (
+                    <View style={styles.uploadedPreview}>
+                      <Ionicons name="cloud-done-outline" size={16} color={COLORS.info} />
+                      <Text style={styles.uploadedPreviewText} numberOfLines={2}>
+                        Uploaded: {uploadedImageUrls.length} file(s)
+                      </Text>
+                    </View>
+                  )}
+
+                  {!!pictureAssets?.length && !uploadedImageUrls?.length && (
+                    <View style={styles.imageHint}>
+                      <Ionicons name="information-circle-outline" size={16} color={COLORS.textLight} />
+                      <Text style={styles.imageHintText}>
+                        Images will upload automatically when you press “Save Record”.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </ScrollView>
+
+              <View style={styles.editModalFooter}>
+                <TouchableOpacity style={styles.footerButtonSecondary} onPress={() => setModalVisible(false)}>
+                  <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.footerButtonPrimary, uploadingImages && {opacity: 0.7}]}
+                  disabled={uploadingImages}
+                  onPress={saveRecord}>
+                  <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.footerButtonGradient}>
+                    {uploadingImages ? (
+                      <>
+                        <ActivityIndicator size="small" color="#fff" />
+                        <Text style={styles.footerButtonPrimaryText}>Uploading...</Text>
+                      </>
+                    ) : (
+                      <>
+                        <Ionicons name="save-outline" size={20} color="#fff" />
+                        <Text style={styles.footerButtonPrimaryText}>{isEdit ? 'Update' : 'Save Record'}</Text>
+                      </>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </LinearGradient>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
     </View>
@@ -1025,246 +1296,392 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 }
 
 const styles = StyleSheet.create({
-  screen: {flex: 1},
-  background: {flex: 1},
-  overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16,185,129,0.1)'},
+  // Base
+  screen: {flex: 1, backgroundColor: COLORS.background},
+  container: {flex: 1},
+  contentContainer: {paddingBottom: 100},
 
-  header: {
-    padding: 20,
-    paddingTop: 50,
-    backgroundColor: 'rgba(16,185,129,0.85)',
-    flexDirection: 'row',
-    gap: 12,
+  // Header
+  headerGradient: {
+    paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 20,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    elevation: 8,
+    shadowColor: COLORS.primary,
+    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
   },
+  header: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
   backButton: {
-    padding: 8,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.20)',
-    marginTop: 2,
-  },
-  headerTitle: {fontSize: 22, fontWeight: '800', color: '#fff'},
-  headerSubtitle: {fontSize: 13, color: '#e5e7eb', marginTop: 2},
-  headerSubtitle2: {fontSize: 12, color: '#d1fae5', marginTop: 2, fontWeight: '700'},
-
-  section: {margin: 16},
-  sectionHead: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 10,
-  },
-  sectionTitle: {fontSize: 18, fontWeight: '700', color: '#ffffff'},
-  sectionMeta: {fontSize: 12, fontWeight: '800', color: '#ffffff'},
-  emptyText: {fontSize: 13, color: '#6b7280'},
-
-  errorBox: {
-    backgroundColor: 'rgba(239,68,68,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(239,68,68,0.35)',
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 10,
-  },
-  errorText: {color: '#7f1d1d', fontWeight: '800'},
-  retryBtn: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    backgroundColor: '#ef4444',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  retryText: {color: '#fff', fontWeight: '900'},
-
-  searchFilterRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12},
-  searchBox: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    height: 44,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  searchInput: {flex: 1, fontSize: 14, color: '#111827'},
-  filterBtn: {
     width: 44,
     height: 44,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  filterBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#ef4444',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  filterBadgeText: {color: '#fff', fontSize: 11, fontWeight: '900'},
-
-  tableWrap: {
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
     borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  headerContent: {flex: 1},
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
+  infoChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 4,
+  },
+  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
+  siteId: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.9)',
+    letterSpacing: 0.3,
+  },
+  headerAction: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  headerBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: COLORS.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+  },
+  headerBadgeText: {color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4},
+
+  // Search
+  searchSection: {paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16},
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    height: 56,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  searchIcon: {marginRight: 12},
+  searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
+  searchClear: {padding: 4},
+
+  // Stats Card
+  statsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  statItem: {flex: 1, alignItems: 'center'},
+  statValue: {fontSize: 24, fontWeight: '800', color: COLORS.primary, marginBottom: 4},
+  statLabel: {fontSize: 12, fontWeight: '600', color: COLORS.textLight},
+  statDivider: {width: 1, height: 40, backgroundColor: COLORS.border},
+
+  // Error Card
+  errorCard: {
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+  },
+  errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
+  errorTitle: {fontSize: 16, fontWeight: '700', color: COLORS.danger},
+  errorMessage: {fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: 12},
+  errorButton: {backgroundColor: COLORS.danger, borderRadius: 12, paddingVertical: 12, alignItems: 'center'},
+  errorButtonText: {color: '#fff', fontSize: 14, fontWeight: '700'},
+
+  // Section
+  section: {marginHorizontal: 20, marginBottom: 20},
+  sectionHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
+  sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
+  sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+
+  // Empty State
+  emptyState: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 40,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderStyle: 'dashed',
+  },
+  emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
+  emptyText: {fontSize: 14, color: COLORS.textLight, textAlign: 'center', marginBottom: 20, lineHeight: 20},
+  emptyAction: {backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12},
+  emptyActionText: {color: '#fff', fontSize: 14, fontWeight: '700'},
+
+  // Table
+  tableContainer: {borderRadius: 16, overflow: 'hidden'},
+  table: {
+    borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  tr: {
+  tableHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    minHeight: 44,
+    borderBottomColor: COLORS.border,
+    minHeight: 56,
   },
-  thRow: {
-    backgroundColor: 'rgba(14, 165, 233, 0.15)',
-    borderBottomWidth: 1,
-    borderBottomColor: '#cbd5e1',
-  },
-  th: {paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontWeight: '800', color: '#0f172a'},
-  td: {paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontWeight: '600', color: '#111827'},
-  trEven: {backgroundColor: '#ffffff'},
-  trOdd: {backgroundColor: 'rgba(2, 132, 199, 0.04)'},
-
-  actionsCell: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-  },
-  iconBtn: {padding: 6, borderRadius: 10, backgroundColor: 'rgba(15,23,42,0.04)'},
-  smallPill: {paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999},
-  smallPillText: {color: '#fff', fontWeight: '800', fontSize: 11},
-
-  clearAllBtn: {
-    marginTop: 10,
-    backgroundColor: '#ef4444',
-    borderRadius: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
+  thCell: {
+    paddingHorizontal: 12,
     justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
+    borderRightWidth: 1,
+    borderRightColor: COLORS.border,
   },
-  clearAllText: {color: '#fff', fontWeight: '900'},
+  thText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.text,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
+  rowEven: {backgroundColor: '#fff'},
+  rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
+  tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
+  tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  statusDot: {width: 8, height: 8, borderRadius: 4},
+  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5},
+  actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(14, 165, 233, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+  },
+  actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
+  actionPill: {paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20},
+  actionPillText: {fontSize: 12, fontWeight: '700', color: '#fff'},
 
+  // FAB
   fab: {
     position: 'absolute',
     right: 20,
     bottom: 30,
-    backgroundColor: colors.primary,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    shadowColor: COLORS.primary,
+    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  fabGradient: {width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center'},
+
+  // Filter Modal
+  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
+  modalBackdrop: {...StyleSheet.absoluteFillObject},
+  modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
+  modalContent: {
+    borderRadius: 24,
+    overflow: 'hidden',
+    maxHeight: height * 0.8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 10},
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
+  modalTitle: {fontSize: 20, fontWeight: '800', color: COLORS.text},
+  modalClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  actionOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.35)'},
-  filterCard: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    top: '14%',
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    elevation: 12,
-    maxHeight: '78%',
-  },
-  filterHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  filterTitle: {fontSize: 16, fontWeight: '900', color: '#111827'},
-  filterApply: {
+  modalBody: {padding: 20},
+  filterRow: {flexDirection: 'row', gap: 12, marginBottom: 16},
+  filterColumn: {flex: 1},
+  modalActions: {flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 20},
+  modalButtonSecondary: {
     flex: 1,
-    backgroundColor: colors.primary,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  filterApplyText: {color: '#fff', fontWeight: '900'},
-  filterClear: {
-    flex: 1,
-    backgroundColor: '#f3f4f6',
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  filterClearText: {color: '#111827', fontWeight: '900'},
-
-  modalRoot: {flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', paddingVertical: 18},
-  modalCard: {
-    backgroundColor: '#fff',
-    marginHorizontal: 16,
-    borderRadius: 20,
-    padding: 16,
-    height: '90%',
-  },
-  modalTitle: {fontSize: 16, fontWeight: '800'},
-  modalHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10},
-  modalFooter: {borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingTop: 12, flexDirection: 'row', gap: 10},
-  cancelBtn: {flex: 1, backgroundColor: '#f3f4f6', paddingVertical: 14, borderRadius: 14, alignItems: 'center'},
-  cancelText: {color: '#111827', fontWeight: '900'},
-  saveBtn: {flex: 1, backgroundColor: colors.primary, paddingVertical: 14, borderRadius: 14, alignItems: 'center'},
-  saveText: {color: '#fff', fontWeight: '800'},
-
-  gpsBox: {
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    paddingVertical: 16,
     borderRadius: 14,
-    padding: 12,
-    backgroundColor: '#fafafa',
-  },
-  gpsLabel: {fontSize: 12, fontWeight: '900', color: '#111827'},
-  gpsValue: {marginTop: 6, fontSize: 14, fontWeight: '700', color: '#111827'},
-  gpsSmall: {fontSize: 12, color: '#6b7280', fontWeight: '700'},
-  gpsChip: {backgroundColor: 'rgba(16,185,129,0.15)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4},
-  gpsChipText: {fontSize: 11, fontWeight: '900', color: '#065f46'},
-  gpsBtn: {flex: 1, backgroundColor: colors.primary, paddingVertical: 10, borderRadius: 12, alignItems: 'center'},
-  gpsBtnText: {color: '#fff', fontWeight: '900'},
-  gpsBtnAlt: {flex: 1, backgroundColor: '#111827', paddingVertical: 10, borderRadius: 12, alignItems: 'center'},
-  gpsBtnAltText: {color: '#fff', fontWeight: '900'},
-
-  finalGpsRow: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    padding: 10,
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  finalGpsLabel: {fontSize: 12, fontWeight: '900', color: '#111827'},
-  finalGpsValue: {fontSize: 12, fontWeight: '800', color: '#111827'},
+  modalButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  modalButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  modalButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
 
-  imageBtn: {
-    marginTop: 10,
-    backgroundColor: colors.primary,
-    padding: 10,
-    borderRadius: 999,
-    alignSelf: 'flex-start',
+  // Edit Modal
+  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
+  editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
+  editModalContent: {flex: 1, borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border},
+  editModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: 24,
+    paddingTop: 28,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
   },
-  imageBtnText: {color: '#fff', fontWeight: '700'},
+  editModalTitle: {fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4},
+  editModalSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  editModalClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
+  editModalFooter: {flexDirection: 'row', gap: 12, paddingHorizontal: 24, paddingVertical: 20, borderTopWidth: 1, borderTopColor: COLORS.border},
+  footerButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  footerButtonPrimary: {flex: 2, borderRadius: 14, overflow: 'hidden'},
+  footerButtonGradient: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8},
+  footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+
+  // GPS Section
+  gpsSection: {marginTop: 20},
+  sectionLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5},
+  gpsAutoCard: {backgroundColor: 'rgba(5, 150, 105, 0.03)', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.1)', marginBottom: 16},
+  gpsHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8},
+  gpsLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text},
+  gpsStatus: {flexDirection: 'row', alignItems: 'center', gap: 8},
+  gpsSource: {backgroundColor: 'rgba(5, 150, 105, 0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12},
+  gpsSourceText: {fontSize: 12, fontWeight: '800', color: COLORS.primary},
+  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 4},
+  gpsLoadingText: {fontSize: 12, fontWeight: '600', color: COLORS.warning},
+  gpsValue: {fontSize: 16, fontWeight: '700', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 12},
+  gpsButtons: {flexDirection: 'row', gap: 12},
+  gpsButton: {flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, paddingVertical: 12, borderRadius: 12, gap: 8},
+  gpsButtonDisabled: {opacity: 0.6},
+  gpsButtonText: {fontSize: 14, fontWeight: '700', color: '#fff'},
+  gpsButtonAlt: {backgroundColor: COLORS.text},
+  finalGpsPreview: {flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, padding: 12, marginTop: 16},
+  finalGpsLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text, marginRight: 8},
+  finalGpsValue: {flex: 1, fontSize: 14, fontWeight: '600', color: COLORS.primary, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+
+  // Image Section
+  imageSection: {marginTop: 20},
+  imageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+    borderRadius: 16,
+    padding: 16,
+    gap: 12,
+  },
+  imageButtonContent: {flex: 1},
+  imageButtonTitle: {fontSize: 16, fontWeight: '700', color: COLORS.primary, marginBottom: 4},
+  imageButtonSubtitle: {fontSize: 12, color: COLORS.textLight},
+  inlineLoader: {paddingLeft: 8},
+  imagePreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(22, 163, 74, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(22, 163, 74, 0.2)',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    gap: 8,
+  },
+  imagePreviewText: {flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.success, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+  uploadedPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(124, 58, 237, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(124, 58, 237, 0.18)',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    gap: 8,
+  },
+  uploadedPreviewText: {flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.info},
+  imageHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#fff',
+  },
+  imageHintText: {flex: 1, fontSize: 12, color: COLORS.textLight, lineHeight: 16},
 });

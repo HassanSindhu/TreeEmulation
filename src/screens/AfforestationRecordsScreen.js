@@ -1,9 +1,8 @@
 // /screens/AfforestationRecordsScreen.js
-// ✅ Professional UI Update + ✅ PATCH Edit Curl Integrated
-// ✅ NO Remark field in form
-// ✅ Auto GPS fetch also fills manual coordinate automatically
-// ✅ Actions (Edit/Delete) ONLY visible when status is "disapproved"
-// ✅ If there are NO disapproved records in the filtered list, the Actions column is hidden entirely
+// ✅ Updated with correct status workflow
+// ✅ Clickable rejection status with remarks popup
+// ✅ Edit button only on rejected status
+// ✅ Status flow: Guard → Block Officer → SDFO → DFO → Surveyor → Final Approved
 
 import React, {useCallback, useMemo, useRef, useState, useEffect} from 'react';
 import {
@@ -21,6 +20,7 @@ import {
   ActivityIndicator,
   Dimensions,
   StatusBar,
+  RefreshControl,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -33,7 +33,6 @@ import FormRow from '../components/FormRow';
 import {DropdownRow} from '../components/SelectRows';
 
 const {height} = Dimensions.get('window');
-const CACHE_KEY = 'AFFORESTATION_CACHE_BY_SITE';
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
@@ -89,11 +88,19 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   // ---------- STATE ----------
   const [records, setRecords] = useState([]);
   const [listLoading, setListLoading] = useState(false);
+  const [serverRefreshing, setServerRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
 
-  // ✅ editingId now stores SERVER ID for PATCH
+  // ✅ editingId stores SERVER ID for PATCH
   const [editingId, setEditingId] = useState(null);
+
+  // ✅ Rejection popup state
+  const [rejectionModal, setRejectionModal] = useState({
+    visible: false,
+    rejectedBy: '',
+    remarks: '',
+  });
 
   const [search, setSearch] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
@@ -102,7 +109,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     dateTo: '',
     year: '',
     schemeType: '',
-    status: '',
+    status: '', // New status filter
     successFrom: '',
     successTo: '',
     plantsFrom: '',
@@ -132,6 +139,138 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   const [uploading, setUploading] = useState(false);
 
   const lastGpsRequestAtRef = useRef(0);
+
+  // ---------- STATUS / UI RULES ----------
+  const hasAny = v => Array.isArray(v) && v.length > 0;
+
+  const normalizeRole = role => {
+    const r = String(role || '').trim().toLowerCase();
+    if (!r) return '';
+    if (r.includes('block')) return 'Block Officer';
+    if (r.includes('sdfo')) return 'SDFO';
+    if (r.includes('dfo')) return 'DFO';
+    if (r.includes('survey')) return 'Surveyor';
+    if (r.includes('guard') || r.includes('beat')) return 'Guard';
+    return String(role || '').trim();
+  };
+
+  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO', 'Surveyor'];
+
+  const nextRole = currentRole => {
+    const idx = ROLE_ORDER.indexOf(currentRole);
+    return idx >= 0 ? ROLE_ORDER[idx + 1] || null : null;
+  };
+
+  /**
+   * Flow for Afforestation:
+   * Guard -> Block Officer -> SDFO -> DFO -> Surveyor -> Final Approved
+   * Reject => goes back to Guard with remarks; Edit shows, user can resubmit.
+   */
+  const deriveRowUi = r => {
+    // For afforestation, we use verification array and latestStatus
+    const verificationArray = Array.isArray(r?.verification) ? r.verification : [];
+    const latestStatus = r?.latestStatus || null;
+
+    const actionRaw = String(latestStatus?.action || '').trim();
+    const action = actionRaw.toLowerCase(); // rejected / verified
+    const byRole = normalizeRole(latestStatus?.user_role || '');
+    const byDesignation = String(latestStatus?.designation || '').trim();
+    const remarks = String(latestStatus?.remarks || '').trim();
+
+    // No status yet
+    if (!latestStatus || !actionRaw) {
+      return {
+        statusText: 'Pending (Block Officer)',
+        statusColor: COLORS.textLight,
+        showEdit: false,
+        showPills: false,
+        rowAccent: null,
+        isRejected: false,
+        _action: actionRaw,
+        _remarks: remarks,
+      };
+    }
+
+    if (action === 'rejected') {
+      const rejectBy = byDesignation || byRole || 'Officer';
+      return {
+        statusText: `Rejected by ${rejectBy}`,
+        statusColor: COLORS.danger,
+        showEdit: true, // only rejected returns to Guard
+        showPills: false,
+        rowAccent: 'rejected',
+        isRejected: true, // ✅ clickable to show remarks popup
+        _remarks: remarks,
+        _rejectedBy: rejectBy,
+        _action: actionRaw,
+      };
+    }
+
+    // treat verified same as approved in the workflow
+    if (action === 'verified') {
+      const approver = byRole || 'Block Officer';
+      const nxt = nextRole(approver);
+
+      // Surveyor approved => final
+      if (!nxt) {
+        return {
+          statusText: 'Final Approved',
+          statusColor: COLORS.success,
+          showEdit: false,
+          showPills: false,
+          rowAccent: null,
+          isRejected: false,
+          _action: actionRaw,
+          _remarks: remarks,
+        };
+      }
+
+      return {
+        statusText: `Verified • Pending (${nxt})`,
+        statusColor: COLORS.warning,
+        showEdit: false,
+        showPills: false,
+        rowAccent: null,
+        isRejected: false,
+        _action: actionRaw,
+        _remarks: remarks,
+      };
+    }
+
+    // For any other status
+    return {
+      statusText: actionRaw || 'Pending',
+      statusColor: COLORS.textLight,
+      showEdit: false,
+      showPills: false,
+      rowAccent: null,
+      isRejected: false,
+      _action: actionRaw,
+      _remarks: remarks,
+    };
+  };
+
+  // ✅ Rejection popup open/close
+  const openRejectionPopup = row => {
+    const ui = deriveRowUi(row);
+    if (!ui.isRejected) return;
+
+    setRejectionModal({
+      visible: true,
+      rejectedBy: ui._rejectedBy || 'Officer',
+      remarks: ui._remarks || 'No remarks provided.',
+    });
+  };
+
+  const closeRejectionPopup = () => {
+    setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
+  };
+
+  // ✅ Only show Edit if status is rejected
+  const isRejectedStatus = record => {
+    const ui = deriveRowUi(record);
+    return ui.isRejected;
+  };
 
   // ---------- HELPERS ----------
   const normalizeList = json => {
@@ -208,12 +347,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     if (!m) return null;
     const n = Number(m[0]);
     return Number.isFinite(n) ? n : null;
-  };
-
-  // ✅ Only show Edit/Delete if status is disapproved
-  const isDisapprovedStatus = st => {
-    const s = String(st || '').trim().toLowerCase();
-    return s === 'disapproved'; // strict as requested
   };
 
   // ✅ Helper: fill auto GPS into the last manual coordinate
@@ -358,9 +491,11 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       species_ids,
       species_names,
 
-      status: raw?.status || 'pending',
+      // ✅ Use verification and latestStatus from API
+      verification: Array.isArray(raw?.verification) ? raw.verification : [],
+      latestStatus: raw?.latestStatus || null,
+
       createdAt: raw?.created_at || raw?.createdAt || new Date().toISOString(),
-      lastSubmitStatus: raw?.lastSubmitStatus || 'SERVER',
       serverRaw: raw,
 
       pictures,
@@ -369,16 +504,16 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     };
   };
 
-  const cacheKeyForSite = siteId => `${CACHE_KEY}:${siteId}`;
-
-  const fetchAfforestationList = useCallback(async () => {
+  // ✅ REALTIME ONLY: No cache fallback, always fetch server
+  const fetchAfforestationList = useCallback(async ({refresh = false} = {}) => {
     if (!nameOfSiteId) {
       setRecords([]);
       return;
     }
 
     try {
-      setListLoading(true);
+      refresh ? setServerRefreshing(true) : setListLoading(true);
+
       const token = await getAuthToken();
       if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
@@ -400,24 +535,17 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       const rows = normalizeList(json);
       const normalized = rows.map(normalizeApiRecord);
       setRecords(normalized);
-      await AsyncStorage.setItem(cacheKeyForSite(nameOfSiteId), JSON.stringify(normalized));
     } catch (e) {
-      try {
-        const cached = await AsyncStorage.getItem(cacheKeyForSite(nameOfSiteId));
-        const arr = cached ? JSON.parse(cached) : [];
-        setRecords(Array.isArray(arr) ? arr : []);
-      } catch (ignored) {
-        setRecords([]);
-      }
+      setRecords([]);
       Alert.alert('Load Failed', e?.message || 'Failed to load records from server.');
     } finally {
-      setListLoading(false);
+      refresh ? setServerRefreshing(false) : setListLoading(false);
     }
   }, [nameOfSiteId]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchAfforestationList();
+      fetchAfforestationList({refresh: true});
     }, [fetchAfforestationList]),
   );
 
@@ -471,9 +599,9 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   };
 
   const openEditForm = record => {
-    // ✅ Guard: only allow edit when disapproved
-    if (!isDisapprovedStatus(record?.status)) {
-      Alert.alert('Not Allowed', 'You can edit/delete only when status is disapproved.');
+    // ✅ Guard: only allow edit when rejected
+    if (!isRejectedStatus(record)) {
+      Alert.alert('Not Allowed', 'You can edit only when status is Rejected.');
       return;
     }
 
@@ -704,41 +832,17 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       if (isEdit) {
         if (!editingId) throw new Error('Edit ID missing. Cannot PATCH without record id.');
         await submitAfforestationToApi(apiBody, {isEditMode: true, editId: editingId});
+        Alert.alert('Success', 'Record updated and resubmitted successfully.');
       } else {
         await submitAfforestationToApi(apiBody, {isEditMode: false});
+        Alert.alert('Success', 'Saved to server.');
       }
 
-      Alert.alert('Success', isEdit ? 'Updated on server successfully.' : 'Saved to server successfully.');
       setModalVisible(false);
-      fetchAfforestationList();
+      fetchAfforestationList({refresh: true});
     } catch (e) {
       Alert.alert('Submit Failed', e?.message || 'Server submit failed.');
     }
-  };
-
-  const deleteRecord = recordId => {
-    Alert.alert(
-      'Delete',
-      'This will remove the record from app cache only (no server delete API provided). Continue?',
-      [
-        {text: 'Cancel', style: 'cancel'},
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const updated = records.filter(r => r.id !== recordId);
-              setRecords(updated);
-              if (nameOfSiteId) {
-                await AsyncStorage.setItem(cacheKeyForSite(nameOfSiteId), JSON.stringify(updated));
-              }
-            } catch (e) {
-              Alert.alert('Error', 'Failed to remove. Please try again.');
-            }
-          },
-        },
-      ],
-    );
   };
 
   // ---------- FILTERS ----------
@@ -777,7 +881,13 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     const aT = filters.avgTo !== '' ? Number(filters.avgTo) : null;
 
     return records.filter(r => {
-      if (filters.status && (r.status || 'pending') !== filters.status) return false;
+      // Status filter (using derived status text)
+      if (filters.status) {
+        const ui = deriveRowUi(r);
+        const statusMatch = ui.statusText.toLowerCase().includes(filters.status.toLowerCase());
+        if (!statusMatch) return false;
+      }
+
       if (filters.year && r.year !== filters.year) return false;
       if (filters.schemeType && r.schemeType !== filters.schemeType) return false;
 
@@ -814,7 +924,10 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         Array.isArray(r.gpsBoundingBox) && r.gpsBoundingBox.length ? r.gpsBoundingBox.join(' | ') : '';
       const picsText = Array.isArray(r.pictures) ? r.pictures.join(' ') : '';
 
+      const ui = deriveRowUi(r);
+
       const blob = [
+        r.serverId,
         r.year,
         r.schemeType,
         r.projectName,
@@ -825,8 +938,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         r.autoGpsLatLong,
         gpsText,
         Array.isArray(r.species_ids) ? r.species_ids.join(',') : '',
-        r.status,
-        r.lastSubmitStatus,
+        ui.statusText,
         picsText,
       ]
         .filter(Boolean)
@@ -837,13 +949,18 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     });
   }, [records, search, filters]);
 
-  // ✅ Show Actions column ONLY if there is at least one disapproved record in filtered list
+  // ✅ Show Actions column ONLY if at least one rejected record in filtered list
   const showActionsColumn = useMemo(() => {
-    return filteredRecords.some(r => isDisapprovedStatus(r.status));
+    const hasRejected = filteredRecords.some(r => {
+      const ui = deriveRowUi(r);
+      return ui.isRejected;
+    });
+    return hasRejected;
   }, [filteredRecords]);
 
   const tableColumns = useMemo(() => {
     const base = [
+      {label: 'ID', width: 80},
       {label: 'Year', width: 100},
       {label: 'Success %', width: 110},
       {label: 'Avg KM', width: 100},
@@ -853,20 +970,11 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       {label: 'Species', width: 160},
       {label: 'Auto GPS', width: 200},
       {label: 'GPS List', width: 250},
-      {label: 'Images', width: 90},
-      {label: 'Status', width: 130},
+      {label: 'Status', width: 220},
     ];
-    if (showActionsColumn) base.push({label: 'Actions', width: 140});
+    if (showActionsColumn) base.push({label: 'Actions', width: 100});
     return base;
   }, [showActionsColumn]);
-
-  const getStatusInfo = st => {
-    const key = String(st || 'pending').toLowerCase();
-    if (key === 'approved') return {label: 'Approved', color: COLORS.success, icon: 'checkmark-done'};
-    if (key === 'returned') return {label: 'Returned', color: COLORS.danger, icon: 'arrow-undo'};
-    if (key === 'disapproved') return {label: 'Disapproved', color: COLORS.danger, icon: 'close-circle'};
-    return {label: 'Pending', color: COLORS.warning, icon: 'time'};
-  };
 
   // ---------- RENDER ----------
   return (
@@ -899,14 +1007,30 @@ export default function AfforestationRecordsScreen({navigation, route}) {
             {nameOfSiteId && <Text style={styles.siteId}>Site ID: {nameOfSiteId}</Text>}
           </View>
 
-          <TouchableOpacity style={styles.refreshButton} onPress={fetchAfforestationList} activeOpacity={0.7}>
-            <Ionicons name="refresh" size={22} color="#fff" />
+          <TouchableOpacity style={styles.headerAction} onPress={() => setFilterModalVisible(true)} activeOpacity={0.7}>
+            <Ionicons name="filter" size={22} color="#fff" />
+            {activeFilterCount > 0 && (
+              <View style={styles.headerBadge}>
+                <Text style={styles.headerBadgeText}>{activeFilterCount}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
 
       {/* Main Content */}
-      <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={serverRefreshing}
+            onRefresh={() => fetchAfforestationList({refresh: true})}
+            colors={[COLORS.primary]}
+            tintColor={COLORS.primary}
+          />
+        }>
         {/* Search Section */}
         <View style={styles.searchSection}>
           <View style={styles.searchContainer}>
@@ -914,7 +1038,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search records by year, scheme, GPS..."
+              placeholder="Search by ID, year, scheme, status..."
               placeholderTextColor={COLORS.textLight}
               style={styles.searchInput}
             />
@@ -924,15 +1048,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
               </TouchableOpacity>
             )}
           </View>
-
-          <TouchableOpacity style={styles.filterButton} onPress={() => setFilterModalVisible(true)} activeOpacity={0.7}>
-            <Ionicons name="filter" size={22} color="#fff" />
-            {activeFilterCount > 0 && (
-              <View style={styles.filterBadge}>
-                <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
         </View>
 
         {/* Stats Card */}
@@ -996,7 +1111,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
                 {/* Table Rows */}
                 {filteredRecords.map((r, idx) => {
-                  const statusInfo = getStatusInfo(r.status);
+                  const ui = deriveRowUi(r);
                   const gpsText =
                     Array.isArray(r.gpsBoundingBox) && r.gpsBoundingBox.length ? r.gpsBoundingBox.join(' | ') : '';
                   const proj =
@@ -1006,12 +1121,23 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                       ? r.nonDevScheme || '—'
                       : '—';
                   const speciesCount = Array.isArray(r.species_ids) ? r.species_ids.length : 0;
-                  const picsCount = Array.isArray(r.pictures) ? r.pictures.length : 0;
 
-                  const allowActions = isDisapprovedStatus(r.status);
+                  const allowActions = ui.showEdit;
+
+                  const rowStyle = [
+                    styles.tableRow,
+                    idx % 2 === 0 ? styles.rowEven : styles.rowOdd,
+                    ui.rowAccent === 'rejected' ? styles.rowRejected : null,
+                  ];
 
                   return (
-                    <View key={r.id} style={[styles.tableRow, idx % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
+                    <View key={r.id} style={rowStyle}>
+                      <View style={[styles.tdCell, {width: 80}]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
+                          {String(r.serverId || '—')}
+                        </Text>
+                      </View>
+
                       <View style={[styles.tdCell, {width: 100}]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {r.year || '—'}
@@ -1079,42 +1205,38 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 90}]}>
-                        {picsCount > 0 ? (
-                          <View style={styles.imageCountBadge}>
-                            <Ionicons name="images" size={14} color={COLORS.primary} />
-                            <Text style={styles.imageCountText}>{picsCount}</Text>
-                          </View>
+                      {/* ✅ Status Cell with clickable rejection */}
+                      <View style={[styles.tdCell, {width: 220}]}>
+                        {ui.isRejected ? (
+                          <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
+                            <View
+                              style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                              <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                              <Text
+                                style={[styles.statusText, {color: ui.statusColor}]}
+                                numberOfLines={2}>
+                                {ui.statusText}
+                              </Text>
+                            </View>
+                          </TouchableOpacity>
                         ) : (
-                          <Text style={styles.tdText}>—</Text>
+                          <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                            <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                            <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                              {ui.statusText}
+                            </Text>
+                          </View>
                         )}
                       </View>
 
-                      <View style={[styles.tdCell, {width: 130}]}>
-                        <View style={[styles.statusBadge, {backgroundColor: `${statusInfo.color}15`}]}>
-                          <Ionicons name={statusInfo.icon} size={12} color={statusInfo.color} />
-                          <Text style={[styles.statusText, {color: statusInfo.color}]}>{statusInfo.label}</Text>
-                        </View>
-                      </View>
-
-                      {/* ✅ Actions Column: only if at least one disapproved exists in filteredRecords */}
+                      {/* ✅ Actions Column: only if at least one rejected exists in filteredRecords */}
                       {showActionsColumn && (
-                        <View style={[styles.tdCell, styles.actionsCell, {width: 140}]}>
+                        <View style={[styles.tdCell, styles.actionsCell, {width: 100}]}>
                           {allowActions ? (
-                            <>
-                              <TouchableOpacity style={styles.actionButton} onPress={() => openEditForm(r)} activeOpacity={0.7}>
-                                <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
-                                <Text style={styles.actionButtonText}>Edit</Text>
-                              </TouchableOpacity>
-
-                              <TouchableOpacity
-                                style={[styles.actionButton, {backgroundColor: `${COLORS.danger}15`}]}
-                                onPress={() => deleteRecord(r.id)}
-                                activeOpacity={0.7}>
-                                <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
-                                <Text style={[styles.actionButtonText, {color: COLORS.danger}]}>Delete</Text>
-                              </TouchableOpacity>
-                            </>
+                            <TouchableOpacity style={styles.actionButton} onPress={() => openEditForm(r)} activeOpacity={0.7}>
+                              <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
+                              <Text style={styles.actionButtonText}>Edit</Text>
+                            </TouchableOpacity>
                           ) : (
                             <Text style={styles.tdText}>—</Text>
                           )}
@@ -1136,7 +1258,72 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         </View>
       </TouchableOpacity>
 
-      {/* Filters Modal (UNCHANGED UI) */}
+      {/* ✅ Rejection Reason Modal */}
+      <Modal
+        transparent
+        visible={rejectionModal.visible}
+        animationType="fade"
+        onRequestClose={closeRejectionPopup}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={closeRejectionPopup}>
+            <View style={styles.modalBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.modalContainer}>
+            <View style={[styles.modalContent, {maxHeight: height * 0.5}]}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
+                  <Text style={styles.modalTitle}>Rejection Reason</Text>
+                </View>
+                <TouchableOpacity style={styles.modalClose} onPress={closeRejectionPopup}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{padding: 20}}>
+                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                  Rejected By
+                </Text>
+                <Text style={{fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 14}}>
+                  {rejectionModal.rejectedBy || 'Officer'}
+                </Text>
+
+                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                  Remarks
+                </Text>
+                <View
+                  style={{
+                    marginTop: 8,
+                    backgroundColor: 'rgba(239,68,68,0.06)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(239,68,68,0.20)',
+                    borderRadius: 14,
+                    padding: 14,
+                  }}>
+                  <Text style={{fontSize: 14, fontWeight: '600', color: COLORS.text, lineHeight: 20}}>
+                    {rejectionModal.remarks}
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={{
+                    marginTop: 16,
+                    backgroundColor: COLORS.danger,
+                    paddingVertical: 14,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                  }}
+                  onPress={closeRejectionPopup}>
+                  <Text style={{color: '#fff', fontWeight: '800'}}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Filters Modal */}
       <Modal transparent visible={filterModalVisible} animationType="fade" onRequestClose={() => setFilterModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
@@ -1156,25 +1343,103 @@ export default function AfforestationRecordsScreen({navigation, route}) {
               </View>
 
               <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
-                {/* ... keep your existing filter UI ... */}
+                <FormRow
+                  label="Status"
+                  value={filters.status}
+                  onChangeText={v => setFilters(prev => ({...prev, status: v}))}
+                  placeholder="e.g., Pending, Rejected, Verified"
+                />
+
+                <DropdownRow label="Year" value={filters.year} onChange={v => setFilters(prev => ({...prev, year: v}))} options={YEAR_OPTIONS} />
+
+                <DropdownRow label="Scheme Type" value={filters.schemeType} onChange={v => setFilters(prev => ({...prev, schemeType: v}))} options={SCHEME_OPTIONS} />
+
+                <View style={styles.filterRow}>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Date From (YYYY-MM-DD)"
+                      value={filters.dateFrom}
+                      onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
+                      placeholder="2025-12-01"
+                    />
+                  </View>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Date To (YYYY-MM-DD)"
+                      value={filters.dateTo}
+                      onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
+                      placeholder="2025-12-31"
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.filterRow}>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Success % From"
+                      value={filters.successFrom}
+                      onChangeText={v => setFilters(prev => ({...prev, successFrom: v}))}
+                      placeholder="e.g. 50"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Success % To"
+                      value={filters.successTo}
+                      onChangeText={v => setFilters(prev => ({...prev, successTo: v}))}
+                      placeholder="e.g. 100"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.filterRow}>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Plants From"
+                      value={filters.plantsFrom}
+                      onChangeText={v => setFilters(prev => ({...prev, plantsFrom: v}))}
+                      placeholder="e.g. 100"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Plants To"
+                      value={filters.plantsTo}
+                      onChangeText={v => setFilters(prev => ({...prev, plantsTo: v}))}
+                      placeholder="e.g. 1000"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.filterRow}>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Avg KM From"
+                      value={filters.avgFrom}
+                      onChangeText={v => setFilters(prev => ({...prev, avgFrom: v}))}
+                      placeholder="e.g. 10"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.filterColumn}>
+                    <FormRow
+                      label="Avg KM To"
+                      value={filters.avgTo}
+                      onChangeText={v => setFilters(prev => ({...prev, avgTo: v}))}
+                      placeholder="e.g. 50"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
                 <View style={styles.modalActions}>
                   <TouchableOpacity
                     style={styles.modalButtonSecondary}
-                    onPress={() =>
-                      setFilters({
-                        dateFrom: '',
-                        dateTo: '',
-                        year: '',
-                        schemeType: '',
-                        status: '',
-                        successFrom: '',
-                        successTo: '',
-                        plantsFrom: '',
-                        plantsTo: '',
-                        avgFrom: '',
-                        avgTo: '',
-                      })
-                    }
+                    onPress={clearAll}
                     activeOpacity={0.7}>
                     <Text style={styles.modalButtonSecondaryText}>Reset All</Text>
                   </TouchableOpacity>
@@ -1189,80 +1454,80 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         </View>
       </Modal>
 
-      {/* Species Selection Modal (UNCHANGED UI) */}
+      {/* Species Selection Modal */}
       <Modal visible={speciesModalVisible} transparent animationType="fade" onRequestClose={() => setSpeciesModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <TouchableWithoutFeedback onPress={() => setSpeciesModalVisible(false)}>
             <View style={styles.modalBackdrop} />
           </TouchableWithoutFeedback>
 
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <View style={styles.modalTitleRow}>
-                <Ionicons name="leaf" size={24} color={COLORS.primary} />
-                <Text style={styles.modalTitle}>Select Species</Text>
-              </View>
-              <TouchableOpacity style={styles.modalClose} onPress={() => setSpeciesModalVisible(false)} activeOpacity={0.7}>
-                <Ionicons name="close" size={24} color={COLORS.text} />
-              </TouchableOpacity>
-            </View>
-
-            {speciesLoading ? (
-              <View style={styles.loadingState}>
-                <ActivityIndicator size="large" color={COLORS.primary} />
-                <Text style={styles.loadingText}>Loading species...</Text>
-              </View>
-            ) : (
-              <>
-                <ScrollView style={styles.speciesList} showsVerticalScrollIndicator={false}>
-                  {speciesRows.map(row => {
-                    const checked = speciesIds.includes(Number(row.id));
-                    return (
-                      <TouchableOpacity
-                        key={String(row.id)}
-                        style={styles.speciesItem}
-                        onPress={() => toggleSpeciesId(row.id)}
-                        activeOpacity={0.7}>
-                        <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
-                          {checked && <Ionicons name="checkmark" size={16} color="#fff" />}
-                        </View>
-                        <View style={styles.speciesInfo}>
-                          <Text style={styles.speciesName}>{row.name}</Text>
-                          {row.id && <Text style={styles.speciesId}>ID: {row.id}</Text>}
-                        </View>
-                        {checked && (
-                          <View style={styles.selectedIndicator}>
-                            <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-
-                <View style={styles.speciesFooter}>
-                  <View style={styles.speciesCountBadge}>
-                    <Text style={styles.speciesCountText}>{speciesIds.length} species selected</Text>
-                  </View>
-
-                  <View style={styles.speciesActions}>
-                    <TouchableOpacity style={styles.speciesActionButton} onPress={() => setSpeciesIds([])} activeOpacity={0.7}>
-                      <Text style={styles.speciesActionButtonText}>Clear All</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.speciesActionButton, styles.speciesActionButtonPrimary]}
-                      onPress={() => setSpeciesModalVisible(false)}
-                      activeOpacity={0.7}>
-                      <Text style={styles.speciesActionButtonPrimaryText}>Done</Text>
-                    </TouchableOpacity>
-                  </View>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="leaf" size={24} color={COLORS.primary} />
+                  <Text style={styles.modalTitle}>Select Species</Text>
                 </View>
-              </>
-            )}
+                <TouchableOpacity style={styles.modalClose} onPress={() => setSpeciesModalVisible(false)} activeOpacity={0.7}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              {speciesLoading ? (
+                <View style={styles.loadingState}>
+                  <ActivityIndicator size="large" color={COLORS.primary} />
+                  <Text style={styles.loadingText}>Loading species...</Text>
+                </View>
+              ) : (
+                <>
+                  <ScrollView style={styles.speciesList} showsVerticalScrollIndicator={false}>
+                    {speciesRows.map(row => {
+                      const checked = speciesIds.includes(Number(row.id));
+                      return (
+                        <TouchableOpacity
+                          key={String(row.id)}
+                          style={styles.speciesItem}
+                          onPress={() => toggleSpeciesId(row.id)}
+                          activeOpacity={0.7}>
+                          <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                            {checked && <Ionicons name="checkmark" size={16} color="#fff" />}
+                          </View>
+                          <View style={styles.speciesInfo}>
+                            <Text style={styles.speciesName}>{row.name}</Text>
+                            {row.id && <Text style={styles.speciesId}>ID: {row.id}</Text>}
+                          </View>
+                          {checked && (
+                            <View style={styles.selectedIndicator}>
+                              <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+
+                  <View style={styles.speciesFooter}>
+                    <View style={styles.speciesCountBadge}>
+                      <Text style={styles.speciesCountText}>{speciesIds.length} species selected</Text>
+                    </View>
+
+                    <View style={styles.speciesActions}>
+                      <TouchableOpacity style={styles.speciesActionButton} onPress={() => setSpeciesIds([])} activeOpacity={0.7}>
+                        <Text style={styles.speciesActionButtonText}>Clear All</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.speciesActionButton, styles.speciesActionButtonPrimary]}
+                        onPress={() => setSpeciesModalVisible(false)}
+                        activeOpacity={0.7}>
+                        <Text style={styles.speciesActionButtonPrimaryText}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </>
+              )}
+            </View>
           </View>
-        </View>
         </View>
       </Modal>
 
@@ -1473,17 +1738,13 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   );
 }
 
-/**
- * NOTE:
- * Styles are unchanged from your last version.
- * Keep your existing styles object here (no functional changes needed).
- */
 const styles = StyleSheet.create({
-  // (Keep the same styles from your previous file. No need to change for these updates.)
+  // Base
   screen: {flex: 1, backgroundColor: COLORS.background},
   container: {flex: 1},
   contentContainer: {paddingBottom: 100},
 
+  // Header
   header: {
     backgroundColor: COLORS.primary,
     paddingTop: Platform.OS === 'ios' ? 50 : StatusBar.currentHeight + 20,
@@ -1520,18 +1781,33 @@ const styles = StyleSheet.create({
   },
   infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
   siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3},
-  refreshButton: {
+  headerAction: {
     width: 44,
     height: 44,
     borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
+  headerBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: COLORS.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+  },
+  headerBadgeText: {color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4},
 
-  searchSection: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, gap: 12},
+  // Search
+  searchSection: {paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16},
   searchContainer: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
@@ -1549,34 +1825,8 @@ const styles = StyleSheet.create({
   searchIcon: {marginRight: 12},
   searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
   searchClear: {padding: 4},
-  filterButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  filterBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: COLORS.danger,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-  },
-  filterBadgeText: {color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4},
 
+  // Stats Card
   statsCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1598,14 +1848,17 @@ const styles = StyleSheet.create({
   statLabel: {fontSize: 12, fontWeight: '600', color: COLORS.textLight},
   statDivider: {width: 1, height: 40, backgroundColor: COLORS.border},
 
+  // Section
   section: {marginHorizontal: 20, marginBottom: 20},
   sectionHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
   sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
   sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
 
+  // Loading State
   loadingState: {backgroundColor: '#fff', borderRadius: 16, padding: 40, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border},
   loadingText: {fontSize: 14, color: COLORS.textLight, marginTop: 12, fontWeight: '600'},
 
+  // Empty State
   emptyState: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -1620,6 +1873,7 @@ const styles = StyleSheet.create({
   emptyAction: {backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12},
   emptyActionText: {color: '#fff', fontSize: 14, fontWeight: '700'},
 
+  // Table
   tableContainer: {borderRadius: 16, overflow: 'hidden'},
   table: {
     borderRadius: 16,
@@ -1639,6 +1893,7 @@ const styles = StyleSheet.create({
   tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
   rowEven: {backgroundColor: '#fff'},
   rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
+  rowRejected: {backgroundColor: 'rgba(239, 68, 68, 0.06)'},
   tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
   tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
   gpsText: {fontSize: 11, fontWeight: '600', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
@@ -1648,26 +1903,38 @@ const styles = StyleSheet.create({
   schemeText: {fontSize: 12, fontWeight: '800'},
   speciesCount: {flexDirection: 'row', alignItems: 'center', gap: 4},
   speciesCountText: {fontSize: 12, fontWeight: '700', color: COLORS.primary},
-  imageCountBadge: {
+
+  // Status Badge
+  statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(5, 150, 105, 0.1)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
     alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+    maxWidth: 210,
   },
-  imageCountText: {fontSize: 12, fontWeight: '800', color: COLORS.primary},
-  statusBadge: {flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, alignSelf: 'flex-start'},
-  statusText: {fontSize: 12, fontWeight: '700'},
+  statusDot: {width: 8, height: 8, borderRadius: 4},
+  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1},
+
   actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
-  actionButton: {flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(14, 165, 233, 0.1)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, gap: 4},
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(14, 165, 233, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+  },
   actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
 
+  // FAB
   fab: {position: 'absolute', right: 20, bottom: 30, shadowColor: COLORS.primary, shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 8, elevation: 8},
   fabContent: {width: 64, height: 64, borderRadius: 32, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center'},
 
+  // Modal
   modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
   modalBackdrop: {...StyleSheet.absoluteFillObject},
   modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
@@ -1689,12 +1956,15 @@ const styles = StyleSheet.create({
   modalTitle: {fontSize: 20, fontWeight: '800', color: COLORS.text},
   modalClose: {width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(31, 41, 55, 0.05)', alignItems: 'center', justifyContent: 'center'},
   modalBody: {padding: 20},
+  filterRow: {flexDirection: 'row', gap: 12, marginBottom: 16},
+  filterColumn: {flex: 1},
   modalActions: {flexDirection: 'row', gap: 12, marginTop: 8},
   modalButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
   modalButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
   modalButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
   modalButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
 
+  // Species Modal
   speciesList: {maxHeight: 400},
   speciesItem: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: COLORS.border},
   checkbox: {width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: COLORS.border, alignItems: 'center', justifyContent: 'center', marginRight: 12},
@@ -1712,6 +1982,7 @@ const styles = StyleSheet.create({
   speciesActionButtonPrimary: {backgroundColor: COLORS.primary},
   speciesActionButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
 
+  // Edit Modal
   editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
   editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
   editModalContent: {flex: 1, backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border},
@@ -1722,6 +1993,7 @@ const styles = StyleSheet.create({
   editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
   editModalFooter: {flexDirection: 'row', gap: 12, paddingHorizontal: 24, paddingVertical: 20, borderTopWidth: 1, borderTopColor: COLORS.border},
 
+  // Form Section
   formSection: {marginBottom: 24},
   formSectionTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16, letterSpacing: 0.5},
   fieldWithButton: {marginBottom: 16},
@@ -1730,6 +2002,7 @@ const styles = StyleSheet.create({
   multiSelectButtonText: {flex: 1, fontSize: 16, fontWeight: '700', color: '#fff'},
   speciesHint: {fontSize: 12, color: COLORS.textLight, marginTop: 4, fontStyle: 'italic'},
 
+  // Slider
   sliderContainer: {marginBottom: 20},
   sliderHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8},
   sliderLabel: {fontSize: 14, fontWeight: '600', color: COLORS.text},
@@ -1738,6 +2011,7 @@ const styles = StyleSheet.create({
   sliderMarks: {flexDirection: 'row', justifyContent: 'space-between', marginTop: 4},
   sliderMark: {fontSize: 12, color: COLORS.textLight, fontWeight: '600'},
 
+  // GPS
   gpsCard: {backgroundColor: 'rgba(5, 150, 105, 0.03)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.1)', marginBottom: 16, overflow: 'hidden'},
   gpsCardHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'rgba(5, 150, 105, 0.05)', borderBottomWidth: 1, borderBottomColor: 'rgba(5, 150, 105, 0.1)'},
   gpsCardTitle: {fontSize: 14, fontWeight: '700', color: COLORS.text},
@@ -1757,6 +2031,7 @@ const styles = StyleSheet.create({
   coordinateInputContainer: {flex: 1},
   removeCoordinateButton: {padding: 8, marginTop: 24},
 
+  // Images
   imageUploadButton: {backgroundColor: 'rgba(5, 150, 105, 0.05)', borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.2)', borderRadius: 16, padding: 16, marginBottom: 12},
   imageUploadContent: {flexDirection: 'row', alignItems: 'center', gap: 12},
   imageUploadText: {flex: 1},
@@ -1767,6 +2042,7 @@ const styles = StyleSheet.create({
   imagePreviewTitle: {fontSize: 14, fontWeight: '700', color: COLORS.success},
   imagePreviewText: {fontSize: 12, color: COLORS.textLight, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
 
+  // Footer Buttons
   footerButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
   footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
   footerButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8},

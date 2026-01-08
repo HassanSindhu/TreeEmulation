@@ -1,4 +1,3 @@
-// /screens/MatureTreeRecordsScreen.js
 import React, {useCallback, useMemo, useState, useEffect} from 'react';
 import {
   View,
@@ -45,7 +44,7 @@ const CONDITIONS_URL = `${API_BASE}/forest-tree-conditions`;
 
 // Enumeration CRUD
 const ENUMERATION_SUBMIT_URL = `${API_BASE}/enum/enumeration`; // POST create
-const ENUMERATION_LIST_URL = `${API_BASE}/enum/enumeration`; // GET list (your latest curl)
+const ENUMERATION_LIST_URL = `${API_BASE}/enum/enumeration`; // GET list
 const ENUMERATION_UPDATE_URL = id => `${API_BASE}/enum/enumeration/${id}`; // PATCH edit/resubmit
 
 // Upload
@@ -54,6 +53,8 @@ const TREE_ENUM_UPLOAD_PATH = 'enumaration';
 const TREE_ENUM_IS_MULTI = 'true';
 const TREE_ENUM_FILE_NAME = 'chan';
 
+// IMPORTANT: These names MUST match your navigator screen names exactly.
+// If your navigator uses e.g. "DisposalScreen" / "SuperdariScreen", update them here.
 const SUPERDARI_ROUTE = 'Superdari';
 const DISPOSAL_ROUTE = 'Disposal';
 
@@ -123,6 +124,13 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const [uploadingImages, setUploadingImages] = useState(false);
   const [uploadedImageUrls, setUploadedImageUrls] = useState([]);
 
+  // ✅ Rejection popup state
+  const [rejectionModal, setRejectionModal] = useState({
+    visible: false,
+    rejectedBy: '',
+    remarks: '',
+  });
+
   const rdRangeText =
     enumeration?.rdFrom && enumeration?.rdTo
       ? `${enumeration.rdFrom} - ${enumeration.rdTo}`
@@ -168,6 +176,42 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   };
 
+  // ✅ SAFER NAVIGATION (Fix for: "The action 'NAVIGATE' ... was not handled by any navigator")
+  // This happens when DISPOSAL_ROUTE/SUPERDARI_ROUTE is not registered in the current navigator.
+  // This helper tries:
+  // 1) current navigator
+  // 2) parent navigator
+  const navigateSafe = useCallback(
+    (screenName, params) => {
+      if (!screenName) return;
+
+      // 1) try current navigator
+      try {
+        navigation.navigate(screenName, params);
+        return;
+      } catch (e) {
+        // ignore; we'll try parent
+      }
+
+      // 2) try parent navigator if nested
+      const parentNav = navigation.getParent?.();
+      if (parentNav) {
+        try {
+          parentNav.navigate(screenName, params);
+          return;
+        } catch (e) {
+          // ignore and show message below
+        }
+      }
+
+      Alert.alert(
+        'Navigation Error',
+        `Screen "${screenName}" is not registered in the current navigator.\n\nFix:\n• Ensure you added "${screenName}" in your Stack/Drawer navigator.\n• Or update SUPERDARI_ROUTE/DISPOSAL_ROUTE constants to match your navigator screen name.`,
+      );
+    },
+    [navigation],
+  );
+
   // Upload response helper
   const extractUploadUrls = json => {
     if (!json) return [];
@@ -193,7 +237,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     return Array.from(new Set(urls.filter(Boolean)));
   };
 
-  // ---------- STATUS / UI RULES (GUARD SCREEN) ----------
+  // ---------- STATUS / UI RULES ----------
   const hasAny = v => Array.isArray(v) && v.length > 0;
 
   const normalizeRole = role => {
@@ -215,12 +259,11 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   };
 
   /**
-   * Your requirement:
-   * - If disposal/superdari empty => show Dispose & Superdari buttons
-   * - If disposal/superdari has data => status shows Disposed/Superdari and hide Edit and hide pills
-   * - Workflow status based on latestStatus:
-   *   Guard -> Block Officer -> SDFO -> DFO -> Surveyor -> Final Approved
-   * - If anyone rejects => goes back to guard with remarks; Edit shows, user can resubmit.
+   * Flow:
+   * Guard -> Block Officer -> SDFO -> DFO -> Surveyor -> Final Approved
+   * Reject => goes back to Guard with remarks; Edit shows, user can resubmit.
+   *
+   * Dispose/Superdari overrides status & hides Edit.
    */
   const deriveRowUi = r => {
     const disposalExists = hasAny(r?.disposal);
@@ -234,6 +277,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         showEdit: false,
         showPills: false,
         rowAccent: null,
+        isRejected: false,
       };
     }
     if (disposalExists) {
@@ -243,6 +287,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         showEdit: false,
         showPills: false,
         rowAccent: null,
+        isRejected: false,
       };
     }
     if (superdariExists) {
@@ -252,41 +297,48 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         showEdit: false,
         showPills: false,
         rowAccent: null,
+        isRejected: false,
       };
     }
 
     // Now rely on latestStatus
     const latest = r?.latestStatus || null;
-    const action = String(latest?.action || '').trim(); // Approved / Rejected
+
+    // your API may use Approved/Rejected OR Verified
+    const actionRaw = String(latest?.action || '').trim();
+    const action = actionRaw.toLowerCase(); // approved / rejected / verified
     const byRole = normalizeRole(latest?.user_role || '');
     const byDesignation = String(latest?.designation || '').trim();
     const remarks = String(latest?.remarks || '').trim();
 
-    // No status yet => pending at Block Officer (as per your flow)
-    if (!latest || !action) {
+    // No status yet
+    if (!latest || !actionRaw) {
       return {
         statusText: 'Pending (Block Officer)',
         statusColor: COLORS.textLight,
         showEdit: false,
-        // per your rule: buttons show if arrays are empty
-        showPills: true,
+        showPills: true, // shows dispose/superdari when not disposed & not superdari
         rowAccent: null,
+        isRejected: false,
       };
     }
 
-    if (action.toLowerCase() === 'rejected') {
+    if (action === 'rejected') {
       const rejectBy = byDesignation || byRole || 'Officer';
-      const shortRemarks = remarks ? ` • ${remarks}` : '';
       return {
-        statusText: `Rejected by ${rejectBy}${shortRemarks}`,
+        statusText: `Rejected by ${rejectBy}`, // do NOT append remarks here
         statusColor: COLORS.danger,
-        showEdit: true, // only rejected returns to Guard
-        showPills: true, // arrays are empty
+        showEdit: true, // rejected -> allow edit
+        showPills: true, // allow dispose/superdari too (as per your logic)
         rowAccent: 'rejected',
+        isRejected: true, // clickable to show remarks popup
+        _remarks: remarks,
+        _rejectedBy: rejectBy,
       };
     }
 
-    if (action.toLowerCase() === 'approved') {
+    // treat verified same as approved in the workflow
+    if (action === 'approved' || action === 'verified') {
       const approver = byRole || 'Block Officer';
       const nxt = nextRole(approver);
 
@@ -296,8 +348,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
           statusText: 'Final Approved',
           statusColor: COLORS.success,
           showEdit: false,
-          showPills: true, // your rule: empty arrays => show buttons
+          showPills: true,
           rowAccent: null,
+          isRejected: false,
         };
       }
 
@@ -305,8 +358,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         statusText: `Approved • Pending (${nxt})`,
         statusColor: COLORS.warning,
         showEdit: false,
-        showPills: true, // your rule: empty arrays => show buttons
+        showPills: true,
         rowAccent: null,
+        isRejected: false,
       };
     }
 
@@ -316,7 +370,29 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       showEdit: false,
       showPills: true,
       rowAccent: null,
+      isRejected: false,
     };
+  };
+
+  // ✅ Rejection popup open/close
+  const openRejectionPopup = row => {
+    const latest = row?.latestStatus || null;
+    const action = String(latest?.action || '').trim().toLowerCase();
+    if (action !== 'rejected') return;
+
+    const byRole = normalizeRole(latest?.user_role || '');
+    const byDesignation = String(latest?.designation || '').trim();
+    const remarks = String(latest?.remarks || '').trim();
+
+    setRejectionModal({
+      visible: true,
+      rejectedBy: byDesignation || byRole || 'Officer',
+      remarks: remarks || 'No remarks provided.',
+    });
+  };
+
+  const closeRejectionPopup = () => {
+    setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
   };
 
   // ---------- API CALLS ----------
@@ -330,7 +406,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         const token = await getAuthToken();
         if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-        // ✅ Latest API (your curl): GET /enum/enumeration
         const res = await fetch(ENUMERATION_LIST_URL, {
           method: 'GET',
           headers: {
@@ -460,7 +535,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
     const net = await NetInfo.fetch();
     const online = !!net.isConnected && (net.isInternetReachable ?? true);
-    if (!online) throw new Error('No internet connection. Please connect to internet to upload images.');
+    if (!online)
+      throw new Error('No internet connection. Please connect to internet to upload images.');
 
     const fd = new FormData();
 
@@ -670,7 +746,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     const rdNum = Number(String(rdKm || '').replace(/[^\d.]+/g, ''));
     const rdKmNumber = Number.isFinite(rdNum) ? rdNum : 0;
 
-    // 1) Upload images (if newly selected) via tree-enum API
+    // 1) Upload images (if newly selected)
     let pictures = [];
     try {
       if (pictureAssets?.length) {
@@ -1059,37 +1135,54 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
+                      {/* ✅ Clickable status only if rejected */}
                       <View style={[styles.tdCell, {width: 220}]}>
-                        <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                          <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                          <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
-                            {ui.statusText}
-                          </Text>
-                        </View>
+                        {ui.isRejected ? (
+                          <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
+                            <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                              <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                              <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                                {ui.statusText}
+                              </Text>
+                            </View>
+                          </TouchableOpacity>
+                        ) : (
+                          <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                            <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                            <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                              {ui.statusText}
+                            </Text>
+                          </View>
+                        )}
                       </View>
 
                       <View style={[styles.tdCell, styles.actionsCell, {width: 320}]}>
                         {/* Edit only on rejected, and not disposed/superdari (already handled in deriveRowUi) */}
                         {ui.showEdit && (
-                          <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
+                          <TouchableOpacity
+                            style={styles.actionButton}
+                            onPress={() => openEditFormServer(r)}>
                             <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.actionButtonText}>Edit</Text>
                           </TouchableOpacity>
                         )}
-
 
                         {/* Dispose / Superdari pills only when BOTH arrays are empty (your requirement) */}
                         {ui.showPills && (
                           <>
                             <TouchableOpacity
                               style={[styles.actionPill, {backgroundColor: COLORS.primaryDark}]}
-                              onPress={() => navigation.navigate(DISPOSAL_ROUTE, {treeId: r.id, enumeration})}>
+                              onPress={() =>
+                                navigateSafe(DISPOSAL_ROUTE, {treeId: r.id, enumeration})
+                              }>
                               <Text style={styles.actionPillText}>Dispose</Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity
                               style={[styles.actionPill, {backgroundColor: COLORS.info}]}
-                              onPress={() => navigation.navigate(SUPERDARI_ROUTE, {treeId: r.id, enumeration})}>
+                              onPress={() =>
+                                navigateSafe(SUPERDARI_ROUTE, {treeId: r.id, enumeration})
+                              }>
                               <Text style={styles.actionPillText}>Superdari</Text>
                             </TouchableOpacity>
                           </>
@@ -1129,7 +1222,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   <Ionicons name="filter" size={24} color={COLORS.primary} />
                   <Text style={styles.modalTitle}>Advanced Filters</Text>
                 </View>
-                <TouchableOpacity style={styles.modalClose} onPress={() => setFilterModalVisible(false)}>
+                <TouchableOpacity
+                  style={styles.modalClose}
+                  onPress={() => setFilterModalVisible(false)}>
                   <Ionicons name="close" size={24} color={COLORS.text} />
                 </TouchableOpacity>
               </View>
@@ -1219,6 +1314,71 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         </View>
       </Modal>
 
+      {/* ✅ Rejection Reason Modal */}
+      <Modal
+        transparent
+        visible={rejectionModal.visible}
+        animationType="fade"
+        onRequestClose={closeRejectionPopup}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={closeRejectionPopup}>
+            <View style={styles.modalBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.modalContainer}>
+            <View style={[styles.modalContent, {maxHeight: height * 0.5}]}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
+                  <Text style={styles.modalTitle}>Rejection Reason</Text>
+                </View>
+                <TouchableOpacity style={styles.modalClose} onPress={closeRejectionPopup}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{padding: 20}}>
+                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                  Rejected By
+                </Text>
+                <Text style={{fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 14}}>
+                  {rejectionModal.rejectedBy || 'Officer'}
+                </Text>
+
+                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                  Remarks
+                </Text>
+                <View
+                  style={{
+                    marginTop: 8,
+                    backgroundColor: 'rgba(239,68,68,0.06)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(239,68,68,0.20)',
+                    borderRadius: 14,
+                    padding: 14,
+                  }}>
+                  <Text style={{fontSize: 14, fontWeight: '600', color: COLORS.text, lineHeight: 20}}>
+                    {rejectionModal.remarks}
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={{
+                    marginTop: 16,
+                    backgroundColor: COLORS.danger,
+                    paddingVertical: 14,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                  }}
+                  onPress={closeRejectionPopup}>
+                  <Text style={{color: '#fff', fontWeight: '800'}}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Add/Edit Modal */}
       <Modal
         visible={modalVisible}
@@ -1232,12 +1392,16 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
             <LinearGradient colors={['#fff', '#f8fafc']} style={styles.editModalContent}>
               <View style={styles.editModalHeader}>
                 <View>
-                  <Text style={styles.editModalTitle}>{isEdit ? 'Edit Tree Record' : 'Add New Tree'}</Text>
+                  <Text style={styles.editModalTitle}>
+                    {isEdit ? 'Edit Tree Record' : 'Add New Tree'}
+                  </Text>
                   {isEdit && editingServerId && (
                     <Text style={styles.editModalSubtitle}>ID: {editingServerId}</Text>
                   )}
                 </View>
-                <TouchableOpacity style={styles.editModalClose} onPress={() => setModalVisible(false)}>
+                <TouchableOpacity
+                  style={styles.editModalClose}
+                  onPress={() => setModalVisible(false)}>
                   <Ionicons name="close" size={24} color={COLORS.text} />
                 </TouchableOpacity>
               </View>
@@ -1355,14 +1519,18 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
                 {/* Image Section */}
                 <View style={styles.imageSection}>
-                  <TouchableOpacity style={styles.imageButton} onPress={pickImage} disabled={uploadingImages}>
+                  <TouchableOpacity
+                    style={styles.imageButton}
+                    onPress={pickImage}
+                    disabled={uploadingImages}>
                     <Ionicons name="image-outline" size={24} color={COLORS.primary} />
                     <View style={styles.imageButtonContent}>
                       <Text style={styles.imageButtonTitle}>
                         {pictureAssets.length ? 'Change Images' : 'Select Images'}
                       </Text>
                       <Text style={styles.imageButtonSubtitle}>
-                        UploadPath: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName: {TREE_ENUM_FILE_NAME}
+                        UploadPath: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName:{' '}
+                        {TREE_ENUM_FILE_NAME}
                       </Text>
                     </View>
 
@@ -1393,7 +1561,11 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
                   {!!pictureAssets?.length && !uploadedImageUrls?.length && (
                     <View style={styles.imageHint}>
-                      <Ionicons name="information-circle-outline" size={16} color={COLORS.textLight} />
+                      <Ionicons
+                        name="information-circle-outline"
+                        size={16}
+                        color={COLORS.textLight}
+                      />
                       <Text style={styles.imageHintText}>
                         Images will upload automatically when you press “Save Record”.
                       </Text>
@@ -1403,7 +1575,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
               </ScrollView>
 
               <View style={styles.editModalFooter}>
-                <TouchableOpacity style={styles.footerButtonSecondary} onPress={() => setModalVisible(false)}>
+                <TouchableOpacity
+                  style={styles.footerButtonSecondary}
+                  onPress={() => setModalVisible(false)}>
                   <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
                 </TouchableOpacity>
 
@@ -1411,7 +1585,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   style={[styles.footerButtonPrimary, uploadingImages && {opacity: 0.7}]}
                   disabled={uploadingImages}
                   onPress={saveRecord}>
-                  <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.footerButtonGradient}>
+                  <LinearGradient
+                    colors={[COLORS.primary, COLORS.primaryDark]}
+                    style={styles.footerButtonGradient}>
                     {uploadingImages ? (
                       <>
                         <ActivityIndicator size="small" color="#fff" />
@@ -1420,7 +1596,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     ) : (
                       <>
                         <Ionicons name="save-outline" size={20} color="#fff" />
-                        <Text style={styles.footerButtonPrimaryText}>{isEdit ? 'Update' : 'Save Record'}</Text>
+                        <Text style={styles.footerButtonPrimaryText}>
+                          {isEdit ? 'Update' : 'Save Record'}
+                        </Text>
                       </>
                     )}
                   </LinearGradient>
@@ -1567,12 +1745,22 @@ const styles = StyleSheet.create({
   errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
   errorTitle: {fontSize: 16, fontWeight: '700', color: COLORS.danger},
   errorMessage: {fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: 12},
-  errorButton: {backgroundColor: COLORS.danger, borderRadius: 12, paddingVertical: 12, alignItems: 'center'},
+  errorButton: {
+    backgroundColor: COLORS.danger,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
   errorButtonText: {color: '#fff', fontSize: 14, fontWeight: '700'},
 
   // Section
   section: {marginHorizontal: 20, marginBottom: 20},
-  sectionHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
   sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
 
@@ -1587,7 +1775,13 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
-  emptyText: {fontSize: 14, color: COLORS.textLight, textAlign: 'center', marginBottom: 20, lineHeight: 20},
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.textLight,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
   emptyAction: {backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12},
   emptyActionText: {color: '#fff', fontSize: 14, fontWeight: '700'},
 
@@ -1642,7 +1836,13 @@ const styles = StyleSheet.create({
     maxWidth: 210,
   },
   statusDot: {width: 8, height: 8, borderRadius: 4},
-  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1},
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    flexShrink: 1,
+  },
   actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
   actionButton: {
     flexDirection: 'row',
@@ -1670,14 +1870,13 @@ const styles = StyleSheet.create({
   },
   fabGradient: {width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center'},
 
-  // Filter Modal
+  // Filter + shared modal styles
   modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
   modalBackdrop: {...StyleSheet.absoluteFillObject},
   modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
   modalContent: {
     borderRadius: 24,
     overflow: 'hidden',
-    maxHeight: height * 0.8,
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
@@ -1685,6 +1884,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 20,
     elevation: 10,
+    backgroundColor: '#fff',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1717,7 +1917,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
-  modalButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  modalButtonPrimary: {
+    flex: 2,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
   modalButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
 
   // Edit Modal
@@ -1752,17 +1958,50 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
-  editModalFooter: {flexDirection: 'row', gap: 12, paddingHorizontal: 24, paddingVertical: 20, borderTopWidth: 1, borderTopColor: COLORS.border},
-  footerButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  editModalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  footerButtonSecondary: {
+    flex: 1,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
   footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
   footerButtonPrimary: {flex: 2, borderRadius: 14, overflow: 'hidden'},
-  footerButtonGradient: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8},
+  footerButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
+  },
   footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
 
   // GPS Section
   gpsSection: {marginTop: 20},
-  sectionLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5},
-  gpsAutoCard: {backgroundColor: 'rgba(5, 150, 105, 0.03)', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.1)', marginBottom: 16},
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  gpsAutoCard: {
+    backgroundColor: 'rgba(5, 150, 105, 0.03)',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    marginBottom: 16,
+  },
   gpsHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8},
   gpsLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text},
   gpsStatus: {flexDirection: 'row', alignItems: 'center', gap: 8},
@@ -1770,15 +2009,45 @@ const styles = StyleSheet.create({
   gpsSourceText: {fontSize: 12, fontWeight: '800', color: COLORS.primary},
   gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 4},
   gpsLoadingText: {fontSize: 12, fontWeight: '600', color: COLORS.warning},
-  gpsValue: {fontSize: 16, fontWeight: '700', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 12},
+  gpsValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.text,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginBottom: 12,
+  },
   gpsButtons: {flexDirection: 'row', gap: 12},
-  gpsButton: {flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, paddingVertical: 12, borderRadius: 12, gap: 8},
+  gpsButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 8,
+  },
   gpsButtonDisabled: {opacity: 0.6},
   gpsButtonText: {fontSize: 14, fontWeight: '700', color: '#fff'},
   gpsButtonAlt: {backgroundColor: COLORS.text},
-  finalGpsPreview: {flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, padding: 12, marginTop: 16},
+  finalGpsPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 16,
+  },
   finalGpsLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text, marginRight: 8},
-  finalGpsValue: {flex: 1, fontSize: 14, fontWeight: '600', color: COLORS.primary, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+  finalGpsValue: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.primary,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
 
   // Image Section
   imageSection: {marginTop: 20},
@@ -1807,7 +2076,13 @@ const styles = StyleSheet.create({
     marginTop: 8,
     gap: 8,
   },
-  imagePreviewText: {flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.success, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+  imagePreviewText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.success,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   uploadedPreview: {
     flexDirection: 'row',
     alignItems: 'center',

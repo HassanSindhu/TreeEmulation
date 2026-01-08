@@ -1,12 +1,28 @@
 import React, {useMemo, useState} from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Modal, FlatList, Pressable, ImageBackground, Dimensions
+  Modal, FlatList, Pressable, StatusBar, Platform,
+  ActivityIndicator
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import colors from '../theme/colors';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+// Theme Colors (consistent with other screens)
+const COLORS = {
+  primary: '#059669',
+  primaryLight: '#10b981',
+  primaryDark: '#047857',
+  secondary: '#0ea5e9',
+  success: '#16a34a',
+  warning: '#f97316',
+  danger: '#dc2626',
+  info: '#7c3aed',
+  background: '#f8fafc',
+  card: '#ffffff',
+  text: '#1f2937',
+  textLight: '#6b7280',
+  border: '#e5e7eb',
+  overlay: 'rgba(15, 23, 42, 0.7)',
+};
 
 const SAMPLE_DIVISIONS = [
   {id:'div_1', name:'Lahore'},
@@ -40,6 +56,7 @@ export default function DashboardScreen() {
   const [range, setRange] = useState(null);
   const [block, setBlock] = useState(null);
   const [beat, setBeat] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   // Modal picker state
   const [pickerOpen, setPickerOpen] = useState(null); // 'division' | 'range' | 'block' | 'beat' | null
@@ -70,186 +87,256 @@ export default function DashboardScreen() {
     setBeat(item); setPickerOpen(null);
   };
 
+  const applyFilters = async () => {
+    setLoading(true);
+    // Simulate API call
+    await new Promise(resolve => setTimeout(resolve, 500));
+    setLoading(false);
+    console.log('Apply filters', {division, range, block, beat});
+  };
+
+  const resetFilters = () => {
+    setDivision(null);
+    setRange(null);
+    setBlock(null);
+    setBeat(null);
+  };
+
   return (
     <View style={styles.screen}>
-      <ImageBackground
-        source={require('../assets/images/bg.jpg')} // Add your green plants image here
-        style={styles.background}
-        resizeMode="cover"
-      >
-        {/* Overlay for better readability */}
-        <View style={styles.overlay} />
+      <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
 
-        <ScrollView contentContainerStyle={styles.container}>
-          {/* Header Section */}
-          <View style={styles.headerSection}>
-            <Text style={styles.heading}>
-              Enumeration of trees along linear plantations In Punjab
-            </Text>
-            <Text style={styles.subtitle}>
-              Forest Management Information System
-            </Text>
-          </View>
-
-          {/* Filters Card */}
-          <View style={styles.filterCard}>
-            <View style={styles.filterHeader}>
-              <Ionicons name="funnel" size={20} color={colors.primary} />
-              <Text style={styles.filterTitle}>Area Filters</Text>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <Text style={styles.headerTitle}>Dashboard</Text>
+          <View style={styles.headerInfo}>
+            <View style={styles.infoChip}>
+              <Ionicons name="business" size={12} color="#fff" />
+              <Text style={styles.infoChipText}>{division?.name || 'All Divisions'}</Text>
             </View>
-
-            <View style={styles.row}>
-              <SelectField
-                label="Forest Division"
-                value={division?.name}
-                placeholder="Select Division"
-                onPress={() => setPickerOpen('division')}
-              />
-              <SelectField
-                label="Sub Division / Range"
-                value={range?.name}
-                placeholder="Select Range"
-                disabled={!division}
-                onPress={() => division && setPickerOpen('range')}
-              />
+            <View style={styles.infoChip}>
+              <Ionicons name="cube" size={12} color="#fff" />
+              <Text style={styles.infoChipText}>{block?.name || 'All Blocks'}</Text>
             </View>
-
-            <View style={styles.row}>
-              <SelectField
-                label="Block"
-                value={block?.name}
-                placeholder="Select Block"
-                disabled={!range}
-                onPress={() => range && setPickerOpen('block')}
-              />
-              <SelectField
-                label="Beat"
-                value={beat?.name}
-                placeholder="Select Beat"
-                disabled={!block}
-                onPress={() => block && setPickerOpen('beat')}
-              />
-            </View>
-
-            <View style={styles.filterActions}>
-              <Pressable style={[styles.btn, styles.btnGhost]} onPress={()=>{
-                setDivision(null); setRange(null); setBlock(null); setBeat(null);
-              }}>
-                <Ionicons name="refresh" size={16} color={colors.primary}/>
-                <Text style={[styles.btnText, {color: colors.primary, marginLeft:6}]}>Reset</Text>
-              </Pressable>
-
-              <Pressable style={[styles.btn, styles.btnPrimary]} onPress={()=>{
-                // Later: call /stats/summary?divisionId=... etc and update stats state
-                console.log('Apply filters', {division, range, block, beat});
-              }}>
-                <Ionicons name="checkmark" size={16} color="#fff"/>
-                <Text style={[styles.btnText, {color:'#fff', marginLeft:6}]}>Apply</Text>
-              </Pressable>
+            <View style={styles.infoChip}>
+              <Ionicons name="calendar" size={12} color="#fff" />
+              <Text style={styles.infoChipText}>2024</Text>
             </View>
           </View>
+        </View>
+      </View>
 
-          {/* Stats Overview */}
-          <View style={styles.statsSection}>
-            <Text style={styles.statsTitle}>Statistics Overview</Text>
-            <View style={styles.grid}>
-              <KpiCard
-                title="Pending"
-                value={stats.pending}
-                icon="time"
-                bg="rgba(255, 247, 237, 0.95)"
-                border="#fdba74"
-                tint="#f97316"
-              />
-              <KpiCard
-                title="Verified"
-                value={stats.verified}
-                icon="checkmark-done"
-                bg="rgba(236, 253, 245, 0.95)"
-                border="#86efac"
-                tint="#16a34a"
-              />
-              <KpiCard
-                title="Disposed"
-                value={stats.disposed}
-                icon="trash"
-                bg="rgba(240, 249, 255, 0.95)"
-                border="#7dd3fc"
-                tint="#0ea5e9"
-              />
-              <KpiCard
-                title="Superdari"
-                value={stats.superdari}
-                icon="briefcase"
-                bg="rgba(250, 245, 255, 0.95)"
-                border="#c4b5fd"
-                tint="#7c3aed"
-              />
-            </View>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}>
+
+        {/* Filters Card */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="funnel" size={20} color={COLORS.primary} />
+            <Text style={styles.cardTitle}>Area Filters</Text>
           </View>
 
-          {/* Quick Actions */}
-          <View style={styles.actionsSection}>
-            <Text style={styles.actionsTitle}>Quick Actions</Text>
-            <View style={styles.actionsGrid}>
-              <QuickAction
-                icon="add-circle"
-                title="New Entry"
-                color="#10b981"
-                onPress={() => console.log('New Entry')}
-              />
-              <QuickAction
-                icon="search"
-                title="Search"
-                color="#3b82f6"
-                onPress={() => console.log('Search')}
-              />
-              <QuickAction
-                icon="document-text"
-                title="Reports"
-                color="#8b5cf6"
-                onPress={() => console.log('Reports')}
-              />
-              <QuickAction
-                icon="map"
-                title="Map View"
-                color="#ef4444"
-                onPress={() => console.log('Map View')}
-              />
-            </View>
+          <View style={styles.filterRow}>
+            <SelectField
+              label="Forest Division"
+              value={division?.name}
+              placeholder="Select Division"
+              onPress={() => setPickerOpen('division')}
+            />
+            <SelectField
+              label="Sub Division / Range"
+              value={range?.name}
+              placeholder="Select Range"
+              disabled={!division}
+              onPress={() => division && setPickerOpen('range')}
+            />
           </View>
-        </ScrollView>
 
-        {/* Picker Modals */}
-        <PickerModal
-          visible={pickerOpen === 'division'}
-          title="Select Forest Division"
-          data={SAMPLE_DIVISIONS}
-          onClose={() => setPickerOpen(null)}
-          onSelect={onPickDivision}
-        />
-        <PickerModal
-          visible={pickerOpen === 'range'}
-          title="Select Range"
-          data={ranges}
-          onClose={() => setPickerOpen(null)}
-          onSelect={onPickRange}
-        />
-        <PickerModal
-          visible={pickerOpen === 'block'}
-          title="Select Block"
-          data={blocks}
-          onClose={() => setPickerOpen(null)}
-          onSelect={onPickBlock}
-        />
-        <PickerModal
-          visible={pickerOpen === 'beat'}
-          title="Select Beat"
-          data={beats}
-          onClose={() => setPickerOpen(null)}
-          onSelect={onPickBeat}
-        />
-      </ImageBackground>
+          <View style={styles.filterRow}>
+            <SelectField
+              label="Block"
+              value={block?.name}
+              placeholder="Select Block"
+              disabled={!range}
+              onPress={() => range && setPickerOpen('block')}
+            />
+            <SelectField
+              label="Beat"
+              value={beat?.name}
+              placeholder="Select Beat"
+              disabled={!block}
+              onPress={() => block && setPickerOpen('beat')}
+            />
+          </View>
+
+          <View style={styles.filterActions}>
+            <TouchableOpacity
+              style={styles.resetButton}
+              onPress={resetFilters}
+              activeOpacity={0.7}>
+              <Ionicons name="refresh" size={16} color={COLORS.primary}/>
+              <Text style={styles.resetButtonText}>Reset</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.applyButton, {opacity: loading ? 0.7 : 1}]}
+              onPress={applyFilters}
+              disabled={loading}
+              activeOpacity={0.7}>
+              {loading ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <>
+                  <Ionicons name="checkmark" size={16} color="#fff"/>
+                  <Text style={styles.applyButtonText}>Apply Filters</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Stats Overview */}
+        <View style={styles.statsSection}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="stats-chart" size={20} color={COLORS.text} />
+            <Text style={styles.sectionTitle}>Statistics Overview</Text>
+          </View>
+
+          <View style={styles.statsGrid}>
+            <StatCard
+              title="Pending"
+              value={stats.pending}
+              icon="time-outline"
+              color={COLORS.warning}
+              bg="rgba(249, 115, 22, 0.1)"
+            />
+            <StatCard
+              title="Verified"
+              value={stats.verified}
+              icon="checkmark-done-outline"
+              color={COLORS.success}
+              bg="rgba(22, 163, 74, 0.1)"
+            />
+            <StatCard
+              title="Disposed"
+              value={stats.disposed}
+              icon="trash-outline"
+              color={COLORS.secondary}
+              bg="rgba(14, 165, 233, 0.1)"
+            />
+            <StatCard
+              title="Superdari"
+              value={stats.superdari}
+              icon="briefcase-outline"
+              color={COLORS.info}
+              bg="rgba(124, 58, 237, 0.1)"
+            />
+          </View>
+        </View>
+
+        {/* Quick Actions */}
+        <View style={styles.actionsSection}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="flash" size={20} color={COLORS.text} />
+            <Text style={styles.sectionTitle}>Quick Actions</Text>
+          </View>
+
+          <View style={styles.actionsGrid}>
+            <QuickAction
+              icon="add-circle-outline"
+              title="New Entry"
+              color={COLORS.primary}
+              onPress={() => console.log('New Entry')}
+            />
+            <QuickAction
+              icon="search-outline"
+              title="Search"
+              color={COLORS.secondary}
+              onPress={() => console.log('Search')}
+            />
+            <QuickAction
+              icon="document-text-outline"
+              title="Reports"
+              color={COLORS.info}
+              onPress={() => console.log('Reports')}
+            />
+            <QuickAction
+              icon="map-outline"
+              title="Map View"
+              color={COLORS.warning}
+              onPress={() => console.log('Map View')}
+            />
+          </View>
+        </View>
+
+        {/* Recent Activity */}
+        <View style={styles.activitySection}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="time-outline" size={20} color={COLORS.text} />
+            <Text style={styles.sectionTitle}>Recent Activity</Text>
+          </View>
+
+          <View style={styles.activityCard}>
+            <ActivityItem
+              icon="checkmark-circle"
+              title="Tree #1234 verified"
+              time="2 hours ago"
+              color={COLORS.success}
+            />
+            <ActivityItem
+              icon="document-text"
+              title="Disposal record added"
+              time="4 hours ago"
+              color={COLORS.secondary}
+            />
+            <ActivityItem
+              icon="person-add"
+              title="New user registered"
+              time="1 day ago"
+              color={COLORS.info}
+            />
+            <ActivityItem
+              icon="warning"
+              title="3 pending records"
+              time="2 days ago"
+              color={COLORS.warning}
+            />
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* Picker Modals */}
+      <PickerModal
+        visible={pickerOpen === 'division'}
+        title="Select Forest Division"
+        data={SAMPLE_DIVISIONS}
+        onClose={() => setPickerOpen(null)}
+        onSelect={onPickDivision}
+      />
+      <PickerModal
+        visible={pickerOpen === 'range'}
+        title="Select Range"
+        data={ranges}
+        onClose={() => setPickerOpen(null)}
+        onSelect={onPickRange}
+      />
+      <PickerModal
+        visible={pickerOpen === 'block'}
+        title="Select Block"
+        data={blocks}
+        onClose={() => setPickerOpen(null)}
+        onSelect={onPickBlock}
+      />
+      <PickerModal
+        visible={pickerOpen === 'beat'}
+        title="Select Beat"
+        data={beats}
+        onClose={() => setPickerOpen(null)}
+        onSelect={onPickBeat}
+      />
     </View>
   );
 }
@@ -260,36 +347,38 @@ function SelectField({label, value, placeholder, onPress, disabled}) {
   return (
     <TouchableOpacity
       activeOpacity={0.7}
-      style={[styles.select, disabled && {opacity: 0.55}]}
+      style={[styles.selectField, disabled && {opacity: 0.5}]}
       onPress={onPress}
       disabled={disabled}
     >
       <Text style={styles.selectLabel}>{label}</Text>
       <View style={styles.selectBox}>
-        <Text style={[styles.selectValue, !value && {color:'#9ca3af'}]}>
+        <Text style={[styles.selectValue, !value && styles.selectPlaceholder]}>
           {value || placeholder}
         </Text>
-        <Ionicons name="chevron-down" size={18} color="#6b7280" />
+        <Ionicons name="chevron-down" size={18} color={COLORS.textLight} />
       </View>
     </TouchableOpacity>
   );
 }
 
-function KpiCard({title, value, icon, bg, border, tint}) {
+function StatCard({title, value, icon, color, bg}) {
   return (
-    <View style={[styles.card, {backgroundColor: bg, borderColor: border}]}>
-      <View style={[styles.iconWrap, {backgroundColor: `${tint}20`}]}>
-        <Ionicons name={icon} size={20} color={tint}/>
+    <View style={[styles.statCard, {backgroundColor: bg}]}>
+      <View style={styles.statIconContainer}>
+        <View style={[styles.statIcon, {backgroundColor: `${color}20`}]}>
+          <Ionicons name={icon} size={20} color={color}/>
+        </View>
       </View>
-      <Text style={[styles.cardValue, {color: '#111827'}]}>{value}</Text>
-      <Text style={[styles.cardTitle, {color: '#374151'}]}>{title}</Text>
+      <Text style={styles.statValue}>{value.toLocaleString()}</Text>
+      <Text style={styles.statTitle}>{title}</Text>
     </View>
   );
 }
 
 function QuickAction({icon, title, color, onPress}) {
   return (
-    <TouchableOpacity style={styles.quickAction} onPress={onPress}>
+    <TouchableOpacity style={styles.quickAction} onPress={onPress} activeOpacity={0.7}>
       <View style={[styles.actionIcon, { backgroundColor: `${color}15` }]}>
         <Ionicons name={icon} size={24} color={color} />
       </View>
@@ -298,24 +387,39 @@ function QuickAction({icon, title, color, onPress}) {
   );
 }
 
+function ActivityItem({icon, title, time, color}) {
+  return (
+    <View style={styles.activityItem}>
+      <View style={[styles.activityIcon, { backgroundColor: `${color}15` }]}>
+        <Ionicons name={icon} size={16} color={color} />
+      </View>
+      <View style={styles.activityContent}>
+        <Text style={styles.activityTitle}>{title}</Text>
+        <Text style={styles.activityTime}>{time}</Text>
+      </View>
+    </View>
+  );
+}
+
 function PickerModal({visible, title, data, onClose, onSelect}) {
   return (
     <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.modalCard}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>{title}</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={22} color="#111827" />
+            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+              <Ionicons name="close" size={24} color={COLORS.text} />
             </TouchableOpacity>
           </View>
           <FlatList
             data={data}
             keyExtractor={(item)=> item.id}
-            ItemSeparatorComponent={()=><View style={{height:8}}/>}
+            ItemSeparatorComponent={()=><View style={styles.separator}/>}
             renderItem={({item})=>(
               <Pressable style={styles.modalItem} onPress={()=>onSelect(item)}>
                 <Text style={styles.modalItemText}>{item.name}</Text>
+                <Ionicons name="chevron-forward" size={18} color={COLORS.textLight} />
               </Pressable>
             )}
           />
@@ -328,77 +432,109 @@ function PickerModal({visible, title, data, onClose, onSelect}) {
 /* ---------- Styles ---------- */
 
 const styles = StyleSheet.create({
-  screen: {flex:1, backgroundColor: '#ffffff'},
-  background: {
+  screen: {
     flex: 1,
-    width: '100%',
+    backgroundColor: COLORS.background,
   },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(16, 185, 129, 0.1)', // Green tint overlay
+  container: {
+    flex: 1,
   },
-  container: {padding: 16, paddingBottom: 32},
-
-  headerSection: {
-    alignItems: 'center',
-    marginBottom: 20,
-    paddingTop: 10,
-  },
-  heading: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#ffffff',
-    textAlign: 'center',
-    lineHeight: 28,
-    marginBottom: 6,
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.9)',
-    fontWeight: '500',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+  contentContainer: {
+    paddingBottom: 40,
   },
 
-  filterCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
+  // Header
+  header: {
+    backgroundColor: COLORS.primary,
+    paddingTop: Platform.OS === 'ios' ? 50 : StatusBar.currentHeight + 20,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
     elevation: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
   },
-  filterHeader: {
+  headerContent: {
+    paddingHorizontal: 20,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  headerInfo: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 4,
   },
-  filterTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginLeft: 8,
-  },
-  row: {flexDirection: 'row', gap: 12, marginBottom: 12},
-  select: {flex: 1},
-  selectLabel: {
-    fontSize: 13,
-    color: '#6b7280',
-    marginBottom: 6,
+  infoChipText: {
+    fontSize: 12,
     fontWeight: '600',
+    color: '#fff',
+  },
+
+  // Cards
+  card: {
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    marginTop: 20,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    paddingBottom: 12,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+
+  // Filter Section
+  filterRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  selectField: {
+    flex: 1,
+  },
+  selectLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginBottom: 6,
   },
   selectBox: {
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: COLORS.border,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 14,
@@ -406,156 +542,244 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#fff',
+  },
+  selectValue: {
+    fontSize: 14,
+    color: COLORS.text,
+    fontWeight: '500',
+  },
+  selectPlaceholder: {
+    color: COLORS.textLight,
+    fontStyle: 'italic',
+  },
+  filterActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  resetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    borderWidth: 1,
+    borderColor: COLORS.primaryLight,
+    gap: 6,
+  },
+  resetButtonText: {
+    color: COLORS.primary,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  applyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 6,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  applyButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  // Sections
+  statsSection: {
+    marginHorizontal: 20,
+    marginTop: 12,
+  },
+  actionsSection: {
+    marginHorizontal: 20,
+    marginTop: 12,
+  },
+  activitySection: {
+    marginHorizontal: 20,
+    marginTop: 12,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+
+  // Stats Grid
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  statCard: {
+    width: '48%',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 2,
   },
-  selectValue: {fontSize: 15, color: '#111827', fontWeight: '500'},
-
-  filterActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-    marginTop: 8,
-  },
-  btn: {
-    flexDirection:'row',
-    alignItems:'center',
-    paddingHorizontal:16,
-    height:42,
-    borderRadius:12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  btnGhost: {
-    backgroundColor:'#ecfdf5',
-    borderWidth:1,
-    borderColor:'#bbf7d0',
-  },
-  btnPrimary: {
-    backgroundColor: colors.primary,
-    shadowColor: colors.primary,
-    shadowOpacity: 0.3,
-  },
-  btnText: {fontWeight: '700', fontSize: 14},
-
-  statsSection: {
-    marginBottom: 20,
-  },
-  statsTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: 16,
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  card: {
-    width: '48%',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  iconWrap: {
-    alignSelf:'flex-start',
-    borderRadius: 12,
-    padding: 10,
+  statIconContainer: {
+    alignItems: 'flex-start',
     marginBottom: 12,
   },
-  cardValue: {fontSize: 28, fontWeight: '800', marginBottom: 2},
-  cardTitle: {fontSize: 13, fontWeight: '600', opacity: 0.8},
+  statIcon: {
+    borderRadius: 10,
+    padding: 8,
+  },
+  statValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: 4,
+  },
+  statTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.textLight,
+  },
 
-  actionsSection: {
-    marginBottom: 20,
-  },
-  actionsTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: 16,
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
+  // Quick Actions
   actionsGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 12,
   },
   quickAction: {
+    flex: 1,
     alignItems: 'center',
-    width: '23%',
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   actionIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
+    width: 48,
+    height: 48,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
   },
   actionTitle: {
     fontSize: 12,
-    color: '#ffffff',
     fontWeight: '600',
+    color: COLORS.text,
     textAlign: 'center',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
   },
 
-  /* Modal */
-  modalBackdrop: {
-    flex:1,
-    backgroundColor:'rgba(0,0,0,0.5)',
-    justifyContent:'flex-end',
+  // Activity
+  activityCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  modalCard: {
-    backgroundColor:'#fff',
-    padding: 20,
+  activityItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(31, 41, 55, 0.05)',
+  },
+  activityIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  activityContent: {
+    flex: 1,
+  },
+  activityTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginBottom: 2,
+  },
+  activityTime: {
+    fontSize: 12,
+    color: COLORS.textLight,
+  },
+
+  // Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContainer: {
+    backgroundColor: '#fff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20,
     maxHeight: '60%',
   },
   modalHeader: {
-    flexDirection:'row',
-    alignItems:'center',
-    justifyContent:'space-between',
-    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
   },
-  modalTitle: {fontWeight:'800', fontSize:18, color:'#111827'},
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  closeButton: {
+    padding: 4,
+  },
+  separator: {
+    height: 1,
+    backgroundColor: COLORS.border,
+    marginHorizontal: 20,
+  },
   modalItem: {
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor:'#e5e7eb',
-    backgroundColor:'#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
   },
-  modalItemText: {fontSize: 15, color: '#111827', fontWeight: '500'},
+  modalItemText: {
+    fontSize: 15,
+    color: COLORS.text,
+    fontWeight: '500',
+  },
 });

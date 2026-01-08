@@ -1,4 +1,5 @@
-import React, {useState, useEffect} from 'react';
+// /screens/AddTreeScreen.js
+import React, {useMemo, useState, useEffect, useCallback} from 'react';
 import {
   ScrollView,
   Text,
@@ -6,220 +7,184 @@ import {
   TouchableOpacity,
   Alert,
   View,
-  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Modal,
   TouchableWithoutFeedback,
+  TextInput,
+  ActivityIndicator,
+  RefreshControl,
+  Dimensions,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import Geolocation from '@react-native-community/geolocation';
-import Slider from '@react-native-community/slider';
-import {launchImageLibrary} from 'react-native-image-picker';
+import {useFocusEffect} from '@react-navigation/native';
 import FormRow from '../components/FormRow';
 import colors from '../theme/colors';
+import {useAuth} from '../context/AuthContext';
 
-/* ---------- SINGLE-SELECT DROPDOWN ---------- */
-const DropdownRow = ({label, value, options, onChange, required}) => {
+/* ===================== API ===================== */
+const API_BASE = 'http://be.lte.gisforestry.com';
+const ENUM_CREATE_URL = `${API_BASE}/enum/name-of-site`;
+const ENUM_MY_SITES_URL = `${API_BASE}/enum/name-of-site/my/sites`;
+
+/* ---------- safe json ---------- */
+async function safeJson(res) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/* ---------- SINGLE-SELECT DROPDOWN (Object Options: {id,name}) ---------- */
+const DropdownRow = ({
+  label,
+  value,
+  options,
+  onChange,
+  required,
+  disabled,
+  loading,
+  lockedText,
+}) => {
   const [open, setOpen] = useState(false);
+
+  const displayText = lockedText ?? (value?.name ? value.name : '');
+  const isDisabled = !!disabled || !!loading || !!lockedText;
 
   return (
     <View style={styles.dropdownContainer}>
       <Text style={styles.dropdownLabel}>
         {label} {required && <Text style={styles.required}>*</Text>}
       </Text>
+
       <TouchableOpacity
-        style={styles.dropdownSelected}
-        onPress={() => setOpen(true)}>
+        style={[styles.dropdownSelected, isDisabled && {opacity: 0.65}]}
+        onPress={() => !isDisabled && setOpen(true)}
+        activeOpacity={0.8}>
         <Text
           style={
-            value ? styles.dropdownSelectedText : styles.dropdownPlaceholder
+            displayText ? styles.dropdownSelectedText : styles.dropdownPlaceholder
           }>
-          {value || 'Select...'}
+          {loading ? 'Loading...' : displayText || 'Select...'}
         </Text>
-        <Ionicons name="chevron-down" size={18} color="#6b7280" />
+        <Ionicons
+          name={isDisabled ? 'lock-closed' : 'chevron-down'}
+          size={18}
+          color="#6b7280"
+        />
       </TouchableOpacity>
 
-      <Modal
-        transparent
-        visible={open}
-        animationType="fade"
-        onRequestClose={() => setOpen(false)}>
-        <TouchableWithoutFeedback onPress={() => setOpen(false)}>
-          <View style={styles.modalOverlay} />
-        </TouchableWithoutFeedback>
-        <View style={styles.dropdownModal}>
-          <Text style={styles.dropdownModalTitle}>{label}</Text>
-          <ScrollView style={{maxHeight: 260}}>
-            {options.map(opt => (
-              <TouchableOpacity
-                key={opt}
-                style={styles.dropdownItem}
-                onPress={() => {
-                  onChange(opt);
-                  setOpen(false);
-                }}>
-                <Text style={styles.dropdownItemText}>{opt}</Text>
+      {!lockedText && (
+        <Modal
+          transparent
+          visible={open}
+          animationType="fade"
+          onRequestClose={() => setOpen(false)}>
+          <TouchableWithoutFeedback onPress={() => setOpen(false)}>
+            <View style={styles.modalOverlay} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.dropdownModal}>
+            <View style={styles.dropdownModalHeader}>
+              <Text style={styles.dropdownModalTitle}>{label}</Text>
+              <TouchableOpacity onPress={() => setOpen(false)}>
+                <Ionicons name="close" size={22} color="#065f46" />
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </Modal>
+            </View>
+
+            <ScrollView style={{maxHeight: 260}} showsVerticalScrollIndicator={false}>
+              {options?.length ? (
+                options.map(opt => (
+                  <TouchableOpacity
+                    key={String(opt.id)}
+                    style={styles.dropdownItem}
+                    onPress={() => {
+                      onChange(opt);
+                      setOpen(false);
+                    }}>
+                    <Text style={styles.dropdownItemText}>{opt.name}</Text>
+                    <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View style={styles.dropdownEmpty}>
+                  <Ionicons name="list" size={24} color="#d1d5db" />
+                  <Text style={styles.dropdownEmptyText}>
+                    {loading ? 'Loading...' : 'No options available.'}
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </Modal>
+      )}
     </View>
   );
 };
 
-/* ---------- MULTI-SELECT DROPDOWN (for Pole Crop Species) ---------- */
-const MultiSelectRow = ({label, values, options, onChange, required}) => {
-  const [open, setOpen] = useState(false);
-  const selectedText =
-    values && values.length > 0 ? values.join(', ') : 'Select...';
+const {width} = Dimensions.get('window');
+const CARD_WIDTH = (width - 48) / 2; // 2 cards with padding
 
-  const toggleOption = opt => {
-    if (!values) {
-      onChange([opt]);
-      return;
-    }
-    if (values.includes(opt)) {
-      onChange(values.filter(v => v !== opt));
-    } else {
-      onChange([...values, opt]);
-    }
-  };
-
-  return (
-    <View style={styles.dropdownContainer}>
-      <Text style={styles.dropdownLabel}>
-        {label} {required && <Text style={styles.required}>*</Text>}
-      </Text>
-      <TouchableOpacity
-        style={styles.dropdownSelected}
-        onPress={() => setOpen(true)}>
-        <Text
-          style={
-            values && values.length
-              ? styles.dropdownSelectedText
-              : styles.dropdownPlaceholder
-          }>
-          {selectedText}
-        </Text>
-        <Ionicons name="chevron-down" size={18} color="#6b7280" />
-      </TouchableOpacity>
-
-      <Modal
-        transparent
-        visible={open}
-        animationType="fade"
-        onRequestClose={() => setOpen(false)}>
-        <TouchableWithoutFeedback onPress={() => setOpen(false)}>
-          <View style={styles.modalOverlay} />
-        </TouchableWithoutFeedback>
-        <View style={styles.dropdownModal}>
-          <Text style={styles.dropdownModalTitle}>{label}</Text>
-          <ScrollView style={{maxHeight: 260}}>
-            {options.map(opt => {
-              const isSelected = values?.includes(opt);
-              return (
-                <TouchableOpacity
-                  key={opt}
-                  style={styles.dropdownItem}
-                  onPress={() => toggleOption(opt)}>
-                  <View style={styles.multiRow}>
-                    <Text style={styles.dropdownItemText}>{opt}</Text>
-                    {isSelected && (
-                      <Ionicons
-                        name="checkmark"
-                        size={18}
-                        color="#16a34a"
-                        style={{marginLeft: 8}}
-                      />
-                    )}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </Modal>
-    </View>
-  );
-};
-
-/* ===================== MAIN SCREEN ===================== */
 export default function AddTreeScreen({navigation}) {
-  /* -------- enumeration modal + list states -------- */
-  const [enumModalVisible, setEnumModalVisible] = useState(false);
-  const [enumerations, setEnumerations] = useState([]);
+  const {user, token} = useAuth();
 
-  // Enumeration form fields (header)
+  const [enumModalVisible, setEnumModalVisible] = useState(false);
+
+  // API-backed list of saved sites (instead of offline)
+  const [enumerations, setEnumerations] = useState([]);
+  const [loadingList, setLoadingList] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Row actions modal
+  const [actionModalVisible, setActionModalVisible] = useState(false);
+  const [selectedEnum, setSelectedEnum] = useState(null);
+
+  // Search (body)
+  const [search, setSearch] = useState('');
+
+  // Filters
+  const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [filters, setFilters] = useState({
+    linearType: '',
+    circle: '',
+    block: '',
+    dateFrom: '',
+    dateTo: '',
+    kmFrom: '',
+    kmTo: '',
+  });
+
+  /* ===================== FIELDS (LOCKED FROM LOGIN) ===================== */
+  const [zoneId, setZoneId] = useState(null);
+  const [circleId, setCircleId] = useState(null);
+  const [divisionId, setDivisionId] = useState(null);
+  const [subDivisionId, setSubDivisionId] = useState(null);
+  const [blockId, setBlockId] = useState(null);
+  const [beatId, setBeatId] = useState(null);
+
+  const [zone, setZone] = useState('');
+  const [circle, setCircle] = useState('');
   const [division, setDivision] = useState('');
   const [subDivision, setSubDivision] = useState('');
   const [block, setBlock] = useState('');
-  const [year, setYear] = useState('');
   const [beat, setBeat] = useState('');
 
-  // Type of Linear Plantation + Side
-  const [linearType, setLinearType] = useState(''); // Road | Rail | Canal
-  const [side, setSide] = useState('');
-
-  // Other header fields
-  const [registerNo, setRegisterNo] = useState('');
-  const [pageNo, setPageNo] = useState('');
-  const [canalName, setCanalName] = useState(''); // Name of Canal / Road / Site
-  const [siteName, setSiteName] = useState('');
+  /* ===================== FORM (EDITABLE) ===================== */
+  const [linearType, setLinearType] = useState('');
+  const [canalName, setCanalName] = useState(''); // will be sent as site_name
   const [compartment, setCompartment] = useState('');
+  const [year, setYear] = useState('');
+  const [side, setSide] = useState('');
   const [rdFrom, setRdFrom] = useState('');
   const [rdTo, setRdTo] = useState('');
   const [remarks, setRemarks] = useState('');
 
-  /* -------- detail forms (Mature / Afforestation / Pole) -------- */
-  const [detailModalVisible, setDetailModalVisible] = useState(false);
-  const [detailType, setDetailType] = useState(null); // 'MATURE' | 'AFFORESTATION' | 'POLE'
-  const [activeEnum, setActiveEnum] = useState(null);
+  const linearTypeOptions = ['Road', 'Rail', 'Canal'].map((name, idx) => ({
+    id: String(idx + 1),
+    name,
+  }));
 
-  // Mature Tree form
-  const [mtRegisterNo, setMtRegisterNo] = useState('');
-  const [mtPageNo, setMtPageNo] = useState('');
-  const [mtTreeId, setMtTreeId] = useState('');
-  const [mtRdKm, setMtRdKm] = useState('');
-  const [mtTreeNo, setMtTreeNo] = useState('');
-  const [mtSpecies, setMtSpecies] = useState('');
-  const [mtGirthInches, setMtGirthInches] = useState('');
-  const [mtCondition, setMtCondition] = useState('');
-  const [mtGps, setMtGps] = useState('');
-  const [mtRemarks, setMtRemarks] = useState('');
-  const [mtPictureUri, setMtPictureUri] = useState(null);
-
-  // Pole Crop form
-  const [pcRegisterNo, setPcRegisterNo] = useState('');
-  const [pcPageNo, setPcPageNo] = useState('');
-  const [pcTreeId, setPcTreeId] = useState('');
-  const [pcRdKm, setPcRdKm] = useState('');
-  const [pcSpecies, setPcSpecies] = useState([]); // multi-select
-  const [pcCount, setPcCount] = useState('');
-  const [pcGps, setPcGps] = useState('');
-  const [pcRemarks, setPcRemarks] = useState('');
-
-  // Afforestation form
-  const [afRegisterNo, setAfRegisterNo] = useState('');
-  const [afPageNo, setAfPageNo] = useState('');
-  const [afAvgMilesKm, setAfAvgMilesKm] = useState('');
-  const [afSuccess, setAfSuccess] = useState(0); // slider 0–100
-  const [afMainSpecies, setAfMainSpecies] = useState('');
-  const [afYear, setAfYear] = useState('');
-  const [afSchemeType, setAfSchemeType] = useState('');
-  const [afProjectName, setAfProjectName] = useState('');
-  const [afNonDevScheme, setAfNonDevScheme] = useState('');
-  const [afPlants, setAfPlants] = useState('');
-  const [afGpsList, setAfGpsList] = useState(['']); // multiple coordinates
-  const [afRemarks, setAfRemarks] = useState('');
-  const [afPictureUri, setAfPictureUri] = useState(null);
-
-  /* --------- dropdown options --------- */
-  const divisionOptions = ['Lahore', 'Faisalabad', 'Multan'];
-  const subDivisionOptions = ['Range 1', 'Range 2', 'Range 3'];
-  const blockOptions = ['Block A', 'Block B', 'Block C'];
   const yearOptions = [
     '2021-22',
     '2022-23',
@@ -230,500 +195,965 @@ export default function AddTreeScreen({navigation}) {
     '2027-28',
     '2028-29',
     '2029-30',
-  ];
-  const beatOptions = ['Beat 1', 'Beat 2', 'Beat 3'];
-
-  const schemeOptions = ['Development', 'Non Development'];
-
-  const nonDevOptions = [
-    '1% Plantation',
-    'Replenishment',
-    'Gap Filling',
-    'Other',
-  ];
-
-  const linearTypeOptions = ['Road', 'Rail', 'Canal'];
+  ].map((name, idx) => ({id: String(idx + 1), name}));
 
   const getSideOptions = type => {
-    if (type === 'Road') return ['L', 'R', 'Both', 'M'];
-    if (type === 'Rail' || type === 'Canal') return ['L', 'R'];
+    if (type === 'Road') return ['Left', 'Right', 'Both', 'Median'];
+    if (type === 'Rail') return ['Left', 'Right', 'Both'];
+    if (type === 'Canal') return ['Left', 'Right', 'Both'];
     return [];
   };
 
-  // Common species & condition options
-  const speciesOptions = [
-    'Shisham',
-    'Kikar',
-    'Sufaida',
-    'Siris',
-    'Neem',
-    'Other',
-  ];
-  const conditionOptions = [
-    'Green Standing',
-    'Green Fallen',
-    'Dry',
-    'Leaning',
-    'Dead',
-    'Hollow',
-    'Fallen',
-    'Rotten',
-    'Fire Burnt',
-    'Forked',
-    '1/4',
-    '1/2',
-  ];
+  const rdKmLabelFrom = () =>
+    linearType === 'Canal' ? 'RDs for Canal' : 'KMs for Road/Rail';
+  const rdKmLabelTo = () => 'RDs/KMs To';
 
-  /* --------- Load saved enumeration headers --------- */
+  const sideLabel =
+    linearType === 'Road'
+      ? 'Side (Left / Right / Both / Median)'
+      : 'Side (Left / Right / Both)';
+
+  const toNum = v => {
+    const s = String(v ?? '').trim();
+    if (s === '') return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const toDateStart = yyyyMmDd => {
+    const s = String(yyyyMmDd ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    const d = new Date(`${s}T00:00:00`);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const toDateEnd = yyyyMmDd => {
+    const s = String(yyyyMmDd ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    const d = new Date(`${s}T23:59:59`);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  /* ===================== NORMALIZE API -> UI ITEM ===================== */
+  const normalizeItemFromApi = useCallback(
+    apiItem => {
+      const pt = apiItem?.plantation_type || '';
+      let lt = '';
+      if (pt.toLowerCase().includes('canal')) lt = 'Canal';
+      else if (pt.toLowerCase().includes('road')) lt = 'Road';
+      else if (pt.toLowerCase().includes('rail')) lt = 'Rail';
+      else lt = pt;
+
+      const resolvedId =
+        apiItem?.name_of_site_id ??
+        apiItem?.site_id ??
+        apiItem?.nameOfSiteId ??
+        apiItem?.id;
+
+      return {
+        id:
+          resolvedId != null
+            ? String(resolvedId)
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name_of_site_id: resolvedId != null ? Number(resolvedId) : null,
+
+        // IDs (from API)
+        zoneId: apiItem?.zoneId != null ? String(apiItem.zoneId) : zoneId,
+        circleId: apiItem?.circleId != null ? String(apiItem.circleId) : circleId,
+        divisionId: apiItem?.divisionId != null ? String(apiItem.divisionId) : divisionId,
+        subDivisionId:
+          apiItem?.subDivisionId != null
+            ? String(apiItem.subDivisionId)
+            : subDivisionId,
+        blockId: apiItem?.blockId != null ? String(apiItem.blockId) : blockId,
+        beatId: apiItem?.beatId != null ? String(apiItem.beatId) : beatId,
+
+        // names (we show from login, since API doesn't return names)
+        zone,
+        circle,
+        division,
+        subDivision,
+        block,
+        beat,
+
+        // form fields
+        linearType: lt,
+        plantation_type: apiItem?.plantation_type || '',
+        canalName: apiItem?.site_name || '',
+        compartment: apiItem?.compartment || '',
+        year: apiItem?.year || '',
+        side: apiItem?.side || '',
+        rdFrom: apiItem?.rds_from != null ? String(apiItem.rds_from) : '',
+        rdTo: apiItem?.rds_to != null ? String(apiItem.rds_to) : '',
+        remarks: apiItem?.remarks || '',
+
+        createdAt: apiItem?.created_at || apiItem?.createdAt || new Date().toISOString(),
+      };
+    },
+    [zoneId, circleId, divisionId, subDivisionId, blockId, beatId, zone, circle, division, subDivision, block, beat],
+  );
+
+  /* ===================== AUTO-FILL LOCKED LOCATION FROM LOGIN USER ===================== */
   useEffect(() => {
-    const loadEnumerations = async () => {
-      try {
-        const json = await AsyncStorage.getItem('ENUMERATION_FORMS');
-        if (json) {
-          setEnumerations(JSON.parse(json));
-        }
-      } catch (e) {
-        console.warn('Failed to load enumerations', e);
+    const z = user?.zone;
+    const c = user?.circle;
+    const d = user?.division;
+    const sd = user?.subDivision;
+    const b = user?.block;
+    const bt = user?.beat;
+
+    setZoneId(z?.id ? String(z.id) : null);
+    setZone(z?.name || '');
+
+    setCircleId(c?.id ? String(c.id) : null);
+    setCircle(c?.name || '');
+
+    setDivisionId(d?.id ? String(d.id) : null);
+    setDivision(d?.name || '');
+
+    setSubDivisionId(sd?.id ? String(sd.id) : null);
+    setSubDivision(sd?.name || '');
+
+    setBlockId(b?.id ? String(b.id) : null);
+    setBlock(b?.name || '');
+
+    setBeatId(bt?.id ? String(bt.id) : null);
+    setBeat(bt?.name || '');
+  }, [user]);
+
+  /* ===================== FETCH MY SITES ===================== */
+  const fetchMySites = useCallback(
+    async ({silent = false} = {}) => {
+      if (!token) {
+        if (!silent) Alert.alert('Session', 'Token missing. Please login again.');
+        return;
       }
-    };
-    loadEnumerations();
+
+      try {
+        if (!silent) setLoadingList(true);
+
+        const res = await fetch(ENUM_MY_SITES_URL, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const json = await safeJson(res);
+
+        if (!res.ok) {
+          throw new Error(json?.message || `Fetch failed (HTTP ${res.status})`);
+        }
+
+        const data = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+        const mapped = data.map(normalizeItemFromApi);
+
+        // newest first
+        mapped.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+        setEnumerations(mapped);
+      } catch (e) {
+        console.error('fetchMySites error:', e);
+        if (!silent) Alert.alert('Error', e?.message || 'Failed to load your sites.');
+      } finally {
+        if (!silent) setLoadingList(false);
+      }
+    },
+    [token, normalizeItemFromApi],
+  );
+
+  // On focus, reset search/filters + fetch list
+  useFocusEffect(
+    useCallback(() => {
+      setSearch('');
+      setFilters({
+        linearType: '',
+        circle: '',
+        block: '',
+        dateFrom: '',
+        dateTo: '',
+        kmFrom: '',
+        kmTo: '',
+      });
+      fetchMySites({silent: true});
+    }, [fetchMySites]),
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchMySites({silent: true});
+    setRefreshing(false);
+  }, [fetchMySites]);
+
+  /* ===================== FILTERS ===================== */
+  const clearAllFilters = useCallback(() => {
+    setSearch('');
+    setFilters({
+      linearType: '',
+      circle: '',
+      block: '',
+      dateFrom: '',
+      dateTo: '',
+      kmFrom: '',
+      kmTo: '',
+    });
   }, []);
 
-  const persistEnumerations = async updated => {
-    try {
-      await AsyncStorage.setItem('ENUMERATION_FORMS', JSON.stringify(updated));
-    } catch (e) {
-      console.warn('Failed to save enumerations', e);
-    }
-  };
+  const activeFilterCount = useMemo(() => {
+    const adv = Object.values(filters).filter(v => String(v || '').trim() !== '').length;
+    const s = search.trim() ? 1 : 0;
+    return adv + s;
+  }, [filters, search]);
 
-  /* ------------- enumeration header save ------------- */
-  const saveEnumerationForm = async () => {
-    if (
-      !division ||
-      !subDivision ||
-      !block ||
-      !year ||
-      !beat ||
-      !linearType ||
-      !side
-    ) {
-      Alert.alert('Missing data', 'Please fill all required dropdown fields.');
-      return;
-    }
+  const filteredEnumerations = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const hasAnyFilter = q !== '' || Object.values(filters).some(v => String(v ?? '').trim() !== '');
+    if (!hasAnyFilter) return enumerations;
 
-    const newItem = {
-      id: Date.now().toString(),
-      division,
-      subDivision,
-      block,
-      year,
-      beat,
-      linearType,
-      side,
-      registerNo,
-      pageNo,
-      canalName,
-      siteName,
-      compartment,
-      rdFrom,
-      rdTo,
-      remarks,
-      createdAt: new Date().toISOString(),
-    };
+    const df = toDateStart(filters.dateFrom);
+    const dt = toDateEnd(filters.dateTo);
+    const kmF = toNum(filters.kmFrom);
+    const kmT = toNum(filters.kmTo);
 
-    const updated = [newItem, ...enumerations];
-    setEnumerations(updated);
-    await persistEnumerations(updated);
+    return enumerations.filter(item => {
+      if (filters.linearType && item.linearType !== filters.linearType) return false;
 
-    // Clear header form
-    setDivision('');
-    setSubDivision('');
-    setBlock('');
-    setYear('');
-    setBeat('');
-    setLinearType('');
-    setSide('');
-    setRegisterNo('');
-    setPageNo('');
-    setCanalName('');
-    setSiteName('');
-    setCompartment('');
-    setRdFrom('');
-    setRdTo('');
-    setRemarks('');
-    setEnumModalVisible(false);
+      // these are text filters in your UI (exact match)
+      if (filters.circle && (item.circle || '') !== filters.circle) return false;
+      if (filters.block && (item.block || '') !== filters.block) return false;
 
-    Alert.alert('Saved', 'Enumeration header has been saved offline.');
-  };
-
-  /* ---------------- helpers ---------------- */
-  const resetDetailForms = () => {
-    // Mature
-    setMtRegisterNo('');
-    setMtPageNo('');
-    setMtTreeId('');
-    setMtRdKm('');
-    setMtTreeNo('');
-    setMtSpecies('');
-    setMtGirthInches('');
-    setMtCondition('');
-    setMtGps('');
-    setMtRemarks('');
-    setMtPictureUri(null);
-
-    // Pole
-    setPcRegisterNo('');
-    setPcPageNo('');
-    setPcTreeId('');
-    setPcRdKm('');
-    setPcSpecies([]);
-    setPcCount('');
-    setPcGps('');
-    setPcRemarks('');
-
-    // Afforestation
-    setAfRegisterNo('');
-    setAfPageNo('');
-    setAfAvgMilesKm('');
-    setAfSuccess(0);
-    setAfMainSpecies('');
-    setAfYear('');
-    setAfSchemeType('');
-    setAfProjectName('');
-    setAfNonDevScheme('');
-    setAfPlants('');
-    setAfGpsList(['']);
-    setAfRemarks('');
-    setAfPictureUri(null);
-  };
-
-  const openDetailForm = (type, enumeration) => {
-    setActiveEnum(enumeration);
-    setDetailType(type);
-    resetDetailForms();
-
-    if (enumeration) {
-      const rdRangeText =
-        enumeration.rdFrom && enumeration.rdTo
-          ? `${enumeration.rdFrom} - ${enumeration.rdTo}`
-          : enumeration.rdFrom || enumeration.rdTo || '';
-
-      if (type === 'MATURE') {
-        setMtRegisterNo(enumeration.registerNo || '');
-        setMtPageNo(enumeration.pageNo || '');
-        setMtRdKm(rdRangeText);
-        setMtTreeId(`${enumeration.id || 'ENUM'}-${Date.now()}`);
-      } else if (type === 'POLE') {
-        setPcRegisterNo(enumeration.registerNo || '');
-        setPcPageNo(enumeration.pageNo || '');
-        setPcRdKm(rdRangeText);
-        setPcTreeId(`${enumeration.id || 'ENUM'}-${Date.now()}`);
-      } else if (type === 'AFFORESTATION') {
-        setAfRegisterNo(enumeration.registerNo || '');
-        setAfPageNo(enumeration.pageNo || '');
+      if ((df || dt) && item.createdAt) {
+        const itemDate = new Date(item.createdAt);
+        if (df && itemDate < df) return false;
+        if (dt && itemDate > dt) return false;
+      } else if ((df || dt) && !item.createdAt) {
+        return false;
       }
+
+      if (kmF !== null || kmT !== null) {
+        const a = toNum(item.rdFrom);
+        const b = toNum(item.rdTo);
+        if (a === null && b === null) return false;
+
+        const itemFrom = a !== null ? a : b;
+        const itemTo = b !== null ? b : a;
+
+        const minV = Math.min(itemFrom, itemTo);
+        const maxV = Math.max(itemFrom, itemTo);
+
+        if (kmF !== null && maxV < kmF) return false;
+        if (kmT !== null && minV > kmT) return false;
+      }
+
+      if (!q) return true;
+
+      const blob = [
+        item.zone,
+        item.circle,
+        item.division,
+        item.subDivision,
+        item.block,
+        item.beat,
+        item.year,
+        item.linearType,
+        item.side,
+        item.canalName,
+        item.compartment,
+        item.remarks,
+        item.rdFrom,
+        item.rdTo,
+        item.plantation_type,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return blob.includes(q);
+    });
+  }, [enumerations, search, filters]);
+
+  /* ===================== CREATE SITE (SAVE TO DB) ===================== */
+  const saveEnumerationForm = async () => {
+    if (!zoneId || !circleId || !divisionId || !subDivisionId || !blockId || !beatId) {
+      Alert.alert(
+        'Location missing',
+        'Your login profile does not contain complete Zone/Circle/Division/SubDivision/Block/Beat. Please contact admin.',
+      );
+      return;
     }
 
-    setDetailModalVisible(true);
-  };
+    if (!token) {
+      Alert.alert('Session error', 'Token not found. Please logout and login again.');
+      return;
+    }
 
-  const appendRecord = async (key, record) => {
+    // Required fields for your API
+    if (!linearType || !year || !side || !canalName) {
+      Alert.alert('Missing data', 'Please fill all required fields (Type, Site Name, Year, Side).');
+      return;
+    }
+
+    // backend expects "Canal Side" / "Road Side" / "Rail Side"
+    const plantationTypeMap = {
+      Canal: 'Canal Side',
+      Road: 'Road Side',
+      Rail: 'Rail Side',
+    };
+    const plantation_type = plantationTypeMap[linearType] || linearType;
+
+    // backend expects numbers (not null/NaN)
+    const rFromRaw = String(rdFrom ?? '').trim();
+    const rToRaw = String(rdTo ?? '').trim();
+    const rds_from = rFromRaw === '' ? 0 : Number(rFromRaw);
+    const rds_to = rToRaw === '' ? 0 : Number(rToRaw);
+
+    if (!Number.isFinite(rds_from) || !Number.isFinite(rds_to)) {
+      Alert.alert('Invalid value', 'Please enter valid numeric values for From/To.');
+      return;
+    }
+
     try {
-      const old = await AsyncStorage.getItem(key);
-      const arr = old ? JSON.parse(old) : [];
-      const updated = [record, ...arr];
-      await AsyncStorage.setItem(key, JSON.stringify(updated));
+      const payload = {
+        site_name: canalName,
+        plantation_type,
+        year,
+        zoneId: Number(zoneId),
+        circleId: Number(circleId),
+        divisionId: Number(divisionId),
+        subDivisionId: Number(subDivisionId),
+        blockId: Number(blockId),
+        beatId: Number(beatId),
+        compartment: String(compartment || '').trim() || null,
+        side: side,
+        rds_from,
+        rds_to,
+      };
+
+      const res = await fetch(ENUM_CREATE_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const json = await safeJson(res);
+
+      if (!res.ok) {
+        throw new Error(json?.message || `Failed to save (HTTP ${res.status})`);
+      }
+
+      // add to list immediately
+      const saved = json?.data || {};
+      const savedItem = normalizeItemFromApi(saved);
+
+      setEnumerations(prev => [savedItem, ...prev]);
+
+      // reset editable fields
+      setLinearType('');
+      setCanalName('');
+      setCompartment('');
+      setYear('');
+      setSide('');
+      setRdFrom('');
+      setRdTo('');
+      setRemarks('');
+
+      setEnumModalVisible(false);
+      Alert.alert('Success', 'Enumeration saved successfully.', [{text: 'OK'}]);
     } catch (e) {
-      console.warn('Failed to save records for', key, e);
+      console.error('Save enumeration error:', e);
+      Alert.alert('Error', e?.message || 'Unable to save enumeration.');
     }
   };
 
-  /* --------- GPS fetch (Mature / Pole / Afforestation) --------- */
-  const fetchGpsCoords = () => {
-    Geolocation.getCurrentPosition(
-      pos => {
-        const {latitude, longitude} = pos.coords;
-        const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-
-        if (detailType === 'MATURE') {
-          setMtGps(value);
-        } else if (detailType === 'POLE') {
-          setPcGps(value);
-        } else if (detailType === 'AFFORESTATION') {
-          setAfGpsList(prev => {
-            if (!prev || prev.length === 0) return [value];
-            const copy = [...prev];
-            copy[copy.length - 1] = value; // fill last field
-            return copy;
-          });
-        }
-      },
-      error => {
-        Alert.alert('Location Error', error.message);
-      },
-      {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
-    );
+  /* ===================== NAVIGATION ===================== */
+  // IMPORTANT FIX:
+  // - Do NOT use navigation.getParent() here.
+  // - Your RootNavigator registers these names:
+  //   MatureTreeRecords, PoleCropRecords, AfforestationRecords, Disposal, Superdari
+  const navTo = (screen, params) => {
+    navigation.navigate(screen, params);
   };
 
-  /* --------- Image pickers --------- */
-  const handlePickMatureImage = () => {
-    launchImageLibrary(
-      {
-        mediaType: 'photo',
-        quality: 0.7,
-      },
-      response => {
-        if (response.didCancel) return;
-        if (response.errorCode) {
-          Alert.alert(
-            'Image Error',
-            response.errorMessage || 'Could not pick image',
-          );
-          return;
-        }
-        const asset = response.assets && response.assets[0];
-        if (asset?.uri) {
-          setMtPictureUri(asset.uri);
-        }
-      },
-    );
-  };
-
-  const handlePickAfforestationImage = () => {
-    launchImageLibrary(
-      {
-        mediaType: 'photo',
-        quality: 0.7,
-      },
-      response => {
-        if (response.didCancel) return;
-        if (response.errorCode) {
-          Alert.alert(
-            'Image Error',
-            response.errorMessage || 'Could not pick image',
-          );
-          return;
-        }
-        const asset = response.assets && response.assets[0];
-        if (asset?.uri) {
-          setAfPictureUri(asset.uri);
-        }
-      },
-    );
-  };
-
-  /* ------------- save Mature Tree record ------------- */
-  const saveMatureTree = async () => {
-    if (!mtRdKm || !mtTreeNo) {
-      Alert.alert('Missing data', 'Please enter RD/KM and Tree No.');
-      return;
-    }
-    if (!activeEnum?.id) {
-      Alert.alert('Error', 'No parent enumeration selected.');
-      return;
-    }
-
-    const record = {
-      id: Date.now().toString(),
-      enumerationId: activeEnum.id,
-      registerNo: mtRegisterNo,
-      pageNo: mtPageNo,
-      systemTreeId: mtTreeId,
-      rdKm: mtRdKm,
-      treeNo: mtTreeNo,
-      species: mtSpecies,
-      girthInches: mtGirthInches,
-      condition: mtCondition,
-      gpsLatLong: mtGps,
-      remarks: mtRemarks,
-      pictureUri: mtPictureUri,
-      createdAt: new Date().toISOString(),
-    };
-
-    await appendRecord('MATURE_TREE_RECORDS', record);
-    setDetailModalVisible(false);
-    Alert.alert('Saved', 'Mature Tree record saved offline.');
-  };
-
-  /* ------------- save Pole Crop record ------------- */
-  const savePoleCrop = async () => {
-    if (!pcRdKm || !pcCount) {
-      Alert.alert('Missing data', 'Please enter RD/KM and Count.');
-      return;
-    }
-    if (!activeEnum?.id) {
-      Alert.alert('Error', 'No parent enumeration selected.');
-      return;
-    }
-
-    const record = {
-      id: Date.now().toString(),
-      enumerationId: activeEnum.id,
-      registerNo: pcRegisterNo,
-      pageNo: pcPageNo,
-      systemTreeId: pcTreeId,
-      rdKm: pcRdKm,
-      species: pcSpecies, // array of strings
-      count: pcCount,
-      gpsLatLong: pcGps,
-      remarks: pcRemarks,
-      createdAt: new Date().toISOString(),
-    };
-
-    await appendRecord('POLE_CROP_RECORDS', record);
-    setDetailModalVisible(false);
-    Alert.alert('Saved', 'Pole Crop record saved offline.');
-  };
-
-  /* ------------- save Afforestation record ------------- */
-  const saveAfforestation = async () => {
-    if (!afAvgMilesKm || !afYear) {
-      Alert.alert('Missing data', 'Please fill Av. Miles/KM and Year.');
-      return;
-    }
-    if (!activeEnum?.id) {
-      Alert.alert('Error', 'No parent enumeration selected.');
-      return;
-    }
-
-    const cleanGpsList = afGpsList.map(g => g.trim()).filter(g => g.length > 0);
-
-    const record = {
-      id: Date.now().toString(),
-      enumerationId: activeEnum.id,
-      registerNo: afRegisterNo,
-      pageNo: afPageNo,
-      avgMilesKm: afAvgMilesKm,
-      successPercent: afSuccess, // numeric 0–100
-      mainSpecies: afMainSpecies,
-      year: afYear,
-      schemeType: afSchemeType,
-      projectName: afProjectName,
-      nonDevScheme: afNonDevScheme,
-      noOfPlants: afPlants,
-      gpsBoundingBox: cleanGpsList, // array of coordinates
-      remarks: afRemarks,
-      pictureUri: afPictureUri,
-      createdAt: new Date().toISOString(),
-    };
-
-    await appendRecord('AFFORESTATION_RECORDS', record);
-    setDetailModalVisible(false);
-    Alert.alert('Saved', 'Afforestation record saved offline.');
-  };
-
-  /* ------------- tap handlers for card buttons ------------- */
   const handleCategoryPress = (type, item) => {
+    if (!item) return;
+
+    const resolvedSiteId =
+      item?.name_of_site_id ??
+      item?.name_of_site?.id ??
+      item?.site_id ??
+      item?.siteId ??
+      item?.id;
+
     if (type === 'Mature Tree') {
-      openDetailForm('MATURE', item);
-    } else if (type === 'Afforestation') {
-      openDetailForm('AFFORESTATION', item);
-    } else if (type === 'Pole Crop') {
-      openDetailForm('POLE', item);
+      return navTo('MatureTreeRecords', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+      });
     }
+
+    if (type === 'Pole Crop') {
+      return navTo('PoleCropRecords', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+      });
+    }
+
+    if (type === 'Afforestation') {
+      return navTo('AfforestationRecords', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+        nameOfSiteId: resolvedSiteId,
+        siteId: resolvedSiteId,
+        site: item,
+      });
+    }
+
+    // ✅ NEW OPTIONS (must match RootNavigator route names EXACTLY)
+    if (type === 'Disposal') {
+      return navTo('Disposal', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+        nameOfSiteId: resolvedSiteId,
+        siteId: resolvedSiteId,
+        site: item,
+      });
+    }
+
+    if (type === 'Superdari') {
+      return navTo('Superdari', {
+        enumeration: {
+          ...item,
+          name_of_site_id: resolvedSiteId,
+        },
+        nameOfSiteId: resolvedSiteId,
+        siteId: resolvedSiteId,
+        site: item,
+      });
+    }
+  };
+
+  const openRowActions = item => {
+    setSelectedEnum(item);
+    setActionModalVisible(true);
+  };
+
+  const iconForType = t => {
+    if (t === 'Road') return 'car-sport-outline';
+    if (t === 'Rail') return 'train-outline';
+    if (t === 'Canal') return 'water-outline';
+    return 'leaf-outline';
+  };
+
+  const colorForType = t => {
+    if (t === 'Road') return '#f97316';
+    if (t === 'Rail') return '#0ea5e9';
+    if (t === 'Canal') return '#059669';
+    return '#8b5cf6';
   };
 
   /* ===================== RENDER ===================== */
   return (
     <View style={styles.screen}>
-      <ImageBackground
-        source={require('../assets/images/bg.jpg')}
-        style={styles.background}
-        resizeMode="cover">
-        <View style={styles.overlay} />
+      {/* Header with gradient effect */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={22} color="#fff" />
+        </TouchableOpacity>
 
-        {/* Fixed Header */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>Tree Enumeration</Text>
-            <Text style={styles.headerSubtitle}>
-              Enumeration header details (offline)
-            </Text>
-          </View>
+        <View style={{flex: 1}}>
+          <Text style={styles.headerTitle}>Guard Site Information</Text>
+          <Text style={styles.headerSubtitle}>Manage your plantation sites</Text>
         </View>
 
-        <KeyboardAvoidingView
-          style={styles.container}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <ScrollView
-            style={styles.scrollView}
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}>
-            {/* Enumeration cards list */}
-            <View style={styles.enumListSection}>
-              <Text style={styles.sectionTitle}>Enumeration Forms</Text>
-              {enumerations.length === 0 && (
-                <Text style={styles.emptyText}>
-                  No enumeration forms saved yet. Tap the + button to add one.
-                </Text>
-              )}
-              {enumerations.map(item => (
-                <View key={item.id} style={styles.enumCard}>
-                  <Text style={styles.enumTitle}>
-                    {item.division} - {item.block}
-                  </Text>
-                  <Text style={styles.enumMeta}>
-                    Year: {item.year} • Beat: {item.beat}{' '}
-                    {item.linearType ? `• ${item.linearType}` : ''} • Side:{' '}
-                    {item.side}
-                  </Text>
-                  {(item.canalName || item.siteName) && (
-                    <Text style={styles.enumMeta}>
-                      {item.canalName || '—'}
-                      {item.siteName ? ` | ${item.siteName}` : ''}
-                    </Text>
-                  )}
-                  {(item.rdFrom || item.rdTo) && (
-                    <Text style={styles.enumMeta}>
-                      RD/KM: {item.rdFrom || '—'} → {item.rdTo || '—'}
-                    </Text>
-                  )}
-                  {item.compartment ? (
-                    <Text style={styles.enumMeta}>
-                      Compartment: {item.compartment}
-                    </Text>
-                  ) : null}
+        <TouchableOpacity
+          style={[styles.backButton, {paddingHorizontal: 10}]}
+          onPress={() => fetchMySites()}
+          activeOpacity={0.85}>
+          <Ionicons name="refresh" size={20} color="#fff" />
+        </TouchableOpacity>
+      </View>
 
-                  <View style={styles.enumActionsRow}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+          {/* Search & Filter Section */}
+          <View style={styles.searchSection}>
+            <View style={styles.searchCard}>
+              <View style={styles.searchInner}>
+                <Ionicons name="search" size={18} color="#059669" />
+                <TextInput
+                  value={search}
+                  onChangeText={setSearch}
+                  placeholder="Search sites by any field..."
+                  placeholderTextColor="#9ca3af"
+                  style={styles.searchInput}
+                />
+                {!!search && (
+                  <TouchableOpacity
+                    onPress={() => setSearch('')}
+                    style={styles.clearSearchBtn}>
+                    <Ionicons name="close-circle" size={18} color="#dc2626" />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.filterBtn}
+              onPress={() => setFilterModalVisible(true)}
+              activeOpacity={0.8}>
+              <Ionicons name="options-outline" size={20} color="#fff" />
+              {activeFilterCount > 0 && (
+                <View style={styles.filterBadge}>
+                  <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Stats Section */}
+          <View style={styles.statsSection}>
+            <View style={styles.statCard}>
+              <View style={styles.statIcon}>
+                <Ionicons name="leaf" size={20} color="#059669" />
+              </View>
+              <Text style={styles.statNumber}>{enumerations.length}</Text>
+              <Text style={styles.statLabel}>Total Sites</Text>
+            </View>
+            <View style={styles.statCard}>
+              <View style={styles.statIcon}>
+                <Ionicons name="filter" size={20} color="#059669" />
+              </View>
+              <Text style={styles.statNumber}>{filteredEnumerations.length}</Text>
+              <Text style={styles.statLabel}>Filtered</Text>
+            </View>
+            <View style={styles.statCard}>
+              <View style={styles.statIcon}>
+                <Ionicons name="time" size={20} color="#059669" />
+              </View>
+              <Text style={styles.statNumber}>
+                {enumerations.length > 0
+                  ? new Date(enumerations[0].createdAt).toLocaleDateString()
+                  : '--/--/--'}
+              </Text>
+              <Text style={styles.statLabel}>Latest</Text>
+            </View>
+          </View>
+
+          {/* Sites Grid - 2 columns */}
+          <View style={styles.sitesSection}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Your Sites</Text>
+              <Text style={styles.sectionSubtitle}>
+                Tap any site to add tree records
+              </Text>
+            </View>
+
+            {loadingList ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#059669" />
+                <Text style={styles.loadingText}>Loading sites...</Text>
+              </View>
+            ) : enumerations.length === 0 ? (
+              <View style={styles.emptyState}>
+                <View style={styles.emptyIcon}>
+                  <Ionicons name="leaf-outline" size={48} color="#d1fae5" />
+                </View>
+                <Text style={styles.emptyTitle}>No sites found yet</Text>
+                <Text style={styles.emptySubtitle}>
+                  Tap the + button below to create your first plantation site
+                </Text>
+              </View>
+            ) : filteredEnumerations.length === 0 ? (
+              <View style={styles.emptyState}>
+                <View style={styles.emptyIcon}>
+                  <Ionicons name="search-outline" size={48} color="#d1fae5" />
+                </View>
+                <Text style={styles.emptyTitle}>No matches found</Text>
+                <Text style={styles.emptySubtitle}>
+                  Try changing your search or filters
+                </Text>
+                {activeFilterCount > 0 && (
+                  <TouchableOpacity style={styles.resetFiltersBtn} onPress={clearAllFilters}>
+                    <Text style={styles.resetFiltersText}>Reset Filters</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : (
+              <View style={styles.gridContainer}>
+                {filteredEnumerations.map(item => {
+                  const typeColor = colorForType(item.linearType);
+                  return (
                     <TouchableOpacity
-                      style={styles.enumActionBtn}
-                      onPress={() => handleCategoryPress('Mature Tree', item)}>
-                      <Text style={styles.enumActionText}>Mature Tree</Text>
+                      key={item.id}
+                      activeOpacity={0.9}
+                      onPress={() => openRowActions(item)}
+                      style={styles.siteCard}>
+                      {/* Card Header */}
+                      <View style={styles.cardHeader}>
+                        <View style={[styles.cardType, { backgroundColor: `${typeColor}20` }]}>
+                          <Ionicons
+                            name={iconForType(item.linearType)}
+                            size={16}
+                            color={typeColor}
+                          />
+                          <Text style={[styles.cardTypeText, { color: typeColor }]}>
+                            {item.linearType}
+                          </Text>
+                        </View>
+                        <View style={styles.cardYear}>
+                          <Text style={styles.cardYearText}>{item.year}</Text>
+                        </View>
+                      </View>
+
+                      {/* Site Info */}
+                      <Text style={styles.cardSiteName} numberOfLines={1}>
+                        {item.canalName || 'Unnamed Site'}
+                      </Text>
+
+                      <Text style={styles.cardLocation} numberOfLines={2}>
+                        {item.division} • {item.subDivision}
+                      </Text>
+
+                      {/* Details Row */}
+                      <View style={styles.cardDetails}>
+                        <View style={styles.detailItem}>
+                          <Ionicons name="location" size={12} color="#6b7280" />
+                          <Text style={styles.detailText}>{item.side}</Text>
+                        </View>
+                        <View style={styles.detailItem}>
+                          <Ionicons name="cube" size={12} color="#6b7280" />
+                          <Text style={styles.detailText}>
+                            {item.block} • {item.beat}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Range Info */}
+                      {(item.rdFrom || item.rdTo) && (
+                        <View style={styles.rangeContainer}>
+                          <Ionicons name="map" size={12} color="#059669" />
+                          <Text style={styles.rangeText}>
+                            {item.linearType === 'Canal' ? 'RDs' : 'KMs'}:
+                            {item.rdFrom || '--'} → {item.rdTo || '--'}
+                          </Text>
+                        </View>
+                      )}
+
+                      {/* Footer with Action */}
+                      <View style={styles.cardFooter}>
+                        <Text style={styles.cardDate}>
+                          {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : '--/--/--'}
+                        </Text>
+                        <View style={styles.actionIndicator}>
+                          <Ionicons name="chevron-forward" size={14} color="#059669" />
+                        </View>
+                      </View>
                     </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.enumActionBtn}
-                      onPress={() => handleCategoryPress('Pole Crop', item)}>
-                      <Text style={styles.enumActionText}>Pole Crop</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.enumActionBtn}
-                      onPress={() =>
-                        handleCategoryPress('Afforestation', item)
-                      }>
-                      <Text style={styles.enumActionText}>Afforestation</Text>
-                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {activeFilterCount > 0 && (
+              <TouchableOpacity style={styles.clearAllBtn} onPress={clearAllFilters}>
+                <Ionicons name="trash-outline" size={16} color="#fff" />
+                <Text style={styles.clearAllText}>Clear All Filters</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* Add Button */}
+      <TouchableOpacity style={styles.fab} onPress={() => setEnumModalVisible(true)}>
+        <Ionicons name="add" size={26} color="#fff" />
+      </TouchableOpacity>
+
+      {/* ✅ Filters Modal */}
+      <Modal
+        transparent
+        visible={filterModalVisible}
+        animationType="slide"
+        onRequestClose={() => setFilterModalVisible(false)}>
+        <View style={styles.modalContainer}>
+          <TouchableWithoutFeedback onPress={() => setFilterModalVisible(false)}>
+            <View style={styles.modalOverlay} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.filterCard}>
+            <View style={styles.filterHeader}>
+              <View style={styles.filterTitleContainer}>
+                <Ionicons name="filter" size={20} color="#065f46" />
+                <Text style={styles.filterTitle}>Advanced Filters</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setFilterModalVisible(false)}
+                style={styles.filterCloseBtn}>
+                <Ionicons name="close" size={22} color="#111827" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.filterScroll}>
+              <View style={styles.filterSection}>
+                <Text style={styles.filterLabel}>Type (Road/Rail/Canal)</Text>
+                <View style={styles.filterOptionsRow}>
+                  {linearTypeOptions.map(opt => {
+                    const active = filters.linearType === opt.name;
+                    return (
+                      <TouchableOpacity
+                        key={opt.id}
+                        style={[styles.filterOption, active && styles.filterOptionActive]}
+                        onPress={() => setFilters(prev => ({...prev, linearType: active ? '' : opt.name}))}>
+                        <Text style={[styles.filterOptionText, active && styles.filterOptionTextActive]}>
+                          {opt.name}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.filterLabel}>Circle (exact match)</Text>
+                <View style={styles.filterInputWrapper}>
+                  <Ionicons name="business" size={16} color="#059669" style={styles.filterInputIcon} />
+                  <TextInput
+                    value={filters.circle}
+                    onChangeText={v => setFilters(prev => ({...prev, circle: v}))}
+                    placeholder="Type circle name"
+                    placeholderTextColor="#9ca3af"
+                    style={styles.filterInput}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.filterLabel}>Block (exact match)</Text>
+                <View style={styles.filterInputWrapper}>
+                  <Ionicons name="grid" size={16} color="#059669" style={styles.filterInputIcon} />
+                  <TextInput
+                    value={filters.block}
+                    onChangeText={v => setFilters(prev => ({...prev, block: v}))}
+                    placeholder="Type block name"
+                    placeholderTextColor="#9ca3af"
+                    style={styles.filterInput}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.filterLabel}>Date Range (YYYY-MM-DD)</Text>
+                <View style={styles.twoCol}>
+                  <View style={styles.filterInputWrapper}>
+                    <Ionicons name="calendar" size={16} color="#059669" style={styles.filterInputIcon} />
+                    <TextInput
+                      value={filters.dateFrom}
+                      onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
+                      placeholder="From: 2025-12-01"
+                      placeholderTextColor="#9ca3af"
+                      style={styles.filterInput}
+                    />
+                  </View>
+                  <View style={styles.filterInputWrapper}>
+                    <Ionicons name="calendar" size={16} color="#059669" style={styles.filterInputIcon} />
+                    <TextInput
+                      value={filters.dateTo}
+                      onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
+                      placeholder="To: 2025-12-31"
+                      placeholderTextColor="#9ca3af"
+                      style={styles.filterInput}
+                    />
                   </View>
                 </View>
-              ))}
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.filterLabel}>KM/RD Range</Text>
+                <View style={styles.twoCol}>
+                  <View style={styles.filterInputWrapper}>
+                    <Ionicons name="map" size={16} color="#059669" style={styles.filterInputIcon} />
+                    <TextInput
+                      value={filters.kmFrom}
+                      onChangeText={v => setFilters(prev => ({...prev, kmFrom: v}))}
+                      placeholder="From: 10"
+                      placeholderTextColor="#9ca3af"
+                      style={styles.filterInput}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.filterInputWrapper}>
+                    <Ionicons name="map" size={16} color="#059669" style={styles.filterInputIcon} />
+                    <TextInput
+                      value={filters.kmTo}
+                      onChangeText={v => setFilters(prev => ({...prev, kmTo: v}))}
+                      placeholder="To: 50"
+                      placeholderTextColor="#9ca3af"
+                      style={styles.filterInput}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.filterActions}>
+                <TouchableOpacity
+                  style={styles.filterResetBtn}
+                  onPress={() => {
+                    setFilters({
+                      linearType: '',
+                      circle: '',
+                      block: '',
+                      dateFrom: '',
+                      dateTo: '',
+                      kmFrom: '',
+                      kmTo: '',
+                    });
+                  }}>
+                  <Ionicons name="refresh" size={16} color="#065f46" />
+                  <Text style={styles.filterResetText}>Reset</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.filterApplyBtn}
+                  onPress={() => setFilterModalVisible(false)}>
+                  <Ionicons name="checkmark" size={18} color="#ffffff" />
+                  <Text style={styles.filterApplyText}>Apply Filters</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ✅ Row Actions Modal */}
+      <Modal
+        transparent
+        visible={actionModalVisible}
+        animationType="fade"
+        onRequestClose={() => setActionModalVisible(false)}>
+        <TouchableWithoutFeedback onPress={() => setActionModalVisible(false)}>
+          <View style={styles.actionOverlay} />
+        </TouchableWithoutFeedback>
+
+        <View style={styles.actionCard}>
+          <View style={styles.actionHeader}>
+            <Text style={styles.actionTitle}>Add Tree Records</Text>
+            <Text style={styles.actionSub}>
+              {selectedEnum
+                ? `${selectedEnum.division} • ${selectedEnum.linearType} • ${selectedEnum.year}`
+                : ''}
+            </Text>
+          </View>
+
+          {/* Enumeration */}
+          <TouchableOpacity
+            style={styles.actionBtn}
+            onPress={() => {
+              setActionModalVisible(false);
+              handleCategoryPress('Mature Tree', selectedEnum);
+            }}>
+            <View style={styles.actionBtnIcon}>
+              <Ionicons name="tree" size={20} color="#059669" />
             </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
+            <View style={styles.actionBtnContent}>
+              <Text style={styles.actionBtnTitle}>Enumeration</Text>
+              <Text style={styles.actionBtnSubtitle}>Add Enumeration records</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+          </TouchableOpacity>
 
-        {/* floating / hover button */}
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={() => setEnumModalVisible(true)}>
-          <Ionicons name="add" size={26} color="#fff" />
-        </TouchableOpacity>
-      </ImageBackground>
+          {/* Pole Crop */}
+          <TouchableOpacity
+            style={styles.actionBtn}
+            onPress={() => {
+              setActionModalVisible(false);
+              handleCategoryPress('Pole Crop', selectedEnum);
+            }}>
+            <View style={styles.actionBtnIcon}>
+              <Ionicons name="leaf" size={20} color="#f59e0b" />
+            </View>
+            <View style={styles.actionBtnContent}>
+              <Text style={styles.actionBtnTitle}>Pole Crop</Text>
+              <Text style={styles.actionBtnSubtitle}>Add pole crop records</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+          </TouchableOpacity>
 
-      {/* Enumeration Header Modal */}
+          {/* Afforestation */}
+          <TouchableOpacity
+            style={styles.actionBtn}
+            onPress={() => {
+              setActionModalVisible(false);
+              handleCategoryPress('Afforestation', selectedEnum);
+            }}>
+            <View style={styles.actionBtnIcon}>
+              <Ionicons name="flower" size={20} color="#7c3aed" />
+            </View>
+            <View style={styles.actionBtnContent}>
+              <Text style={styles.actionBtnTitle}>Afforestation</Text>
+              <Text style={styles.actionBtnSubtitle}>Add afforestation records</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+          </TouchableOpacity>
+
+          {/* ✅ NEW: Disposal */}
+          <TouchableOpacity
+            style={styles.actionBtn}
+            onPress={() => {
+              setActionModalVisible(false);
+              handleCategoryPress('Disposal', selectedEnum);
+            }}>
+            <View style={styles.actionBtnIcon}>
+              <Ionicons name="trash" size={20} color="#dc2626" />
+            </View>
+            <View style={styles.actionBtnContent}>
+              <Text style={styles.actionBtnTitle}>Disposal</Text>
+              <Text style={styles.actionBtnSubtitle}>Add disposal records</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+          </TouchableOpacity>
+
+          {/* ✅ NEW: SuperDari */}
+          <TouchableOpacity
+            style={styles.actionBtn}
+            onPress={() => {
+              setActionModalVisible(false);
+              handleCategoryPress('Superdari', selectedEnum);
+            }}>
+            <View style={styles.actionBtnIcon}>
+              <Ionicons name="document-text" size={20} color="#2563eb" />
+            </View>
+            <View style={styles.actionBtnContent}>
+              <Text style={styles.actionBtnTitle}>SuperDari</Text>
+              <Text style={styles.actionBtnSubtitle}>Add superdari records</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionCancel}
+            onPress={() => setActionModalVisible(false)}>
+            <Text style={styles.actionCancelText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* ✅ Enumeration Header Modal (Save to DB) */}
       <Modal
         visible={enumModalVisible}
         animationType="slide"
@@ -731,51 +1161,86 @@ export default function AddTreeScreen({navigation}) {
         onRequestClose={() => setEnumModalVisible(false)}>
         <View style={styles.modalRoot}>
           <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Enumeration Form</Text>
+            <View style={styles.modalHeaderEnum}>
+              <View style={styles.modalTitleContainer}>
+                <Ionicons name="add-circle" size={22} color="#ffffff" />
+                <Text style={styles.modalTitleEnum}>Create New Site</Text>
+              </View>
               <TouchableOpacity
                 onPress={() => setEnumModalVisible(false)}
-                style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={22} color="#6b7280" />
+                style={styles.modalCloseBtnEnum}>
+                <Ionicons name="close" size={22} color="#ffffff" />
               </TouchableOpacity>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.modalScrollContent}>
+              <Text style={styles.modalSectionTitle}>Location (Locked from Login)</Text>
+              <View style={styles.lockedFieldsGrid}>
+                <View style={styles.lockedField}>
+                  <Text style={styles.lockedLabel}>Zone</Text>
+                  <View style={styles.lockedValue}>
+                    <Ionicons name="location" size={14} color="#059669" />
+                    <Text style={styles.lockedText}>{zone || '-'}</Text>
+                  </View>
+                </View>
+                <View style={styles.lockedField}>
+                  <Text style={styles.lockedLabel}>Circle</Text>
+                  <View style={styles.lockedValue}>
+                    <Ionicons name="business" size={14} color="#059669" />
+                    <Text style={styles.lockedText}>{circle || '-'}</Text>
+                  </View>
+                </View>
+                <View style={styles.lockedField}>
+                  <Text style={styles.lockedLabel}>Division</Text>
+                  <View style={styles.lockedValue}>
+                    <Ionicons name="map" size={14} color="#059669" />
+                    <Text style={styles.lockedText}>{division || '-'}</Text>
+                  </View>
+                </View>
+                <View style={styles.lockedField}>
+                  <Text style={styles.lockedLabel}>Sub-Division</Text>
+                  <View style={styles.lockedValue}>
+                    <Ionicons name="map" size={14} color="#059669" />
+                    <Text style={styles.lockedText}>{subDivision || '-'}</Text>
+                  </View>
+                </View>
+                <View style={styles.lockedField}>
+                  <Text style={styles.lockedLabel}>Block</Text>
+                  <View style={styles.lockedValue}>
+                    <Ionicons name="grid" size={14} color="#059669" />
+                    <Text style={styles.lockedText}>{block || '-'}</Text>
+                  </View>
+                </View>
+                <View style={styles.lockedField}>
+                  <Text style={styles.lockedLabel}>Beat</Text>
+                  <View style={styles.lockedValue}>
+                    <Ionicons name="pin" size={14} color="#059669" />
+                    <Text style={styles.lockedText}>{beat || '-'}</Text>
+                  </View>
+                </View>
+              </View>
+
+              <Text style={styles.modalSectionTitle}>Site Details</Text>
+
               <DropdownRow
-                label="Division"
-                value={division}
-                onChange={setDivision}
-                options={divisionOptions}
-                required
-              />
-              <DropdownRow
-                label="S. Division / Range"
-                value={subDivision}
-                onChange={setSubDivision}
-                options={subDivisionOptions}
+                label="Type of Linear Plantation *"
+                value={linearType ? {id: 'lt', name: linearType} : null}
+                onChange={opt => {
+                  setLinearType(opt.name);
+                  setSide('');
+                }}
+                options={linearTypeOptions}
                 required
               />
 
               <FormRow
-                label="Name of Canal/Road/Site"
+                label="Site Name *"
                 value={canalName}
                 onChangeText={setCanalName}
-                placeholder="Enter Canal/Road/Site name"
-              />
-
-              <DropdownRow
-                label="Block"
-                value={block}
-                onChange={setBlock}
-                options={blockOptions}
-                required
-              />
-              <DropdownRow
-                label="Beat"
-                value={beat}
-                onChange={setBeat}
-                options={beatOptions}
-                required
+                placeholder="e.g. Main Canal Plantation, Highway Road Plantation"
+                icon="pricetag"
               />
 
               <FormRow
@@ -783,486 +1248,72 @@ export default function AddTreeScreen({navigation}) {
                 value={compartment}
                 onChangeText={setCompartment}
                 placeholder="Enter compartment (if any)"
+                icon="cube"
               />
 
               <DropdownRow
-                label="Year (Ex 2021-22)"
-                value={year}
-                onChange={setYear}
+                label="Year *"
+                value={year ? {id: 'yr', name: year} : null}
+                onChange={opt => setYear(opt.name)}
                 options={yearOptions}
                 required
               />
 
               <DropdownRow
-                label="Type of Linear Plantation (Road/Rail/Canal)"
-                value={linearType}
-                onChange={val => {
-                  setLinearType(val);
-                  setSide('');
-                }}
-                options={linearTypeOptions}
+                label={sideLabel + ' *'}
+                value={side ? {id: 'sd', name: side} : null}
+                onChange={opt => setSide(opt.name)}
+                options={getSideOptions(linearType).map((name, idx) => ({
+                  id: String(idx + 1),
+                  name,
+                }))}
                 required
+                disabled={!linearType}
               />
 
-              <DropdownRow
-                label={
-                  linearType === 'Road'
-                    ? 'Side L/R/Both/M (Only for Road)'
-                    : linearType === 'Rail' || linearType === 'Canal'
-                    ? 'Side L/R'
-                    : 'Side'
-                }
-                value={side}
-                onChange={setSide}
-                options={getSideOptions(linearType)}
-                required
-              />
+              <View style={styles.rangeRow}>
+                <View style={styles.rangeInput}>
+                  <FormRow
+                    label={`${rdKmLabelFrom()} (From) *`}
+                    value={rdFrom}
+                    onChangeText={setRdFrom}
+                    placeholder="0"
+                    keyboardType="numeric"
+                    icon="arrow-forward"
+                  />
+                </View>
+                <View style={styles.rangeInput}>
+                  <FormRow
+                    label={`${rdKmLabelTo()} (To) *`}
+                    value={rdTo}
+                    onChangeText={setRdTo}
+                    placeholder="10"
+                    keyboardType="numeric"
+                    icon="arrow-back"
+                  />
+                </View>
+              </View>
 
               <FormRow
-                label={
-                  linearType === 'Canal'
-                    ? 'RDs From (Canal)'
-                    : linearType === 'Road' || linearType === 'Rail'
-                    ? 'KMs From (Road/Rail)'
-                    : 'RDs/KMs From'
-                }
-                value={rdFrom}
-                onChangeText={setRdFrom}
-                placeholder="From"
-              />
-              <FormRow
-                label={
-                  linearType === 'Canal'
-                    ? 'RDs To (Canal)'
-                    : linearType === 'Road' || linearType === 'Rail'
-                    ? 'KMs To (Road/Rail)'
-                    : 'RDs/KMs To'
-                }
-                value={rdTo}
-                onChangeText={setRdTo}
-                placeholder="To"
-              />
-
-              <FormRow
-                label="Remarks"
+                label="Remarks (Optional)"
                 value={remarks}
                 onChangeText={setRemarks}
-                placeholder="Any remarks"
+                placeholder="Enter any additional remarks"
                 multiline
+                icon="document-text"
               />
 
-              <TouchableOpacity
-                style={styles.modalSaveBtn}
-                onPress={saveEnumerationForm}>
-                <Ionicons name="save" size={20} color="#fff" />
-                <Text style={styles.modalSaveText}>Save Enumeration</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Detail Modal for Mature Tree / Pole Crop / Afforestation */}
-      <Modal
-        visible={detailModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setDetailModalVisible(false)}>
-        <View style={styles.modalRoot}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {detailType === 'MATURE'
-                  ? 'Mature Tree'
-                  : detailType === 'POLE'
-                  ? 'Pole Crop'
-                  : detailType === 'AFFORESTATION'
-                  ? 'Afforestation'
-                  : ''}
-              </Text>
-              <TouchableOpacity
-                onPress={() => setDetailModalVisible(false)}
-                style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={22} color="#6b7280" />
-              </TouchableOpacity>
-            </View>
-
-            {/* Show parent enumeration info */}
-            {activeEnum && (
-              <View style={styles.parentInfo}>
-                <Text style={styles.parentInfoText}>
-                  {activeEnum.division} • {activeEnum.block} •{' '}
-                  {activeEnum.year}
-                </Text>
-                <Text style={styles.parentInfoText}>
-                  Beat {activeEnum.beat} • {activeEnum.linearType} • Side{' '}
-                  {activeEnum.side}
-                </Text>
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalCancelBtn}
+                  onPress={() => setEnumModalVisible(false)}>
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalSaveBtn} onPress={saveEnumerationForm}>
+                  <Ionicons name="save" size={20} color="#fff" />
+                  <Text style={styles.modalSaveText}>Save Site</Text>
+                </TouchableOpacity>
               </View>
-            )}
-
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {/* -------- MATURE TREE -------- */}
-              {detailType === 'MATURE' && (
-                <>
-                  <FormRow
-                    label="Register No"
-                    value={mtRegisterNo}
-                    onChangeText={setMtRegisterNo}
-                    placeholder="Register No"
-                  />
-                  <FormRow
-                    label="Page No"
-                    value={mtPageNo}
-                    onChangeText={setMtPageNo}
-                    placeholder="Page No"
-                  />
-
-                  <View style={styles.readonlyRow}>
-                    <Text style={styles.readonlyLabel}>
-                      System Generated Tree ID
-                    </Text>
-                    <Text style={styles.readonlyValue}>
-                      {mtTreeId || 'Will be generated'}
-                    </Text>
-                  </View>
-
-                  <FormRow
-                    label="RD/KM"
-                    value={mtRdKm}
-                    onChangeText={setMtRdKm}
-                    placeholder="RD/KM"
-                    required
-                  />
-                  <FormRow
-                    label="Tree No (RD/Km wise)"
-                    value={mtTreeNo}
-                    onChangeText={setMtTreeNo}
-                    placeholder="Tree No"
-                    required
-                  />
-
-                  <DropdownRow
-                    label="Species"
-                    value={mtSpecies}
-                    onChange={setMtSpecies}
-                    options={speciesOptions}
-                  />
-                  <FormRow
-                    label="Girth in inches"
-                    value={mtGirthInches}
-                    onChangeText={setMtGirthInches}
-                    placeholder="Enter girth in inches"
-                    keyboardType="numeric"
-                  />
-                  <DropdownRow
-                    label="Condition"
-                    value={mtCondition}
-                    onChange={setMtCondition}
-                    options={conditionOptions}
-                  />
-
-                  <FormRow
-                    label="GPS Coordinates LAT/Long"
-                    value={mtGps}
-                    onChangeText={setMtGps}
-                    placeholder="31.5204, 74.3587"
-                  />
-                  <TouchableOpacity
-                    style={styles.gpsBtn}
-                    onPress={fetchGpsCoords}>
-                    <Ionicons name="locate" size={18} color="#fff" />
-                    <Text style={styles.gpsBtnText}>Fetch GPS</Text>
-                  </TouchableOpacity>
-
-                  <FormRow
-                    label="Remarks"
-                    value={mtRemarks}
-                    onChangeText={setMtRemarks}
-                    placeholder="Any remarks"
-                    multiline
-                  />
-
-                  <View style={{marginHorizontal: 4, marginTop: 8}}>
-                    <Text style={styles.dropdownLabel}>Picture</Text>
-
-                    <TouchableOpacity
-                      style={styles.imageBtn}
-                      onPress={handlePickMatureImage}>
-                      <Ionicons name="image" size={18} color="#fff" />
-                      <Text style={styles.imageBtnText}>
-                        Upload from device
-                      </Text>
-                    </TouchableOpacity>
-
-                    {mtPictureUri ? (
-                      <Text style={styles.imageInfoText}>Image selected</Text>
-                    ) : (
-                      <Text style={styles.imageInfoTextMuted}>
-                        No image selected yet
-                      </Text>
-                    )}
-                  </View>
-
-                  <TouchableOpacity
-                    style={styles.modalSaveBtn}
-                    onPress={saveMatureTree}>
-                    <Ionicons name="save" size={20} color="#fff" />
-                    <Text style={styles.modalSaveText}>Save Mature Tree</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-
-              {/* -------- POLE CROP -------- */}
-              {detailType === 'POLE' && (
-                <>
-                  <FormRow
-                    label="Register No"
-                    value={pcRegisterNo}
-                    onChangeText={setPcRegisterNo}
-                    placeholder="Register No"
-                  />
-                  <FormRow
-                    label="Page No"
-                    value={pcPageNo}
-                    onChangeText={setPcPageNo}
-                    placeholder="Page No"
-                  />
-
-                  <View style={styles.readonlyRow}>
-                    <Text style={styles.readonlyLabel}>
-                      System Generated Tree ID
-                    </Text>
-                    <Text style={styles.readonlyValue}>
-                      {pcTreeId || 'Will be generated'}
-                    </Text>
-                  </View>
-
-                  <FormRow
-                    label="RD/KM"
-                    value={pcRdKm}
-                    onChangeText={setPcRdKm}
-                    placeholder="RD/KM"
-                    required
-                  />
-
-                  <MultiSelectRow
-                    label="Species"
-                    values={pcSpecies}
-                    onChange={setPcSpecies}
-                    options={speciesOptions}
-                  />
-
-                  <FormRow
-                    label="Count"
-                    value={pcCount}
-                    onChangeText={setPcCount}
-                    placeholder="Number of poles"
-                    keyboardType="numeric"
-                    required
-                  />
-
-                  <FormRow
-                    label="GPS Coordinates"
-                    value={pcGps}
-                    onChangeText={setPcGps}
-                    placeholder="31.5204, 74.3587"
-                  />
-                  <TouchableOpacity
-                    style={styles.gpsBtn}
-                    onPress={fetchGpsCoords}>
-                    <Ionicons name="locate" size={18} color="#fff" />
-                    <Text style={styles.gpsBtnText}>Fetch GPS</Text>
-                  </TouchableOpacity>
-
-                  <FormRow
-                    label="Remarks"
-                    value={pcRemarks}
-                    onChangeText={setPcRemarks}
-                    placeholder="Any remarks"
-                    multiline
-                  />
-
-                  <TouchableOpacity
-                    style={styles.modalSaveBtn}
-                    onPress={savePoleCrop}>
-                    <Ionicons name="save" size={20} color="#fff" />
-                    <Text style={styles.modalSaveText}>Save Pole Crop</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-
-              {/* -------- AFFORESTATION -------- */}
-              {detailType === 'AFFORESTATION' && (
-                <>
-                  <FormRow
-                    label="Register No"
-                    value={afRegisterNo}
-                    onChangeText={setAfRegisterNo}
-                    placeholder="Register No"
-                  />
-
-                  <FormRow
-                    label="Page No"
-                    value={afPageNo}
-                    onChangeText={setAfPageNo}
-                    placeholder="Page No"
-                  />
-
-                  <FormRow
-                    label="Av. Miles/ KM ="
-                    value={afAvgMilesKm}
-                    onChangeText={setAfAvgMilesKm}
-                    placeholder="Average Miles/KM"
-                    keyboardType="numeric"
-                    required
-                  />
-
-                  {/* Success slider 0–100 */}
-                  <View style={styles.sliderBlock}>
-                    <Text style={styles.dropdownLabel}>
-                      Success % (0 – 100)
-                    </Text>
-                    <Slider
-                      style={{width: '100%', height: 40}}
-                      minimumValue={0}
-                      maximumValue={100}
-                      step={1}
-                      value={afSuccess}
-                      onValueChange={setAfSuccess}
-                      minimumTrackTintColor={colors.primary}
-                      maximumTrackTintColor="#e5e7eb"
-                      thumbTintColor={colors.primary}
-                    />
-                    <Text style={styles.sliderValue}>{afSuccess}%</Text>
-                  </View>
-
-                  <DropdownRow
-                    label="Main Species"
-                    value={afMainSpecies}
-                    onChange={setAfMainSpecies}
-                    options={speciesOptions}
-                  />
-
-                  <DropdownRow
-                    label="Year (Ex 2021-22)"
-                    value={afYear}
-                    onChange={setAfYear}
-                    options={yearOptions}
-                    required
-                  />
-
-                  <DropdownRow
-                    label="Scheme Dev/Non Development"
-                    value={afSchemeType}
-                    onChange={val => {
-                      setAfSchemeType(val);
-                      setAfProjectName('');
-                      setAfNonDevScheme('');
-                    }}
-                    options={schemeOptions}
-                    required
-                  />
-
-                  {afSchemeType === 'Development' && (
-                    <FormRow
-                      label="If Development → Project Name"
-                      value={afProjectName}
-                      onChangeText={setAfProjectName}
-                      placeholder="Enter Project Name"
-                    />
-                  )}
-
-                  {afSchemeType === 'Non Development' && (
-                    <DropdownRow
-                      label="If Non Development → Scheme"
-                      value={afNonDevScheme}
-                      onChange={setAfNonDevScheme}
-                      options={nonDevOptions}
-                    />
-                  )}
-
-                  <FormRow
-                    label="No. of Plants"
-                    value={afPlants}
-                    onChangeText={setAfPlants}
-                    placeholder="Enter No. of Plants"
-                    keyboardType="numeric"
-                  />
-
-                  {/* GPS multiple coordinates with + button */}
-                  <View style={{marginHorizontal: 4, marginTop: 8}}>
-                    <Text style={styles.dropdownLabel}>
-                      GPS Coordinates / Bounding Box
-                    </Text>
-                    {afGpsList.map((coord, index) => (
-                      <FormRow
-                        key={index}
-                        label={`Coordinate ${index + 1}`}
-                        value={coord}
-                        onChangeText={text => {
-                          const copy = [...afGpsList];
-                          copy[index] = text;
-                          setAfGpsList(copy);
-                        }}
-                        placeholder="31.5204, 74.3587"
-                      />
-                    ))}
-
-                    <TouchableOpacity
-                      style={styles.addCoordBtn}
-                      onPress={() => setAfGpsList(prev => [...prev, ''])}>
-                      <Ionicons name="add-circle-outline" size={18} color="#fff" />
-                      <Text style={styles.addCoordText}>Add Coordinate</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.gpsBtn, {marginTop: 8}]}
-                      onPress={fetchGpsCoords}>
-                      <Ionicons name="locate" size={18} color="#fff" />
-                      <Text style={styles.gpsBtnText}>Fill last with GPS</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  <View style={{marginHorizontal: 4, marginTop: 12}}>
-                    <Text style={styles.dropdownLabel}>Pictures</Text>
-
-                    <TouchableOpacity
-                      style={styles.imageBtn}
-                      onPress={handlePickAfforestationImage}>
-                      <Ionicons name="image" size={18} color="#fff" />
-                      <Text style={styles.imageBtnText}>
-                        Upload from device
-                      </Text>
-                    </TouchableOpacity>
-
-                    {afPictureUri ? (
-                      <Text style={styles.imageInfoText}>Image selected</Text>
-                    ) : (
-                      <Text style={styles.imageInfoTextMuted}>
-                        No image selected yet
-                      </Text>
-                    )}
-                  </View>
-
-                  <FormRow
-                    label="Remarks"
-                    value={afRemarks}
-                    onChangeText={setAfRemarks}
-                    placeholder="Enter Remarks"
-                    multiline
-                  />
-
-                  <TouchableOpacity
-                    style={styles.modalSaveBtn}
-                    onPress={saveAfforestation}>
-                    <Ionicons name="save" size={20} color="#fff" />
-                    <Text style={styles.modalSaveText}>
-                      Save Afforestation
-                    </Text>
-                  </TouchableOpacity>
-                </>
-              )}
             </ScrollView>
           </View>
         </View>
@@ -1273,203 +1324,864 @@ export default function AddTreeScreen({navigation}) {
 
 /* ===================== STYLES ===================== */
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: '#ffffff'},
-  background: {flex: 1, width: '100%'},
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+  screen: {
+    flex: 1,
+    backgroundColor: '#f0fdf4',
   },
+
+  // Header
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    padding: 20,
+    alignItems: 'center',
+    paddingHorizontal: 20,
     paddingTop: 50,
-    backgroundColor: 'rgba(16, 185, 129, 0.8)',
-    zIndex: 10,
+    paddingBottom: 20,
+    backgroundColor: '#059669',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    elevation: 8,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
   },
   backButton: {
-    padding: 8,
-    borderRadius: 8,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 24, fontWeight: '800', color: '#ffffff', marginBottom: 4},
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#ffffff',
+    marginBottom: 4,
+  },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: 'rgba(255,255,255,0.9)',
     fontWeight: '500',
+    letterSpacing: 0.3,
   },
-  container: {flex: 1},
-  scrollView: {flex: 1},
-  scrollContent: {paddingBottom: 80},
 
-  enumListSection: {marginHorizontal: 16, marginTop: 12, marginBottom: 4},
-  sectionTitle: {fontSize: 18, fontWeight: '700', color: '#111827', marginBottom: 8},
-  emptyText: {fontSize: 13, color: '#6b7280', marginBottom: 8},
-  enumCard: {
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 3},
-    shadowOpacity: 0.12,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  enumTitle: {fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 2},
-  enumMeta: {fontSize: 12, color: '#6b7280'},
-  enumActionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 10,
-    gap: 6,
-  },
-  enumActionBtn: {
+  container: {
     flex: 1,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#e0f2fe',
+  },
+  scrollContent: {
+    paddingBottom: 120,
+  },
+
+  // Search Section
+  searchSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 20,
+    paddingBottom: 16,
+    gap: 12,
+  },
+  searchCard: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  searchInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 12,
+    marginRight: 8,
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+  clearSearchBtn: {
+    padding: 4,
+  },
+  filterBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: '#059669',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.3)',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  filterBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#dc2626',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 6,
+    borderWidth: 2,
+    borderColor: '#059669',
   },
-  enumActionText: {fontSize: 12, fontWeight: '600', color: '#0369a1'},
+  filterBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
 
+  // Stats Section
+  statsSection: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingBottom: 20,
+    gap: 12,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  statIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  statNumber: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#065f46',
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '600',
+  },
+
+  // Sites Section
+  sitesSection: {
+    paddingHorizontal: 16,
+  },
+  sectionHeader: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#065f46',
+    marginBottom: 6,
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    color: '#6b7280',
+    fontWeight: '500',
+  },
+
+  // Grid Container
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+
+  // Site Card (2 columns)
+  siteCard: {
+    width: CARD_WIDTH,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  cardType: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  cardTypeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  cardYear: {
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  cardYearText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#065f46',
+  },
+  cardSiteName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  cardLocation: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '600',
+    marginBottom: 12,
+    lineHeight: 16,
+  },
+  cardDetails: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  detailItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  detailText: {
+    fontSize: 11,
+    color: '#6b7280',
+    fontWeight: '600',
+  },
+  rangeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 16,
+  },
+  rangeText: {
+    fontSize: 11,
+    color: '#059669',
+    fontWeight: '700',
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(5, 150, 105, 0.1)',
+  },
+  cardDate: {
+    fontSize: 11,
+    color: '#9ca3af',
+    fontWeight: '600',
+  },
+  actionIndicator: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Loading & Empty States
+  loadingContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    color: '#4b5563',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  emptyIcon: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+    borderWidth: 2,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#065f46',
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    fontWeight: '500',
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  resetFiltersBtn: {
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+  },
+  resetFiltersText: {
+    color: '#065f46',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  clearAllBtn: {
+    backgroundColor: '#dc2626',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 20,
+    shadowColor: '#dc2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  clearAllText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+
+  // FAB
   fab: {
     position: 'absolute',
     right: 20,
-    bottom: 30,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primary,
+    bottom: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#059669',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 9,
-    shadowColor: colors.primary,
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
+    elevation: 12,
+    shadowColor: '#059669',
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
   },
 
-  dropdownContainer: {marginHorizontal: 4, marginBottom: 12},
+  // Filter Modal
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+  },
+  filterCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    maxHeight: '85%',
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 22,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(5, 150, 105, 0.1)',
+  },
+  filterTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  filterTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#065f46',
+  },
+  filterCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterScroll: {
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+  },
+  filterSection: {
+    marginBottom: 24,
+  },
+  filterLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#065f46',
+    marginBottom: 12,
+    letterSpacing: 0.5,
+  },
+  filterOptionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  filterOption: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+  },
+  filterOptionActive: {
+    backgroundColor: '#059669',
+    borderColor: '#059669',
+  },
+  filterOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#4b5563',
+  },
+  filterOptionTextActive: {
+    color: '#fff',
+  },
+  filterInputWrapper: {
+    position: 'relative',
+  },
+  filterInputIcon: {
+    position: 'absolute',
+    left: 12,
+    top: '50%',
+    transform: [{ translateY: -8 }],
+    zIndex: 1,
+  },
+  filterInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+    borderRadius: 12,
+    paddingHorizontal: 40,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '500',
+  },
+  twoCol: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  filterActions: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 32,
+    marginBottom: 8,
+  },
+  filterResetBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+  },
+  filterResetText: {
+    color: '#065f46',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  filterApplyBtn: {
+    flex: 2,
+    backgroundColor: '#059669',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  filterApplyText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+
+  // Action Modal
+  actionOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+  },
+  actionCard: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    top: '20%',
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 16,
+  },
+  actionHeader: {
+    marginBottom: 24,
+  },
+  actionTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#065f46',
+    marginBottom: 6,
+  },
+  actionSub: {
+    fontSize: 13,
+    color: '#6b7280',
+    fontWeight: '500',
+  },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    marginBottom: 12,
+  },
+  actionBtnIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+  },
+  actionBtnContent: {
+    flex: 1,
+  },
+  actionBtnTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  actionBtnSubtitle: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '500',
+  },
+  actionCancel: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginTop: 12,
+  },
+  actionCancelText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#6b7280',
+  },
+
+  // Create Site Modal
+  modalRoot: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  modalCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    maxHeight: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 16,
+  },
+  modalHeaderEnum: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#059669',
+    paddingVertical: 20,
+    paddingHorizontal: 24,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    marginBottom: 20,
+  },
+  modalTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalTitleEnum: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  modalCloseBtnEnum: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalScrollContent: {
+    paddingHorizontal: 24,
+    paddingBottom: 32,
+  },
+  modalSectionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#065f46',
+    marginBottom: 16,
+    marginTop: 8,
+    letterSpacing: 0.5,
+  },
+  lockedFieldsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 24,
+  },
+  lockedField: {
+    width: '48%',
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+  },
+  lockedLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6b7280',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  lockedValue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  lockedText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#065f46',
+  },
+  rangeRow: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  rangeInput: {
+    flex: 1,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 32,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+  },
+  modalCancelText: {
+    color: '#065f46',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  modalSaveBtn: {
+    flex: 2,
+    backgroundColor: '#059669',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  modalSaveText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+
+  // Dropdown Styles
+  dropdownContainer: { marginBottom: 16 },
   dropdownLabel: {
     fontSize: 14,
     color: '#374151',
-    marginBottom: 4,
-    fontWeight: '600',
+    marginBottom: 8,
+    fontWeight: '700'
   },
-  required: {color: '#dc2626'},
+  required: { color: '#dc2626' },
   dropdownSelected: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#f9fafb',
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
   },
-  dropdownSelectedText: {fontSize: 14, color: '#111827'},
-  dropdownPlaceholder: {fontSize: 14, color: '#9ca3af'},
+  dropdownSelectedText: {
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '600'
+  },
+  dropdownPlaceholder: {
+    fontSize: 14,
+    color: '#9ca3af',
+    fontWeight: '600'
+  },
   dropdownModal: {
     position: 'absolute',
     left: 20,
     right: 20,
-    top: '20%',
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    elevation: 8,
+    top: '22%',
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    padding: 0,
+    elevation: 16,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 6},
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
   },
-  dropdownModalTitle: {fontSize: 16, fontWeight: '700', marginBottom: 8, color: '#111827'},
-  dropdownItem: {paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e5e7eb'},
-  dropdownItemText: {fontSize: 14, color: '#111827'},
-  multiRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'},
-  modalOverlay: {flex: 1, backgroundColor: 'rgba(15,23,42,0.3)'},
-
-  modalRoot: {
-    flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.35)',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
+  dropdownModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(5, 150, 105, 0.1)',
   },
-  modalCard: {backgroundColor: '#ffffff', borderRadius: 20, padding: 16, maxHeight: '85%'},
-  modalHeader: {flexDirection: 'row', alignItems: 'center', marginBottom: 8},
-  modalTitle: {flex: 1, fontSize: 18, fontWeight: '700', color: '#111827'},
-  modalCloseBtn: {padding: 4, borderRadius: 999},
-  modalSaveBtn: {
-    marginTop: 16,
-    marginBottom: 4,
+  dropdownModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#065f46'
+  },
+  dropdownItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: colors.primary,
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(5, 150, 105, 0.05)',
   },
-  modalSaveText: {fontSize: 15, fontWeight: '700', color: '#fff'},
-
-  parentInfo: {marginBottom: 8},
-  parentInfoText: {fontSize: 12, color: '#6b7280'},
-
-  readonlyRow: {marginHorizontal: 4, marginBottom: 8},
-  readonlyLabel: {
+  dropdownItemText: {
     fontSize: 14,
-    color: '#374151',
+    color: '#111827',
+    fontWeight: '600'
+  },
+  dropdownEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  dropdownEmptyText: {
+    marginTop: 12,
+    color: '#9ca3af',
+    fontSize: 14,
     fontWeight: '600',
-    marginBottom: 2,
   },
-  readonlyValue: {fontSize: 13, color: '#4b5563'},
-
-  gpsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    marginHorizontal: 4,
-    marginTop: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: colors.primary,
-  },
-  gpsBtnText: {fontSize: 12, color: '#fff', marginLeft: 4, fontWeight: '600'},
-
-  imageBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: colors.primary,
-    marginTop: 4,
-  },
-  imageBtnText: {fontSize: 13, color: '#fff', marginLeft: 6, fontWeight: '600'},
-  imageInfoText: {fontSize: 12, color: '#16a34a', marginTop: 4},
-  imageInfoTextMuted: {fontSize: 12, color: '#9ca3af', marginTop: 4},
-
-  sliderBlock: {marginHorizontal: 4, marginBottom: 12},
-  sliderValue: {fontSize: 13, color: '#111827', fontWeight: '600', textAlign: 'right', marginTop: -4},
-
-  addCoordBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    marginTop: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#0ea5e9',
-  },
-  addCoordText: {fontSize: 12, color: '#fff', marginLeft: 4, fontWeight: '600'},
 });

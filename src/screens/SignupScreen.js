@@ -22,10 +22,10 @@ import axios from 'axios';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import colors from '../theme/colors';
 
-// ✅ Use localhost API base (as you provided in cURLs)
+// ✅ API base
 const API_BASE_URL = 'http://be.lte.gisforestry.com';
 
-// ✅ Empty token as per your requirement (API still returns roles)
+// ✅ Empty token (as per your requirement)
 const EMPTY_TOKEN = '';
 
 export default function SignupScreen({navigation}) {
@@ -99,28 +99,216 @@ export default function SignupScreen({navigation}) {
   }, []);
 
   // ---------------------------
+  // INLINE ADD (SubDivision/Block/Beat)
+  // ---------------------------
+  const [addMode, setAddMode] = useState({
+    subDivision: false,
+    block: false,
+    beat: false,
+  });
+
+  const [newName, setNewName] = useState({
+    subDivision: '',
+    block: '',
+    beat: '',
+  });
+
+  const [savingInline, setSavingInline] = useState({
+    subDivision: false,
+    block: false,
+    beat: false,
+  });
+
+  const normalizeName = v => String(v || '').trim().replace(/\s+/g, ' ');
+
+  const ensureParentSelectedOrWarn = type => {
+    if (type === 'subDivision' && !formData.divisionId) {
+      Alert.alert('Select Division', 'Please select Division first.');
+      return false;
+    }
+    if (type === 'block' && !formData.subDivisionId) {
+      Alert.alert('Select Sub Division', 'Please select Sub Division first.');
+      return false;
+    }
+    if (type === 'beat' && !formData.blockId) {
+      Alert.alert('Select Block', 'Please select Block first.');
+      return false;
+    }
+    return true;
+  };
+
+  const openInlineAdd = type => {
+    if (!ensureParentSelectedOrWarn(type)) return;
+    setAddMode(p => ({...p, [type]: true}));
+    setNewName(p => ({...p, [type]: ''}));
+  };
+
+  const closeInlineAdd = type => {
+    setAddMode(p => ({...p, [type]: false}));
+    setNewName(p => ({...p, [type]: ''}));
+  };
+
+  const createSubDivision = async name => {
+    const payload = {name, division_id: Number(formData.divisionId)};
+    const res = await axios.post(`${API_BASE_URL}/forest-info/sub-divisions`, payload, {
+      headers: {'Content-Type': 'application/json'},
+      timeout: 20000,
+    });
+    return res.data;
+  };
+
+  const createBlock = async name => {
+    const payload = {name, sub_division_id: Number(formData.subDivisionId)};
+    const res = await axios.post(`${API_BASE_URL}/forest-info/blocks`, payload, {
+      headers: {'Content-Type': 'application/json'},
+      timeout: 20000,
+    });
+    return res.data;
+  };
+
+  const createBeat = async name => {
+    const payload = {name, block_id: Number(formData.blockId)};
+    const res = await axios.post(`${API_BASE_URL}/forest-info/beats`, payload, {
+      headers: {'Content-Type': 'application/json'},
+      timeout: 20000,
+    });
+    return res.data;
+  };
+
+  const handleInlineSave = async type => {
+    if (!ensureParentSelectedOrWarn(type)) return;
+
+    const name = normalizeName(newName[type]);
+    if (!name) {
+      Alert.alert('Name required', 'Please enter a name.');
+      return;
+    }
+
+    try {
+      setSavingInline(p => ({...p, [type]: true}));
+
+      // Prevent duplicates (client-side)
+      const list = type === 'subDivision' ? subDivisions : type === 'block' ? blocks : beats;
+      const already = list.some(
+        x => normalizeName(x?.name).toLowerCase() === name.toLowerCase(),
+      );
+      if (already) {
+        Alert.alert('Already exists', 'This name is already in the list.');
+        return;
+      }
+
+      let data;
+      if (type === 'subDivision') data = await createSubDivision(name);
+      if (type === 'block') data = await createBlock(name);
+      if (type === 'beat') data = await createBeat(name);
+
+      if (data?.statusCode === 200 || data?.statusCode === 201) {
+        // Your backend may return created object in data.data
+        const created = data?.data;
+
+        // Fallback if API returns only message → refetch list
+        if (!created?.id) {
+          if (type === 'subDivision') await fetchSubDivisions(formData.divisionId);
+          if (type === 'block') await fetchBlocks(formData.subDivisionId);
+          if (type === 'beat') await fetchBeats(formData.blockId);
+
+          Alert.alert('Added', 'Added in list, you can check.');
+          closeInlineAdd(type);
+          return;
+        }
+
+        if (type === 'subDivision') {
+          setSubDivisions(p => [created, ...p]);
+          setFormData(prev => ({...prev, subDivisionId: created.id}));
+        }
+        if (type === 'block') {
+          setBlocks(p => [created, ...p]);
+          setFormData(prev => ({...prev, blockId: created.id}));
+        }
+        if (type === 'beat') {
+          setBeats(p => [created, ...p]);
+          setFormData(prev => ({...prev, beatId: created.id}));
+        }
+
+        Alert.alert('Added', 'Added in list, you can check.');
+        closeInlineAdd(type);
+      } else {
+        Alert.alert('Failed', data?.message || 'Could not create. Please try again.');
+      }
+    } catch (e) {
+      console.error(`inline create ${type} error:`, e?.response?.data || e?.message || e);
+      Alert.alert('Error', e?.response?.data?.message || e?.message || 'Something went wrong.');
+    } finally {
+      setSavingInline(p => ({...p, [type]: false}));
+    }
+  };
+
+  const InlineAddRow = ({type, placeholder}) => {
+    if (!addMode[type]) return null;
+
+    return (
+      <View style={styles.inlineAddWrap}>
+        <View style={styles.inlineAddInputRow}>
+          <Ionicons
+            name="create-outline"
+            size={18}
+            color="rgba(17,24,39,0.65)"
+            style={{marginRight: 8}}
+          />
+          <TextInput
+            style={styles.inlineAddInput}
+            placeholder={placeholder}
+            placeholderTextColor="rgba(17,24,39,0.45)"
+            value={newName[type]}
+            onChangeText={t => setNewName(p => ({...p, [type]: t}))}
+            autoCapitalize="words"
+          />
+        </View>
+
+        <View style={styles.inlineAddBtns}>
+          <TouchableOpacity
+            style={[styles.inlineBtn, styles.inlineBtnCancel]}
+            onPress={() => closeInlineAdd(type)}
+            disabled={savingInline[type]}>
+            <Text style={styles.inlineBtnTextCancel}>Cancel</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.inlineBtn, styles.inlineBtnSave, savingInline[type] && {opacity: 0.7}]}
+            onPress={() => handleInlineSave(type)}
+            disabled={savingInline[type]}>
+            {savingInline[type] ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.inlineBtnTextSave}>Save</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  // ---------------------------
   // ROLE → REQUIRED HIERARCHY
   // ---------------------------
-  // ✅ Your required behavior:
-  // DFO: Zone, Circle, Division
-  // SDFO: Zone, Circle, Division, Sub Division
-  // Block Officer: Zone, Circle, Division, Sub Division, Block
-  // Beat Officer: Zone, Circle, Division, Sub Division, Block, Beat
+  // ✅ IMPORTANT FIX:
+  // Your API returns slugs like: dfo, sdfo, block_officer, beat_officer
+  // Earlier code expected: block-officer / beat-officer (hyphen), so it never matched.
   const REQUIRED_LEVELS_BY_ROLE = useMemo(
     () => ({
       dfo: ['zone', 'circle', 'division'],
       sdfo: ['zone', 'circle', 'division', 'subDivision'],
-      'block-officer': ['zone', 'circle', 'division', 'subDivision', 'block'],
-      'beat-officer': ['zone', 'circle', 'division', 'subDivision', 'block', 'beat'],
+      block_officer: ['zone', 'circle', 'division', 'subDivision', 'block'],
+      beat_officer: ['zone', 'circle', 'division', 'subDivision', 'block', 'beat'],
     }),
-    []
+    [],
   );
 
   const requiredLevels = useMemo(() => {
     return REQUIRED_LEVELS_BY_ROLE[formData.roleSlug] || [];
   }, [REQUIRED_LEVELS_BY_ROLE, formData.roleSlug]);
 
-  const needs = (level) => requiredLevels.includes(level);
+  const needs = level => requiredLevels.includes(level);
 
   const shouldShowDivision = () => needs('division');
   const shouldShowSubDivision = () => needs('subDivision');
@@ -144,7 +332,7 @@ export default function SignupScreen({navigation}) {
 
   const getSelectedRoleName = () => {
     if (!formData.roleSlug) return 'No role selected';
-    const r = roles.find(x => x.slug === formData.roleSlug);
+    const r = roles.find(x => x.code === formData.roleSlug);
     return r ? r.name : formData.roleSlug;
   };
 
@@ -177,7 +365,6 @@ export default function SignupScreen({navigation}) {
   useEffect(() => {
     if (!formData.divisionId) return;
 
-    // Only fetch sub-divisions if role needs them
     if (shouldShowSubDivision()) {
       fetchSubDivisions(formData.divisionId);
     } else {
@@ -225,7 +412,6 @@ export default function SignupScreen({navigation}) {
       const {roleSlug, zoneId, circleId, divisionId, subDivisionId, blockId, beatId} = formData;
       if (!roleSlug) return;
 
-      // ✅ call only after all required selections
       if (!hasAllFieldsForRole()) return;
 
       const payload = {
@@ -290,17 +476,18 @@ export default function SignupScreen({navigation}) {
 
       const res = await axios.get(`${API_BASE_URL}/iam/roles`, {
         headers: {
-          Authorization: `Bearer ${EMPTY_TOKEN}`, // ✅ empty token, still returns roles
+          Authorization: `Bearer ${EMPTY_TOKEN}`,
         },
         timeout: 20000,
       });
 
       if (res.data?.statusCode === 200) {
-        // ✅ Use id, slug, name in state (as you requested) and show "name" in dropdown
+        // ✅ IMPORTANT FIX:
+        // API returns slugs: block_officer, beat_officer (underscore)
+        // Earlier filter used: block-officer, beat-officer (hyphen)
         const list = (res.data.data || [])
           .filter(r => r.isActive && !r.isSystemRole)
-          // ✅ only show the roles you want (DFO/SDFO/Block/Beat)
-          .filter(r => ['dfo', 'sdfo', 'block-officer', 'beat-officer'].includes(r.slug))
+          .filter(r => ['dfo', 'sdfo', 'block_officer', 'beat_officer'].includes(r.code))
           .sort((a, b) => (a.level ?? 0) - (b.level ?? 0));
 
         setRoles(list);
@@ -331,7 +518,7 @@ export default function SignupScreen({navigation}) {
     }
   };
 
-  const fetchCircles = async (zoneId) => {
+  const fetchCircles = async zoneId => {
     try {
       const res = await axios.get(`${API_BASE_URL}/forest-info/circles?zone_id=${zoneId}`, {
         timeout: 20000,
@@ -347,7 +534,7 @@ export default function SignupScreen({navigation}) {
     }
   };
 
-  const fetchDivisions = async (circleId) => {
+  const fetchDivisions = async circleId => {
     try {
       const res = await axios.get(`${API_BASE_URL}/forest-info/divisions?circle_id=${circleId}`, {
         timeout: 20000,
@@ -363,11 +550,11 @@ export default function SignupScreen({navigation}) {
     }
   };
 
-  const fetchSubDivisions = async (divisionId) => {
+  const fetchSubDivisions = async divisionId => {
     try {
       const res = await axios.get(
         `${API_BASE_URL}/forest-info/sub-divisions?division_id=${divisionId}`,
-        {timeout: 20000}
+        {timeout: 20000},
       );
       if (res.data?.statusCode === 200) {
         setSubDivisions(res.data.data || []);
@@ -380,11 +567,11 @@ export default function SignupScreen({navigation}) {
     }
   };
 
-  const fetchBlocks = async (subDivisionId) => {
+  const fetchBlocks = async subDivisionId => {
     try {
       const res = await axios.get(
         `${API_BASE_URL}/forest-info/blocks?sub_division_id=${subDivisionId}`,
-        {timeout: 20000}
+        {timeout: 20000},
       );
       if (res.data?.statusCode === 200) {
         setBlocks(res.data.data || []);
@@ -397,7 +584,7 @@ export default function SignupScreen({navigation}) {
     }
   };
 
-  const fetchBeats = async (blockId) => {
+  const fetchBeats = async blockId => {
     try {
       const res = await axios.get(`${API_BASE_URL}/forest-info/beats?block_id=${blockId}`, {
         timeout: 20000,
@@ -416,8 +603,12 @@ export default function SignupScreen({navigation}) {
   // ---------------------------
   // Clear dependent fields
   // ---------------------------
-  const clearDependentData = (level) => {
+  const clearDependentData = level => {
     lastDesignationKeyRef.current = '';
+
+    // also close inline adds if hierarchy changes
+    setAddMode({subDivision: false, block: false, beat: false});
+    setNewName({subDivision: '', block: '', beat: ''});
 
     switch (level) {
       case 'role':
@@ -512,19 +703,8 @@ export default function SignupScreen({navigation}) {
   // Validation + Submit
   // ---------------------------
   const validateForm = () => {
-    const {
-      email,
-      password,
-      confirmPassword,
-      firstName,
-      lastName,
-      phone,
-      cnic,
-      roleSlug,
-      zoneId,
-      circleId,
-      designationEmail,
-    } = formData;
+    const {email, password, confirmPassword, firstName, lastName, phone, cnic, roleSlug, zoneId, circleId} =
+      formData;
 
     if (!email || !password || !confirmPassword || !firstName || !lastName || !phone || !cnic) {
       return 'Please fill all required fields';
@@ -541,7 +721,7 @@ export default function SignupScreen({navigation}) {
     if (password.length < 6) return 'Password must be at least 6 characters';
     if (password !== confirmPassword) return 'Passwords do not match';
 
-    if (!designationEmail) return 'Designation email is generating. Please wait...';
+    if (!formData.designationEmail) return 'Designation email is generating. Please wait...';
 
     return null;
   };
@@ -558,7 +738,6 @@ export default function SignupScreen({navigation}) {
 
     setLoading(true);
     try {
-      // ✅ payload exactly like your curl (only include fields that exist)
       const payload = {
         email: formData.email,
         password: formData.password,
@@ -611,7 +790,7 @@ export default function SignupScreen({navigation}) {
   };
 
   // ---------------------------
-  // Dropdown renderer (same UI style)
+  // Dropdown renderer
   // ---------------------------
   const renderDropdown = ({
     items,
@@ -620,8 +799,8 @@ export default function SignupScreen({navigation}) {
     showState,
     setShowState,
     onSelect,
-    getValue = (x) => x.id,
-    getLabel = (x) => x.name,
+    getValue = x => x.id,
+    getLabel = x => x.name,
   }) => {
     const selectedLabel = selectedValue
       ? getLabel(items.find(it => String(getValue(it)) === String(selectedValue)) || {})
@@ -636,12 +815,19 @@ export default function SignupScreen({navigation}) {
           <Ionicons name="chevron-down" size={20} color="rgba(17,24,39,0.65)" />
         </TouchableOpacity>
 
-        <Modal visible={showState} transparent animationType="fade" onRequestClose={() => setShowState(false)}>
-          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowState(false)}>
+        <Modal
+          visible={showState}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowState(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowState(false)}>
             <View style={styles.dropdownList}>
               <FlatList
                 data={items}
-                keyExtractor={(item) => String(getValue(item))}
+                keyExtractor={item => String(getValue(item))}
                 renderItem={({item}) => {
                   const val = getValue(item);
                   const isSelected = String(selectedValue) === String(val);
@@ -672,13 +858,23 @@ export default function SignupScreen({navigation}) {
       style={{flex: 1}}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
-      <ImageBackground source={require('../assets/images/login-BG.png')} style={styles.bg} resizeMode="cover">
+      <ImageBackground
+        source={require('../assets/images/login-BG.png')}
+        style={styles.bg}
+        resizeMode="cover">
         <View style={styles.bgOverlay} />
 
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}>
           <View style={styles.centerWrap}>
             <View style={styles.brandBlock}>
-              <Image source={require('../assets/images/logo.png')} style={styles.brandLogo} resizeMode="contain" />
+              <Image
+                source={require('../assets/images/logo.png')}
+                style={styles.brandLogo}
+                resizeMode="contain"
+              />
               <Text style={styles.brandTitle}>Punjab Tree Enumeration</Text>
               <Text style={styles.brandSub}>Field · Verify · Protect</Text>
             </View>
@@ -720,7 +916,12 @@ export default function SignupScreen({navigation}) {
 
                 <View style={styles.row}>
                   <View style={[styles.inputRow, styles.halfInput]}>
-                    <Ionicons name="person" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
+                    <Ionicons
+                      name="person"
+                      size={20}
+                      color="rgba(17,24,39,0.65)"
+                      style={styles.inputIcon}
+                    />
                     <TextInput
                       style={styles.input}
                       placeholder="First Name"
@@ -784,7 +985,12 @@ export default function SignupScreen({navigation}) {
                 <Text style={styles.sectionTitle}>Account Security</Text>
 
                 <View style={styles.inputRow}>
-                  <Ionicons name="lock-closed" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
+                  <Ionicons
+                    name="lock-closed"
+                    size={20}
+                    color="rgba(17,24,39,0.65)"
+                    style={styles.inputIcon}
+                  />
                   <TextInput
                     style={styles.input}
                     placeholder="Password (min. 6 characters)"
@@ -799,7 +1005,12 @@ export default function SignupScreen({navigation}) {
                 </View>
 
                 <View style={styles.inputRow}>
-                  <Ionicons name="lock-closed" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
+                  <Ionicons
+                    name="lock-closed"
+                    size={20}
+                    color="rgba(17,24,39,0.65)"
+                    style={styles.inputIcon}
+                  />
                   <TextInput
                     style={styles.input}
                     placeholder="Confirm Password"
@@ -817,7 +1028,12 @@ export default function SignupScreen({navigation}) {
                 <Text style={styles.sectionTitle}>Department Role & Posting</Text>
 
                 <View style={styles.inputRow}>
-                  <Ionicons name="briefcase" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
+                  <Ionicons
+                    name="briefcase"
+                    size={20}
+                    color="rgba(17,24,39,0.65)"
+                    style={styles.inputIcon}
+                  />
                   {loadingRoles ? (
                     <ActivityIndicator size="small" color={colors.primary} />
                   ) : (
@@ -827,7 +1043,7 @@ export default function SignupScreen({navigation}) {
                       placeholder: 'Select Role',
                       showState: showRoles,
                       setShowState: setShowRoles,
-                      onSelect: (slug) => {
+                      onSelect: slug => {
                         setFormData(prev => ({
                           ...prev,
                           roleSlug: slug,
@@ -841,9 +1057,8 @@ export default function SignupScreen({navigation}) {
                         }));
                         clearDependentData('role');
                       },
-                      // ✅ Role uses "slug" as selectedValue
-                      getValue: (r) => r.slug,
-                      getLabel: (r) => r.name,
+                      getValue: r => r.code,
+                      getLabel: r => r.name,
                     })
                   )}
                 </View>
@@ -857,9 +1072,9 @@ export default function SignupScreen({navigation}) {
                       placeholder: 'Select Zone',
                       showState: showZones,
                       setShowState: setShowZones,
-                      onSelect: (id) => setFormData(prev => ({...prev, zoneId: id})),
-                      getValue: (z) => z.id,
-                      getLabel: (z) => z.name,
+                      onSelect: id => setFormData(prev => ({...prev, zoneId: id})),
+                      getValue: z => z.id,
+                      getLabel: z => z.name,
                     })}
                   </View>
                 )}
@@ -873,9 +1088,9 @@ export default function SignupScreen({navigation}) {
                       placeholder: 'Select Circle',
                       showState: showCircles,
                       setShowState: setShowCircles,
-                      onSelect: (id) => setFormData(prev => ({...prev, circleId: id})),
-                      getValue: (c) => c.id,
-                      getLabel: (c) => c.name,
+                      onSelect: id => setFormData(prev => ({...prev, circleId: id})),
+                      getValue: c => c.id,
+                      getLabel: c => c.name,
                     })}
                   </View>
                 )}
@@ -889,59 +1104,113 @@ export default function SignupScreen({navigation}) {
                       placeholder: 'Select Division',
                       showState: showDivisions,
                       setShowState: setShowDivisions,
-                      onSelect: (id) => setFormData(prev => ({...prev, divisionId: id})),
-                      getValue: (d) => d.id,
-                      getLabel: (d) => d.name,
+                      onSelect: id => setFormData(prev => ({...prev, divisionId: id})),
+                      getValue: d => d.id,
+                      getLabel: d => d.name,
                     })}
                   </View>
                 )}
 
+                {/* Sub Division + (+) */}
                 {shouldShowSubDivision() && formData.divisionId && (
-                  <View style={styles.inputRow}>
-                    <Ionicons name="location" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
-                    {renderDropdown({
-                      items: subDivisions,
-                      selectedValue: formData.subDivisionId,
-                      placeholder: 'Select Sub Division',
-                      showState: showSubDivisions,
-                      setShowState: setShowSubDivisions,
-                      onSelect: (id) => setFormData(prev => ({...prev, subDivisionId: id})),
-                      getValue: (sd) => sd.id,
-                      getLabel: (sd) => sd.name,
-                    })}
-                  </View>
+                  <>
+                    <View style={styles.addHeaderRow}>
+                      <View style={{flex: 1}}>
+                        <View style={styles.inputRow}>
+                          <Ionicons
+                            name="location"
+                            size={20}
+                            color="rgba(17,24,39,0.65)"
+                            style={styles.inputIcon}
+                          />
+                          {renderDropdown({
+                            items: subDivisions,
+                            selectedValue: formData.subDivisionId,
+                            placeholder: 'Select Sub Division',
+                            showState: showSubDivisions,
+                            setShowState: setShowSubDivisions,
+                            onSelect: id => setFormData(prev => ({...prev, subDivisionId: id})),
+                            getValue: sd => sd.id,
+                            getLabel: sd => sd.name,
+                          })}
+                        </View>
+                      </View>
+
+                      <TouchableOpacity style={styles.plusBtn} onPress={() => openInlineAdd('subDivision')}>
+                        <Ionicons name="add" size={22} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+
+                    <InlineAddRow type="subDivision" placeholder="Enter new Sub Division name" />
+                  </>
                 )}
 
+                {/* Block + (+) */}
                 {shouldShowBlock() && formData.subDivisionId && (
-                  <View style={styles.inputRow}>
-                    <Ionicons name="location" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
-                    {renderDropdown({
-                      items: blocks,
-                      selectedValue: formData.blockId,
-                      placeholder: 'Select Block',
-                      showState: showBlocks,
-                      setShowState: setShowBlocks,
-                      onSelect: (id) => setFormData(prev => ({...prev, blockId: id})),
-                      getValue: (b) => b.id,
-                      getLabel: (b) => b.name,
-                    })}
-                  </View>
+                  <>
+                    <View style={styles.addHeaderRow}>
+                      <View style={{flex: 1}}>
+                        <View style={styles.inputRow}>
+                          <Ionicons
+                            name="location"
+                            size={20}
+                            color="rgba(17,24,39,0.65)"
+                            style={styles.inputIcon}
+                          />
+                          {renderDropdown({
+                            items: blocks,
+                            selectedValue: formData.blockId,
+                            placeholder: 'Select Block',
+                            showState: showBlocks,
+                            setShowState: setShowBlocks,
+                            onSelect: id => setFormData(prev => ({...prev, blockId: id})),
+                            getValue: b => b.id,
+                            getLabel: b => b.name,
+                          })}
+                        </View>
+                      </View>
+
+                      <TouchableOpacity style={styles.plusBtn} onPress={() => openInlineAdd('block')}>
+                        <Ionicons name="add" size={22} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+
+                    <InlineAddRow type="block" placeholder="Enter new Block name" />
+                  </>
                 )}
 
+                {/* Beat + (+) */}
                 {shouldShowBeat() && formData.blockId && (
-                  <View style={styles.inputRow}>
-                    <Ionicons name="location" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
-                    {renderDropdown({
-                      items: beats,
-                      selectedValue: formData.beatId,
-                      placeholder: 'Select Beat',
-                      showState: showBeats,
-                      setShowState: setShowBeats,
-                      onSelect: (id) => setFormData(prev => ({...prev, beatId: id})),
-                      getValue: (bt) => bt.id,
-                      getLabel: (bt) => bt.name,
-                    })}
-                  </View>
+                  <>
+                    <View style={styles.addHeaderRow}>
+                      <View style={{flex: 1}}>
+                        <View style={styles.inputRow}>
+                          <Ionicons
+                            name="location"
+                            size={20}
+                            color="rgba(17,24,39,0.65)"
+                            style={styles.inputIcon}
+                          />
+                          {renderDropdown({
+                            items: beats,
+                            selectedValue: formData.beatId,
+                            placeholder: 'Select Beat',
+                            showState: showBeats,
+                            setShowState: setShowBeats,
+                            onSelect: id => setFormData(prev => ({...prev, beatId: id})),
+                            getValue: bt => bt.id,
+                            getLabel: bt => bt.name,
+                          })}
+                        </View>
+                      </View>
+
+                      <TouchableOpacity style={styles.plusBtn} onPress={() => openInlineAdd('beat')}>
+                        <Ionicons name="add" size={22} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+
+                    <InlineAddRow type="beat" placeholder="Enter new Beat name" />
+                  </>
                 )}
 
                 {/* Designation Email */}
@@ -953,7 +1222,9 @@ export default function SignupScreen({navigation}) {
                 ) : formData.designationEmail ? (
                   <View style={styles.designationBox}>
                     <Ionicons name="mail" size={16} color="#059669" />
-                    <Text style={styles.designationText}>Designation Email: {formData.designationEmail}</Text>
+                    <Text style={styles.designationText}>
+                      Designation Email: {formData.designationEmail}
+                    </Text>
                   </View>
                 ) : showDesignationHint ? (
                   <View style={styles.infoBox}>
@@ -1059,9 +1330,22 @@ const styles = StyleSheet.create({
 
   headerRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4},
   title: {fontSize: 22, fontWeight: '900', color: '#111827', textAlign: 'center', flex: 1},
-  subtitle: {marginTop: 4, color: 'rgba(17,24,39,0.70)', marginBottom: 14, fontWeight: '600', textAlign: 'center'},
+  subtitle: {
+    marginTop: 4,
+    color: 'rgba(17,24,39,0.70)',
+    marginBottom: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
 
-  sectionTitle: {fontSize: 16, fontWeight: '800', color: '#111827', marginTop: 12, marginBottom: 8, paddingLeft: 4},
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    marginTop: 12,
+    marginBottom: 8,
+    paddingLeft: 4,
+  },
 
   errBox: {
     flexDirection: 'row',
@@ -1120,7 +1404,13 @@ const styles = StyleSheet.create({
   input: {flex: 1, color: '#111827', paddingVertical: 10, fontWeight: '700', fontSize: 14},
   trailing: {paddingLeft: 8, paddingVertical: 6},
 
-  dropdownTrigger: {flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10},
+  dropdownTrigger: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
   dropdownText: {color: '#111827', fontWeight: '700', fontSize: 14},
   placeholder: {color: 'rgba(17,24,39,0.45)'},
 
@@ -1182,4 +1472,79 @@ const styles = StyleSheet.create({
   loginLink: {alignItems: 'center', marginTop: 16},
   loginText: {color: 'rgba(17,24,39,0.7)', fontWeight: '600', fontSize: 14},
   loginLinkText: {color: colors.primary, fontWeight: '900', fontSize: 14},
+
+  // (+) Add button row
+  addHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  plusBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    shadowColor: colors.primary,
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+
+  // Inline add UI
+  inlineAddWrap: {
+    marginTop: -6,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.40)',
+    backgroundColor: 'rgba(255,255,255,0.28)',
+  },
+  inlineAddInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.70)',
+    paddingHorizontal: 12,
+    height: 46,
+  },
+  inlineAddInput: {
+    flex: 1,
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  inlineAddBtns: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 10,
+  },
+  inlineBtn: {
+    height: 40,
+    minWidth: 92,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  inlineBtnCancel: {
+    backgroundColor: 'rgba(17,24,39,0.08)',
+  },
+  inlineBtnSave: {
+    backgroundColor: colors.primary,
+  },
+  inlineBtnTextCancel: {
+    color: '#111827',
+    fontWeight: '900',
+  },
+  inlineBtnTextSave: {
+    color: '#fff',
+    fontWeight: '900',
+  },
 });

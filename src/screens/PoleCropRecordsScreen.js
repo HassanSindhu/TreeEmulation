@@ -18,12 +18,13 @@ import {
   StatusBar,
   Image,
   Linking,
+  PermissionsAndroid,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
 import {useFocusEffect} from '@react-navigation/native';
-import {launchImageLibrary} from 'react-native-image-picker';
+import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
 
 import FormRow from '../components/FormRow';
 import {MultiSelectRow} from '../components/SelectRows';
@@ -124,8 +125,6 @@ const pickFirst = (obj, keys = []) => {
 };
 
 // ✅ NEW: Extracts the best status object from API response
-// Your API returns `latestStatus` like: { action: "Verified" | "Rejected", remarks, ... }
-// Sometimes it can be empty and you only have `verification[]`
 const getLatestStatusObj = rec => {
   if (!rec || typeof rec !== 'object') return null;
 
@@ -137,7 +136,6 @@ const getLatestStatusObj = rec => {
 
   // 2) Fallback to last verification entry
   if (Array.isArray(rec?.verification) && rec.verification.length) {
-    // pick the last item (assumes API sends chronological)
     const last = rec.verification[rec.verification.length - 1];
     if (last && typeof last === 'object') {
       const a = last?.action;
@@ -150,17 +148,19 @@ const getLatestStatusObj = rec => {
 
 // ✅ NEW: Normalizes into: approved | disapproved | pending
 const normalizeVerificationStatus = rec => {
-  // 0) If API sends latestStatus.action / verification.action (your case)
   const latest = getLatestStatusObj(rec);
   const latestAction = latest?.action ? String(latest.action).trim().toLowerCase() : '';
 
   if (latestAction === 'verified' || latestAction === 'approved' || latestAction === 'accepted')
     return 'approved';
 
-  if (latestAction === 'rejected' || latestAction === 'disapproved' || latestAction.includes('reject'))
+  if (
+    latestAction === 'rejected' ||
+    latestAction === 'disapproved' ||
+    latestAction.includes('reject')
+  )
     return 'disapproved';
 
-  // 1) Common alternative backend fields (keep old support)
   const raw =
     pickFirst(rec, [
       'verification_status',
@@ -228,9 +228,12 @@ const buildStatusDetailsText = rec => {
   const remarks = String(remarksRaw ?? '').trim() ? String(remarksRaw).trim() : '—';
   const createdAtRaw = latest?.createdAt || latest?.created_at || latest?.createdAtUtc || null;
   const createdAt = createdAtRaw ? new Date(createdAtRaw) : null;
-  const createdAtText = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleString() : '—';
+  const createdAtText =
+    createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleString() : '—';
 
-  return `Status: ${key === 'approved' ? 'Approved' : key === 'disapproved' ? 'Disapproved' : 'Pending'}\n\nAction: ${action}\nRole: ${role}\nDesignation: ${designation}\nRemarks: ${remarks}\nAction Time: ${createdAtText}`;
+  return `Status: ${
+    key === 'approved' ? 'Approved' : key === 'disapproved' ? 'Disapproved' : 'Pending'
+  }\n\nAction: ${action}\nRole: ${role}\nDesignation: ${designation}\nRemarks: ${remarks}\nAction Time: ${createdAtText}`;
 };
 
 /* ===================== FIELD HELPERS ===================== */
@@ -298,6 +301,28 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   }, [enumeration]);
 
   /* ===================== IMAGE HANDLERS ===================== */
+  const addAssets = useCallback(newAssets => {
+    const incoming = Array.isArray(newAssets) ? newAssets : [];
+    if (!incoming.length) return;
+
+    setPickedAssets(prev => {
+      const prevArr = Array.isArray(prev) ? prev : [];
+      const map = new Map();
+
+      // preserve old first
+      prevArr.forEach(a => {
+        if (a?.uri) map.set(a.uri, a);
+      });
+
+      // add/overwrite by uri
+      incoming.forEach(a => {
+        if (a?.uri) map.set(a.uri, a);
+      });
+
+      return Array.from(map.values());
+    });
+  }, []);
+
   const pickImages = () => {
     launchImageLibrary(
       {
@@ -312,11 +337,53 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           return;
         }
         const assets = Array.isArray(res?.assets) ? res.assets : [];
-        if (!assets.length) return;
-        setPickedAssets(assets);
+        addAssets(assets);
       },
     );
   };
+
+  const ensureCameraPermission = useCallback(async () => {
+    if (Platform.OS !== 'android') return true;
+
+    try {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
+        title: 'Camera Permission',
+        message: 'This app needs camera access to capture pole crop images.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Deny',
+      });
+
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (e) {
+      return false;
+    }
+  }, []);
+
+  const captureImage = useCallback(async () => {
+    const ok = await ensureCameraPermission();
+    if (!ok) {
+      Alert.alert('Permission Required', 'Camera permission is required to take a photo.');
+      return;
+    }
+
+    launchCamera(
+      {
+        mediaType: 'photo',
+        quality: 0.8,
+        saveToPhotos: false,
+        cameraType: 'back',
+      },
+      res => {
+        if (res?.didCancel) return;
+        if (res?.errorCode) {
+          Alert.alert('Camera Error', res.errorMessage || res.errorCode);
+          return;
+        }
+        const assets = Array.isArray(res?.assets) ? res.assets : [];
+        addAssets(assets); // camera usually returns 1 asset
+      },
+    );
+  }, [addAssets, ensureCameraPermission]);
 
   const clearImages = () => setPickedAssets([]);
 
@@ -425,7 +492,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           throw new Error(msg);
         }
 
-        // ✅ Ensure realtime server data only
         const rows = Array.isArray(json?.data) ? json.data : normalizeList(json);
         setRecords(Array.isArray(rows) ? rows : []);
       } catch (e) {
@@ -461,7 +527,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         const nextAuto = formatLatLng(latitude, longitude);
         setAutoGps(nextAuto);
 
-        // auto gps also fills manual coordinates (preserve user's manual if typed)
         setManualGps(prev => {
           const prevAuto = prevAutoGpsRef.current;
           const prevTrim = String(prev || '').trim();
@@ -481,7 +546,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     );
   }, []);
 
-  // If autoGps changes and manual is empty, sync it (safety)
   useEffect(() => {
     const a = String(autoGps || '').trim();
     if (!a) return;
@@ -513,7 +577,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   };
 
   const openEditFormServer = row => {
-    // ✅ Guard: only allow edit when disapproved (Rejected)
     if (normalizeVerificationStatus(row) !== 'disapproved') {
       Alert.alert('Not Allowed', 'This record can only be edited when it is Disapproved (Rejected).');
       return;
@@ -525,12 +588,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     setRdTo(String(getRdsTo(row) ?? ''));
     setCount(String(row?.count ?? ''));
 
-    // species from response: poleCropSpecies
     const fromNested = Array.isArray(row?.poleCropSpecies)
       ? row.poleCropSpecies.map(x => x?.species?.name).filter(Boolean)
       : [];
 
-    // fallback: old species_ids mapping
     const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
     const fromIds = ids
       .map(id => speciesRows.find(s => String(s.id) === String(id))?.name)
@@ -612,7 +673,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const upsertRecord = async () => {
     if (!validate()) return;
 
-    // map species names -> ids
     const speciesIds = selectedSpeciesNames
       .map(n => speciesRows.find(s => String(s.name) === String(n))?.id)
       .filter(id => id !== null && id !== undefined);
@@ -640,7 +700,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         ? records.find(x => String(x?.id) === String(editingServerId))
         : null;
 
-      // ✅ Keep existing pictures on edit if no new images
       const finalPictures =
         uploadedUrls.length > 0 ? uploadedUrls : isEdit ? getPictures(existingRow) : [];
 
@@ -692,7 +751,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     const names = ids
       .map(id => speciesRows.find(s => String(s.id) === String(id))?.name || `#${id}`)
       .filter(Boolean);
-    return names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2} more` : names.join(', ');
+    return names.length > 2
+      ? `${names.slice(0, 2).join(', ')} +${names.length - 2} more`
+      : names.join(', ');
   };
 
   const getGpsLabel = r => {
@@ -854,7 +915,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           />
         }
         showsVerticalScrollIndicator={false}>
-
         {/* Search Section */}
         <View style={styles.searchSection}>
           <View style={styles.searchContainer}>
@@ -961,7 +1021,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                     {label: 'RDS From', width: 110},
                     {label: 'RDS To', width: 110},
                     {label: 'Count', width: 100},
-                    {label: 'Status', width: 150}, // a bit wider now
+                    {label: 'Status', width: 150},
                     {label: 'Species', width: 260},
                     {label: 'Pictures', width: 170},
                     {label: 'GPS', width: 200},
@@ -978,7 +1038,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   const statusInfo = getStatusInfo(r);
                   const pics = getPictures(r);
                   const rdsToValue = getRdsTo(r);
-                  const canEdit = normalizeVerificationStatus(r) === 'disapproved'; // ✅ Only when rejected/disapproved
+                  const canEdit = normalizeVerificationStatus(r) === 'disapproved';
                   const latest = getLatestStatusObj(r);
                   const hasStatusDetails = !!latest;
 
@@ -986,7 +1046,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                     <View
                       key={String(r?.id ?? idx)}
                       style={[styles.tableRow, idx % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
-
                       <View style={[styles.tdCell, {width: 80}]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r?.id ?? '—')}
@@ -1012,17 +1071,22 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                       </View>
 
                       <View style={[styles.tdCell, {width: 150}]}>
-                        {/* ✅ Tap status to see details/remarks */}
                         <TouchableOpacity
                           activeOpacity={0.8}
                           onPress={() => Alert.alert('Status Details', buildStatusDetailsText(r))}
                           style={[styles.statusBadge, {borderColor: statusInfo.color}]}>
                           <Ionicons name={statusInfo.icon} size={14} color={statusInfo.color} />
-                          <Text style={[styles.statusText, {color: statusInfo.color}]} numberOfLines={1}>
+                          <Text
+                            style={[styles.statusText, {color: statusInfo.color}]}
+                            numberOfLines={1}>
                             {statusInfo.label}
                           </Text>
                           <Ionicons
-                            name={hasStatusDetails ? 'information-circle-outline' : 'help-circle-outline'}
+                            name={
+                              hasStatusDetails
+                                ? 'information-circle-outline'
+                                : 'help-circle-outline'
+                            }
                             size={16}
                             color={COLORS.textLight}
                           />
@@ -1039,7 +1103,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         {pics.length ? (
                           <TouchableOpacity
                             style={styles.picButton}
-                            onPress={() => openPicturesViewer(pics, `Record #${r?.id} Pictures`)}>
+                            onPress={() =>
+                              openPicturesViewer(pics, `Record #${r?.id} Pictures`)
+                            }>
                             <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.picButtonText}>View ({pics.length})</Text>
                           </TouchableOpacity>
@@ -1067,13 +1133,18 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                           <Text style={styles.mutedText}>—</Text>
                         )}
 
-                        {/* Quick view reason for rejected */}
                         {normalizeVerificationStatus(r) === 'disapproved' && (
                           <TouchableOpacity
                             style={styles.reasonButton}
-                            onPress={() => Alert.alert('Rejection Reason', buildStatusDetailsText(r))}
+                            onPress={() =>
+                              Alert.alert('Rejection Reason', buildStatusDetailsText(r))
+                            }
                             activeOpacity={0.7}>
-                            <Ionicons name="chatbox-ellipses-outline" size={16} color={COLORS.danger} />
+                            <Ionicons
+                              name="chatbox-ellipses-outline"
+                              size={16}
+                              color={COLORS.danger}
+                            />
                             <Text style={styles.reasonButtonText}>Reason</Text>
                           </TouchableOpacity>
                         )}
@@ -1130,7 +1201,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         !filters.status ? styles.filterPillActive : styles.filterPillInactive,
                       ]}
                       onPress={() => setFilters(prev => ({...prev, status: ''}))}>
-                      <Text style={!filters.status ? styles.filterPillTextActive : styles.filterPillTextInactive}>
+                      <Text
+                        style={
+                          !filters.status ? styles.filterPillTextActive : styles.filterPillTextInactive
+                        }>
                         All
                       </Text>
                     </TouchableOpacity>
@@ -1404,6 +1478,16 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         </View>
                       </TouchableOpacity>
 
+                      <TouchableOpacity
+                        style={styles.imageCameraButton}
+                        onPress={captureImage}
+                        activeOpacity={0.7}>
+                        <View style={styles.imageUploadButtonContent}>
+                          <Ionicons name="camera-outline" size={20} color="#fff" />
+                          <Text style={styles.imageUploadButtonText}>Camera</Text>
+                        </View>
+                      </TouchableOpacity>
+
                       {pickedAssets.length > 0 && (
                         <TouchableOpacity
                           style={styles.imageClearButton}
@@ -1438,7 +1522,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.footerButtonPrimary} onPress={upsertRecord} activeOpacity={0.7}>
+                <TouchableOpacity
+                  style={styles.footerButtonPrimary}
+                  onPress={upsertRecord}
+                  activeOpacity={0.7}>
                   <View style={styles.footerButtonContent}>
                     <Ionicons name={isEdit ? 'save-outline' : 'add-circle-outline'} size={20} color="#fff" />
                     <Text style={styles.footerButtonPrimaryText}>
@@ -1479,12 +1566,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
             <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.viewerScroll}>
               {viewerImages.map((u, i) => (
                 <View key={String(u) + i} style={styles.viewerSlide}>
-                  <Image
-                    source={{uri: u}}
-                    style={styles.viewerImage}
-                    resizeMode="contain"
-                    onError={() => {}}
-                  />
+                  <Image source={{uri: u}} style={styles.viewerImage} resizeMode="contain" onError={() => {}} />
                   <TouchableOpacity
                     style={styles.viewerLinkBtn}
                     onPress={() => Linking.openURL(u).catch(() => Alert.alert('Error', 'Cannot open link'))}>
@@ -1753,7 +1835,7 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
 
-  // ✅ NEW: Reason button
+  // Reason button
   reasonButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1847,6 +1929,7 @@ const styles = StyleSheet.create({
   imageUploadSection: {marginBottom: 8},
   imageUploadButtons: {flexDirection: 'row', gap: 12, marginBottom: 12},
   imageUploadButton: {flex: 2, backgroundColor: COLORS.primary, borderRadius: 12, overflow: 'hidden'},
+  imageCameraButton: {flex: 1.2, backgroundColor: COLORS.secondary, borderRadius: 12, overflow: 'hidden'},
   imageUploadButtonContent: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, gap: 8},
   imageUploadButtonText: {fontSize: 16, fontWeight: '700', color: '#fff'},
   imageClearButton: {flex: 1, backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)'},

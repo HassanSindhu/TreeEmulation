@@ -48,14 +48,14 @@ const ENUM_UPDATE_URL = id => `${API_BASE}/enum/enumeration/${id}`;
 // Pole Crop
 const POLE_LIST_URL = `${API_BASE}/enum/pole-crop`;
 const POLE_CREATE_URL = `${API_BASE}/enum/pole-crop`;
-const POLE_UPDATE_URL = id => `${API_BASE}/enum/pole-crop/${id}`; // if your backend differs, change here
+const POLE_UPDATE_URL = id => `${API_BASE}/enum/pole-crop/${id}`;
 
 // Afforestation
 const AFF_LIST_URL = `${API_BASE}/enum/afforestation`;
 const AFF_CREATE_URL = `${API_BASE}/enum/afforestation`;
 const AFF_UPDATE_URL = id => `${API_BASE}/enum/afforestation/${id}`;
 
-// ---------- Upload (kept same pattern as your MatureTree screen) ----------
+// ---------- Upload ----------
 const UPLOAD_URL = 'https://app.eco.gisforestry.com/aws-bucket/tree-enum';
 const UPLOAD_IS_MULTI = 'true';
 const UPLOAD_FILE_NAME = 'chan';
@@ -159,8 +159,8 @@ export default function RegistersScreen({navigation}) {
   const [rdsFrom, setRdsFrom] = useState('');
   const [rdsTo, setRdsTo] = useState('');
   const [count, setCount] = useState('');
-  const [speciesMulti, setSpeciesMulti] = useState([]); // array of ids (numbers)
-  const [speciesMultiText, setSpeciesMultiText] = useState(''); // comma separated UI input
+  const [speciesMulti, setSpeciesMulti] = useState([]); // array of ids
+  const [speciesMultiText, setSpeciesMultiText] = useState(''); // comma separated ids OR names
 
   // Afforestation fields
   const [avMilesKm, setAvMilesKm] = useState('');
@@ -319,7 +319,8 @@ export default function RegistersScreen({navigation}) {
     const disposalExists = hasAny(row?.disposal);
     const superdariExists = hasAny(row?.superdari);
 
-    if (disposalExists && superdariExists) return [STATUS_FILTERS.DISPOSED, STATUS_FILTERS.SUPERDARI];
+    if (disposalExists && superdariExists)
+      return [STATUS_FILTERS.DISPOSED, STATUS_FILTERS.SUPERDARI];
     if (disposalExists) return [STATUS_FILTERS.DISPOSED];
     if (superdariExists) return [STATUS_FILTERS.SUPERDARI];
 
@@ -327,8 +328,10 @@ export default function RegistersScreen({navigation}) {
     const action = String(latest?.action || '').trim().toLowerCase();
 
     if (!latest || !action) return [STATUS_FILTERS.PENDING];
-    if (action === 'rejected' || action === 'disapproved') return [STATUS_FILTERS.DISAPPROVED];
-    if (action === 'approved' || action === 'verified') return [STATUS_FILTERS.VERIFIED];
+    if (action === 'rejected' || action === 'disapproved')
+      return [STATUS_FILTERS.DISAPPROVED];
+    if (action === 'approved' || action === 'verified')
+      return [STATUS_FILTERS.VERIFIED];
 
     return [STATUS_FILTERS.PENDING];
   };
@@ -382,7 +385,10 @@ export default function RegistersScreen({navigation}) {
 
     const net = await NetInfo.fetch();
     const online = !!net.isConnected && (net.isInternetReachable ?? true);
-    if (!online) throw new Error('No internet connection. Please connect to internet to upload images.');
+    if (!online)
+      throw new Error(
+        'No internet connection. Please connect to internet to upload images.',
+      );
 
     const fd = new FormData();
     assets.forEach((a, idx) => {
@@ -392,7 +398,9 @@ export default function RegistersScreen({navigation}) {
       const name =
         a?.fileName ||
         a?.name ||
-        `img_${Date.now()}_${idx}.${String(a?.type || 'image/jpeg').includes('png') ? 'png' : 'jpg'}`;
+        `img_${Date.now()}_${idx}.${
+          String(a?.type || 'image/jpeg').includes('png') ? 'png' : 'jpg'
+        }`;
 
       const type = a?.type || 'image/jpeg';
       fd.append('files', {uri, type, name});
@@ -459,31 +467,20 @@ export default function RegistersScreen({navigation}) {
       );
     } catch (e) {
       setGpsFetching(false);
-      if (!silent) Alert.alert('Location Error', e?.message || 'Failed to fetch location');
+      if (!silent)
+        Alert.alert('Location Error', e?.message || 'Failed to fetch location');
     }
   }, []);
 
   // ---------- API CALLS ----------
   const getActiveUrls = () => {
     if (activeType === 'enumeration') {
-      return {
-        list: ENUM_LIST_URL,
-        create: ENUM_CREATE_URL,
-        update: ENUM_UPDATE_URL,
-      };
+      return {list: ENUM_LIST_URL, create: ENUM_CREATE_URL, update: ENUM_UPDATE_URL};
     }
     if (activeType === 'pole') {
-      return {
-        list: POLE_LIST_URL,
-        create: POLE_CREATE_URL,
-        update: POLE_UPDATE_URL,
-      };
+      return {list: POLE_LIST_URL, create: POLE_CREATE_URL, update: POLE_UPDATE_URL};
     }
-    return {
-      list: AFF_LIST_URL,
-      create: AFF_CREATE_URL,
-      update: AFF_UPDATE_URL,
-    };
+    return {list: AFF_LIST_URL, create: AFF_CREATE_URL, update: AFF_UPDATE_URL};
   };
 
   const fetchServer = useCallback(
@@ -531,7 +528,10 @@ export default function RegistersScreen({navigation}) {
       const normalized = rows
         .map(x => {
           if (typeof x === 'string') return {id: null, name: x};
-          return {id: x?.id ?? x?.species_id ?? null, name: x?.name ?? x?.species_name ?? ''};
+          return {
+            id: x?.id ?? x?.species_id ?? null,
+            name: x?.name ?? x?.species_name ?? '',
+          };
         })
         .filter(x => x.name);
 
@@ -558,7 +558,10 @@ export default function RegistersScreen({navigation}) {
       const normalized = rows
         .map(x => {
           if (typeof x === 'string') return {id: null, name: x};
-          return {id: x?.id ?? x?.condition_id ?? null, name: x?.name ?? x?.condition_name ?? ''};
+          return {
+            id: x?.id ?? x?.condition_id ?? null,
+            name: x?.name ?? x?.condition_name ?? '',
+          };
         })
         .filter(x => x.name);
 
@@ -588,7 +591,7 @@ export default function RegistersScreen({navigation}) {
     fetchLocationSmart({silent: true});
   }, [modalVisible, isEdit, fetchLocationSmart]);
 
-  // ---------- DECORATE ----------
+  // ---------- DECORATE (species name + takki # + disputed) ----------
   const speciesById = useMemo(() => {
     const map = new Map();
     speciesRows.forEach(s => map.set(String(s.id), s.name));
@@ -600,6 +603,34 @@ export default function RegistersScreen({navigation}) {
     conditionRows.forEach(c => map.set(String(c.id), c.name));
     return map;
   }, [conditionRows]);
+
+  const getTakkiValue = row => {
+    const v =
+      row?.takki_number ??
+      row?.takki_no ??
+      row?.takkiNo ??
+      row?.takkiNumber ??
+      row?.takki ??
+      row?.taki_number ??
+      row?.taki_no ??
+      null;
+    const s = String(v ?? '').trim();
+    return s ? s : '—';
+  };
+
+  const getDisputedBool = row => {
+    const raw =
+      row?.is_disputed ??
+      row?.isDisputed ??
+      row?.disputed ??
+      row?.isDispute ??
+      row?.is_dispute ??
+      null;
+    if (typeof raw === 'boolean') return raw;
+    if (raw == null) return false;
+    const s = String(raw).trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y';
+  };
 
   const decoratedRows = useMemo(() => {
     return serverRows.map(r => {
@@ -631,6 +662,9 @@ export default function RegistersScreen({navigation}) {
               .join(', ')
           : '—';
 
+      const takki = getTakkiValue(r);
+      const disputed = getDisputedBool(r);
+
       return {
         ...r,
         _autoGps: autoGps,
@@ -638,6 +672,9 @@ export default function RegistersScreen({navigation}) {
         _speciesSingleLabel: spSingle,
         _conditionSingleLabel: condSingle,
         _speciesMultiLabel: spMulti,
+        _takki: takki,
+        _isDisputed: disputed,
+        _disputedLabel: disputed ? 'YES' : 'NO',
       };
     });
   }, [serverRows, speciesById, conditionById]);
@@ -661,7 +698,6 @@ export default function RegistersScreen({navigation}) {
         r?.id,
         r?.nameOfSiteId,
         r?.name_of_site_id,
-        r?.nameOfSiteId,
         r?.rd_km,
         r?.rds_from,
         r?.rds_to,
@@ -675,6 +711,8 @@ export default function RegistersScreen({navigation}) {
         r?._speciesSingleLabel,
         r?._conditionSingleLabel,
         r?._speciesMultiLabel,
+        r?._takki,
+        r?._disputedLabel,
         r?._autoGps,
         r?._manualGps,
         ui?.statusText,
@@ -732,7 +770,14 @@ export default function RegistersScreen({navigation}) {
     setEditingId(row?.id ?? null);
 
     // common
-    setNameOfSiteId(String(row?.name_of_site_id ?? row?.nameOfSiteId ?? row?.nameOfSiteId?.id ?? ''));
+    setNameOfSiteId(
+      String(
+        row?.name_of_site_id ??
+          row?.nameOfSiteId ??
+          row?.nameOfSiteId?.id ??
+          '',
+      ),
+    );
     const auto =
       row?.auto_lat != null && row?.auto_long != null ? `${row.auto_lat}, ${row.auto_long}` : '';
     const manual =
@@ -760,7 +805,12 @@ export default function RegistersScreen({navigation}) {
       setCount(String(row?.count ?? ''));
       const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
       setSpeciesMulti(ids.map(x => Number(x)).filter(n => Number.isFinite(n)));
-      setSpeciesMultiText(ids.join(', '));
+      // show names if possible, otherwise ids
+      const text = ids
+        .map(id => speciesById.get(String(id)) || String(id))
+        .filter(Boolean)
+        .join(', ');
+      setSpeciesMultiText(text);
     }
 
     if (activeType === 'aff') {
@@ -772,15 +822,18 @@ export default function RegistersScreen({navigation}) {
       setNoOfPlants(String(row?.no_of_plants ?? ''));
       const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
       setSpeciesMulti(ids.map(x => Number(x)).filter(n => Number.isFinite(n)));
-      setSpeciesMultiText(ids.join(', '));
+      const text = ids
+        .map(id => speciesById.get(String(id)) || String(id))
+        .filter(Boolean)
+        .join(', ');
+      setSpeciesMultiText(text);
     }
 
     setModalVisible(true);
   };
 
-  // ---------- SAVE (POST / PATCH using your curls) ----------
+  // ---------- SAVE HELPERS ----------
   const buildPictures = async () => {
-    // if user selected new images, upload; else keep existing
     let pictures = [];
     try {
       if (pictureAssets?.length) {
@@ -831,12 +884,43 @@ export default function RegistersScreen({navigation}) {
     return json;
   };
 
+  const resolveSpeciesIdsFromText = useCallback(
+    text => {
+      const tokens = String(text || '')
+        .split(',')
+        .map(s => String(s).trim())
+        .filter(Boolean);
+
+      if (!tokens.length) return [];
+
+      const byLowerName = new Map(
+        speciesRows
+          .filter(x => x?.name)
+          .map(x => [String(x.name).trim().toLowerCase(), x.id]),
+      );
+
+      const ids = [];
+      tokens.forEach(tok => {
+        // numeric id
+        const n = Number(tok);
+        if (Number.isFinite(n) && tok.replace(/[0-9]/g, '').length === 0) {
+          ids.push(Number(n));
+          return;
+        }
+        // name -> id
+        const id = byLowerName.get(tok.toLowerCase());
+        if (id != null) ids.push(Number(id));
+      });
+
+      return Array.from(new Set(ids.filter(x => Number.isFinite(x))));
+    },
+    [speciesRows],
+  );
+
   const saveRecord = async () => {
-    // GPS
     const {lat: autoLat, lng: autoLng} = parseLatLng(gpsAuto);
     const {lat: manualLat, lng: manualLng} = parseLatLng(gpsManual);
 
-    // pictures
     let pictures = [];
     try {
       pictures = await buildPictures();
@@ -844,7 +928,6 @@ export default function RegistersScreen({navigation}) {
       return Alert.alert('Upload Failed', e?.message || 'Failed to upload images');
     }
 
-    // body by type (matching your provided curls)
     let body = null;
 
     if (activeType === 'enumeration') {
@@ -853,7 +936,8 @@ export default function RegistersScreen({navigation}) {
       const chosenConditionId =
         conditionId ?? (conditionRows.find(x => x.name === condition)?.id ?? null);
 
-      if (!String(nameOfSiteId || '').trim()) return Alert.alert('Missing', 'name_of_site_id is required');
+      if (!String(nameOfSiteId || '').trim())
+        return Alert.alert('Missing', 'name_of_site_id is required');
       if (!chosenSpeciesId) return Alert.alert('Missing', 'species_id is required');
       if (!chosenConditionId) return Alert.alert('Missing', 'condition_id is required');
 
@@ -875,21 +959,26 @@ export default function RegistersScreen({navigation}) {
     }
 
     if (activeType === 'pole') {
-      if (!String(nameOfSiteId || '').trim()) return Alert.alert('Missing', 'nameOfSiteId is required');
+      if (!String(nameOfSiteId || '').trim())
+        return Alert.alert('Missing', 'nameOfSiteId is required');
 
       const rf = Number(String(rdsFrom || '').replace(/[^\d.]+/g, ''));
       const rt = Number(String(rdsTo || '').replace(/[^\d.]+/g, ''));
       const cnt = Number(String(count || '').replace(/[^\d.]+/g, ''));
 
-      // species_ids can be typed as "1,4,5"
-      const idsFromText = String(speciesMultiText || '')
-        .split(',')
-        .map(s => Number(String(s).trim()))
+      // allow ids OR names
+      const idsFromText = resolveSpeciesIdsFromText(speciesMultiText);
+      const fallbackIds = (Array.isArray(speciesMulti) ? speciesMulti : [])
+        .map(n => Number(n))
         .filter(n => Number.isFinite(n));
+      const finalIds = idsFromText.length ? idsFromText : fallbackIds;
 
-      const finalIds = (idsFromText.length ? idsFromText : speciesMulti).map(n => Number(n));
-
-      if (!finalIds.length) return Alert.alert('Missing', 'species_ids is required');
+      if (!finalIds.length) {
+        return Alert.alert(
+          'Missing',
+          'species_ids is required (enter IDs or Species Names, comma separated).',
+        );
+      }
 
       body = {
         nameOfSiteId: Number(nameOfSiteId),
@@ -906,19 +995,24 @@ export default function RegistersScreen({navigation}) {
     }
 
     if (activeType === 'aff') {
-      if (!String(nameOfSiteId || '').trim()) return Alert.alert('Missing', 'nameOfSiteId is required');
+      if (!String(nameOfSiteId || '').trim())
+        return Alert.alert('Missing', 'nameOfSiteId is required');
 
       const av = Number(String(avMilesKm || '').replace(/[^\d.]+/g, ''));
       const plants = Number(String(noOfPlants || '').replace(/[^\d.]+/g, ''));
 
-      const idsFromText = String(speciesMultiText || '')
-        .split(',')
-        .map(s => Number(String(s).trim()))
+      const idsFromText = resolveSpeciesIdsFromText(speciesMultiText);
+      const fallbackIds = (Array.isArray(speciesMulti) ? speciesMulti : [])
+        .map(n => Number(n))
         .filter(n => Number.isFinite(n));
+      const finalIds = idsFromText.length ? idsFromText : fallbackIds;
 
-      const finalIds = (idsFromText.length ? idsFromText : speciesMulti).map(n => Number(n));
-
-      if (!finalIds.length) return Alert.alert('Missing', 'species_ids is required');
+      if (!finalIds.length) {
+        return Alert.alert(
+          'Missing',
+          'species_ids is required (enter IDs or Species Names, comma separated).',
+        );
+      }
 
       body = {
         nameOfSiteId: Number(nameOfSiteId),
@@ -963,6 +1057,59 @@ export default function RegistersScreen({navigation}) {
     return t?.label || 'Registers';
   }, [activeType]);
 
+  // ---------- TABLE COLUMNS ----------
+  const tableColumns = useMemo(() => {
+    // Always show Species Name (not ids), Takki #, and Disputed
+    if (activeType === 'enumeration') {
+      return [
+        {key: 'id', label: 'ID', width: 80},
+        {key: 'site', label: 'Site', width: 90},
+        {key: 'rd', label: 'RD/KM', width: 110},
+        {key: 'species', label: 'Species', width: 200},
+        {key: 'condition', label: 'Condition', width: 160},
+        {key: 'takki', label: 'Takki #', width: 120},
+        {key: 'disputed', label: 'Disputed', width: 110},
+        {key: 'auto', label: 'Auto GPS', width: 180},
+        {key: 'manual', label: 'Manual GPS', width: 180},
+        {key: 'status', label: 'Status', width: 220},
+        {key: 'actions', label: 'Actions', width: 140},
+      ];
+    }
+
+    if (activeType === 'pole') {
+      return [
+        {key: 'id', label: 'ID', width: 80},
+        {key: 'site', label: 'Site', width: 90},
+        {key: 'rds_from', label: 'RDS From', width: 110},
+        {key: 'rds_to', label: 'RDS To', width: 110},
+        {key: 'count', label: 'Count', width: 100},
+        {key: 'species_multi', label: 'Species', width: 220},
+        {key: 'takki', label: 'Takki #', width: 120},
+        {key: 'disputed', label: 'Disputed', width: 110},
+        {key: 'auto', label: 'Auto GPS', width: 180},
+        {key: 'manual', label: 'Manual GPS', width: 180},
+        {key: 'status', label: 'Status', width: 220},
+        {key: 'actions', label: 'Actions', width: 140},
+      ];
+    }
+
+    // aff
+    return [
+      {key: 'id', label: 'ID', width: 80},
+      {key: 'site', label: 'Site', width: 90},
+      {key: 'avg', label: 'Avg KM', width: 110},
+      {key: 'success', label: 'Success %', width: 120},
+      {key: 'year', label: 'Year', width: 100},
+      {key: 'species_multi', label: 'Species', width: 220},
+      {key: 'takki', label: 'Takki #', width: 120},
+      {key: 'disputed', label: 'Disputed', width: 110},
+      {key: 'auto', label: 'Auto GPS', width: 180},
+      {key: 'manual', label: 'Manual GPS', width: 180},
+      {key: 'status', label: 'Status', width: 220},
+      {key: 'actions', label: 'Actions', width: 140},
+    ];
+  }, [activeType]);
+
   // ---------- RENDER ----------
   return (
     <View style={styles.screen}>
@@ -984,7 +1131,7 @@ export default function RegistersScreen({navigation}) {
           </View>
         </View>
 
-        {/* Top Tabs (same UI idea; no redirect on edit) */}
+        {/* Top Tabs */}
         <View style={styles.tabsRow}>
           {TABS.map(t => {
             const active = t.key === activeType;
@@ -999,7 +1146,11 @@ export default function RegistersScreen({navigation}) {
                   setModalVisible(false);
                 }}
                 style={[styles.tabPill, active ? styles.tabPillActive : styles.tabPillInactive]}>
-                <Ionicons name={t.icon} size={16} color={active ? '#fff' : 'rgba(255,255,255,0.85)'} />
+                <Ionicons
+                  name={t.icon}
+                  size={16}
+                  color={active ? '#fff' : 'rgba(255,255,255,0.85)'}
+                />
                 <Text style={[styles.tabText, active ? styles.tabTextActive : styles.tabTextInactive]}>
                   {t.label}
                 </Text>
@@ -1028,7 +1179,7 @@ export default function RegistersScreen({navigation}) {
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search by ID, site, species, status..."
+              placeholder="Search by ID, site, species, takki, status..."
               placeholderTextColor={COLORS.textLight}
               style={styles.searchInput}
             />
@@ -1039,7 +1190,7 @@ export default function RegistersScreen({navigation}) {
             )}
           </View>
 
-          {/* ✅ Status Filters after search bar */}
+          {/* Status Filters */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -1129,18 +1280,8 @@ export default function RegistersScreen({navigation}) {
               <View style={styles.table}>
                 {/* Header */}
                 <View style={styles.tableHeader}>
-                  {[
-                    {label: 'ID', width: 80},
-                    {label: 'Site', width: 90},
-                    {label: activeType === 'enumeration' ? 'RD/KM' : activeType === 'pole' ? 'RDS From' : 'Avg KM', width: 110},
-                    {label: activeType === 'pole' ? 'RDS To' : activeType === 'aff' ? 'Success %' : 'Species', width: 140},
-                    {label: activeType === 'pole' ? 'Count' : activeType === 'aff' ? 'Year' : 'Condition', width: 120},
-                    {label: 'Auto GPS', width: 180},
-                    {label: 'Manual GPS', width: 180},
-                    {label: 'Status', width: 220},
-                    {label: 'Actions', width: 140},
-                  ].map((col, idx) => (
-                    <View key={idx} style={[styles.thCell, {width: col.width}]}>
+                  {tableColumns.map((col, idx) => (
+                    <View key={String(col.key) + idx} style={[styles.thCell, {width: col.width}]}>
                       <Text style={styles.thText}>{col.label}</Text>
                     </View>
                   ))}
@@ -1149,6 +1290,47 @@ export default function RegistersScreen({navigation}) {
                 {/* Rows */}
                 {filteredRows.map((r, idx) => {
                   const ui = deriveRowUi(r);
+
+                  const disputedColor = r?._isDisputed ? COLORS.danger : COLORS.success;
+                  const disputedBg = r?._isDisputed ? 'rgba(239,68,68,0.10)' : 'rgba(22,163,74,0.10)';
+
+                  const getCellValue = key => {
+                    switch (key) {
+                      case 'id':
+                        return String(r?.id ?? '—');
+                      case 'site':
+                        return String(r?.name_of_site_id ?? r?.nameOfSiteId ?? '—');
+                      case 'rd':
+                        return String(r?.rd_km ?? '—');
+                      case 'rds_from':
+                        return String(r?.rds_from ?? '—');
+                      case 'rds_to':
+                        return String(r?.rds_to ?? '—');
+                      case 'count':
+                        return String(r?.count ?? '—');
+                      case 'avg':
+                        return String(r?.av_miles_km ?? '—');
+                      case 'success':
+                        return String(r?.success_percentage ?? '—');
+                      case 'year':
+                        return String(r?.year ?? '—');
+                      case 'species':
+                        return String(r?._speciesSingleLabel ?? '—');
+                      case 'species_multi':
+                        return String(r?._speciesMultiLabel ?? '—');
+                      case 'condition':
+                        return String(r?._conditionSingleLabel ?? '—');
+                      case 'takki':
+                        return String(r?._takki ?? '—');
+                      case 'auto':
+                        return String(r?._autoGps ?? '—');
+                      case 'manual':
+                        return String(r?._manualGps ?? '—');
+                      default:
+                        return '—';
+                    }
+                  };
+
                   return (
                     <View
                       key={String(r?.id ?? idx)}
@@ -1157,95 +1339,77 @@ export default function RegistersScreen({navigation}) {
                         idx % 2 === 0 ? styles.rowEven : styles.rowOdd,
                         ui.isRejected ? styles.rowRejected : null,
                       ]}>
-                      <View style={[styles.tdCell, {width: 80}]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r?.id ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, {width: 90}]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r?.name_of_site_id ?? r?.nameOfSiteId ?? '—')}
-                        </Text>
-                      </View>
-
-                      {/* Col 3 */}
-                      <View style={[styles.tdCell, {width: 110}]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {activeType === 'enumeration'
-                            ? String(r?.rd_km ?? '—')
-                            : activeType === 'pole'
-                            ? String(r?.rds_from ?? '—')
-                            : String(r?.av_miles_km ?? '—')}
-                        </Text>
-                      </View>
-
-                      {/* Col 4 */}
-                      <View style={[styles.tdCell, {width: 140}]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {activeType === 'pole'
-                            ? String(r?.rds_to ?? '—')
-                            : activeType === 'aff'
-                            ? String(r?.success_percentage ?? '—')
-                            : String(r?._speciesSingleLabel ?? '—')}
-                        </Text>
-                      </View>
-
-                      {/* Col 5 */}
-                      <View style={[styles.tdCell, {width: 120}]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {activeType === 'pole'
-                            ? String(r?.count ?? '—')
-                            : activeType === 'aff'
-                            ? String(r?.year ?? '—')
-                            : String(r?._conditionSingleLabel ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, {width: 180}]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r?._autoGps ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, {width: 180}]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r?._manualGps ?? '—')}
-                        </Text>
-                      </View>
-
-                      {/* Status (click if rejected -> show reason) */}
-                      <View style={[styles.tdCell, {width: 220}]}>
-                        {ui.isRejected ? (
-                          <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
-                            <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                              <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                              <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
-                                {ui.statusText}
-                              </Text>
+                      {tableColumns.map(col => {
+                        if (col.key === 'status') {
+                          return (
+                            <View key="status" style={[styles.tdCell, {width: col.width}]}>
+                              {ui.isRejected ? (
+                                <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
+                                  <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                                    <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                                    <Text
+                                      style={[styles.statusText, {color: ui.statusColor}]}
+                                      numberOfLines={2}>
+                                      {ui.statusText}
+                                    </Text>
+                                  </View>
+                                </TouchableOpacity>
+                              ) : (
+                                <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                                  <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                                  <Text
+                                    style={[styles.statusText, {color: ui.statusColor}]}
+                                    numberOfLines={2}>
+                                    {ui.statusText}
+                                  </Text>
+                                </View>
+                              )}
                             </View>
-                          </TouchableOpacity>
-                        ) : (
-                          <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                            <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                            <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
-                              {ui.statusText}
+                          );
+                        }
+
+                        if (col.key === 'actions') {
+                          return (
+                            <View
+                              key="actions"
+                              style={[styles.tdCell, styles.actionsCell, {width: col.width}]}>
+                              {ui.showEdit ? (
+                                <TouchableOpacity style={styles.actionButton} onPress={() => openEditForm(r)}>
+                                  <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
+                                  <Text style={styles.actionButtonText}>Edit</Text>
+                                </TouchableOpacity>
+                              ) : (
+                                <Text style={[styles.tdText, {color: COLORS.textLight}]}>—</Text>
+                              )}
+                            </View>
+                          );
+                        }
+
+                        if (col.key === 'disputed') {
+                          return (
+                            <View key="disputed" style={[styles.tdCell, {width: col.width}]}>
+                              <View
+                                style={[
+                                  styles.disputedPill,
+                                  {backgroundColor: disputedBg, borderColor: `${disputedColor}35`},
+                                ]}>
+                                <View style={[styles.disputedDot, {backgroundColor: disputedColor}]} />
+                                <Text style={[styles.disputedText, {color: disputedColor}]}>
+                                  {r?._disputedLabel ?? 'NO'}
+                                </Text>
+                              </View>
+                            </View>
+                          );
+                        }
+
+                        return (
+                          <View key={col.key} style={[styles.tdCell, {width: col.width}]}>
+                            <Text style={styles.tdText} numberOfLines={2}>
+                              {getCellValue(col.key)}
                             </Text>
                           </View>
-                        )}
-                      </View>
-
-                      {/* Actions: Edit only when rejected (no redirect; open same modal) */}
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 140}]}>
-                        {ui.showEdit ? (
-                          <TouchableOpacity style={styles.actionButton} onPress={() => openEditForm(r)}>
-                            <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
-                            <Text style={styles.actionButtonText}>Edit</Text>
-                          </TouchableOpacity>
-                        ) : (
-                          <Text style={[styles.tdText, {color: COLORS.textLight}]}>—</Text>
-                        )}
-                      </View>
+                        );
+                      })}
                     </View>
                   );
                 })}
@@ -1286,12 +1450,16 @@ export default function RegistersScreen({navigation}) {
               </View>
 
               <View style={{padding: 20}}>
-                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>Rejected By</Text>
+                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                  Rejected By
+                </Text>
                 <Text style={{fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 14}}>
                   {rejectionModal.rejectedBy || 'Officer'}
                 </Text>
 
-                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>Remarks</Text>
+                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                  Remarks
+                </Text>
                 <View
                   style={{
                     marginTop: 8,
@@ -1323,7 +1491,7 @@ export default function RegistersScreen({navigation}) {
         </View>
       </Modal>
 
-      {/* Add/Edit Modal (same UI approach, no redirect) */}
+      {/* Add/Edit Modal */}
       <Modal
         visible={modalVisible}
         transparent
@@ -1336,9 +1504,7 @@ export default function RegistersScreen({navigation}) {
             <LinearGradient colors={['#fff', '#f8fafc']} style={styles.editModalContent}>
               <View style={styles.editModalHeader}>
                 <View>
-                  <Text style={styles.editModalTitle}>
-                    {isEdit ? 'Edit Record' : 'Add New Record'}
-                  </Text>
+                  <Text style={styles.editModalTitle}>{isEdit ? 'Edit Record' : 'Add New Record'}</Text>
                   {isEdit && editingId && <Text style={styles.editModalSubtitle}>ID: {editingId}</Text>}
                 </View>
                 <TouchableOpacity style={styles.editModalClose} onPress={() => setModalVisible(false)}>
@@ -1415,13 +1581,13 @@ export default function RegistersScreen({navigation}) {
                       keyboardType="numeric"
                     />
                     <FormRow
-                      label="species_ids (comma separated)"
+                      label="species_ids OR species names (comma separated)"
                       value={speciesMultiText}
                       onChangeText={setSpeciesMultiText}
-                      placeholder="e.g. 1,4"
+                      placeholder='e.g. 1,4  OR  "Sheesham, Eucalyptus"'
                     />
                     <Text style={styles.helperText}>
-                      Tip: enter species IDs like "1,4". (Labels load automatically in table.)
+                      Tip: You can enter IDs or Species Names. Table will always show Species Names.
                     </Text>
                   </>
                 )}
@@ -1468,10 +1634,10 @@ export default function RegistersScreen({navigation}) {
                       keyboardType="numeric"
                     />
                     <FormRow
-                      label="species_ids (comma separated)"
+                      label="species_ids OR species names (comma separated)"
                       value={speciesMultiText}
                       onChangeText={setSpeciesMultiText}
-                      placeholder="e.g. 3,4"
+                      placeholder='e.g. 3,4  OR  "Sheesham, Eucalyptus"'
                     />
                   </>
                 )}
@@ -1704,7 +1870,7 @@ const styles = StyleSheet.create({
   searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
   searchClear: {padding: 4},
 
-  // ✅ Filter Bar
+  // Filter Bar
   filterBar: {marginTop: 10},
   filterBarContent: {paddingHorizontal: 0, paddingBottom: 6, gap: 10},
   filterChip: {paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, borderWidth: 1},
@@ -1826,6 +1992,19 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
+
+  disputedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    gap: 6,
+  },
+  disputedDot: {width: 8, height: 8, borderRadius: 4},
+  disputedText: {fontSize: 12, fontWeight: '900', letterSpacing: 0.4},
 
   // FAB
   fab: {

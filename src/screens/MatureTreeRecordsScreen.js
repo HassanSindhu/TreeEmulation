@@ -1,3 +1,4 @@
+// /screens/MatureTreeRecordsScreen.js
 import React, {useCallback, useMemo, useState, useEffect} from 'react';
 import {
   View,
@@ -15,12 +16,15 @@ import {
   Dimensions,
   StatusBar,
   ActivityIndicator,
+  PermissionsAndroid,
+  Linking,
+  Switch,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
 import NetInfo from '@react-native-community/netinfo';
-import {launchImageLibrary} from 'react-native-image-picker';
+import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
 import {useFocusEffect} from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 
@@ -33,8 +37,6 @@ const {height} = Dimensions.get('window');
  * IMPORTANT
  * - For production you are using: http://be.lte.gisforestry.com
  * - For local testing like your curl: http://localhost:5000
- *
- * Change API_BASE accordingly.
  */
 const API_BASE = 'http://be.lte.gisforestry.com';
 
@@ -53,10 +55,13 @@ const TREE_ENUM_UPLOAD_PATH = 'enumaration';
 const TREE_ENUM_IS_MULTI = 'true';
 const TREE_ENUM_FILE_NAME = 'chan';
 
-// IMPORTANT: These names MUST match your navigator screen names exactly.
-// If your navigator uses e.g. "DisposalScreen" / "SuperdariScreen", update them here.
+// Navigator names
 const SUPERDARI_ROUTE = 'Superdari';
 const DISPOSAL_ROUTE = 'Disposal';
+
+// Image rules you requested
+const MIN_IMAGES = 1;
+const MAX_IMAGES = 4;
 
 // Theme Colors
 const COLORS = {
@@ -114,15 +119,21 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const [condition, setCondition] = useState('');
   const [conditionId, setConditionId] = useState(null);
 
+  // ✅ NEW FIELDS (your curl)
+  const [takkiNumber, setTakkiNumber] = useState('');
+  const [additionalRemarks, setAdditionalRemarks] = useState('');
+  const [isDisputed, setIsDisputed] = useState(false);
+  const [side, setSide] = useState(''); // "Left" | "Right"
+
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
   const [gpsSource, setGpsSource] = useState('');
   const [gpsFetching, setGpsFetching] = useState(false);
 
   // Multi Image + upload state
-  const [pictureAssets, setPictureAssets] = useState([]);
+  const [pictureAssets, setPictureAssets] = useState([]); // local selected assets (not uploaded yet)
   const [uploadingImages, setUploadingImages] = useState(false);
-  const [uploadedImageUrls, setUploadedImageUrls] = useState([]);
+  const [uploadedImageUrls, setUploadedImageUrls] = useState([]); // existing/after-upload URLs
 
   // ✅ Rejection popup state
   const [rejectionModal, setRejectionModal] = useState({
@@ -131,10 +142,39 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     remarks: '',
   });
 
-  const rdRangeText =
-    enumeration?.rdFrom && enumeration?.rdTo
-      ? `${enumeration.rdFrom} - ${enumeration.rdTo}`
-      : enumeration?.rdFrom || enumeration?.rdTo || '';
+  // ---------- RD/KM DROPDOWN OPTIONS ----------
+  const rdKmOptions = useMemo(() => {
+    const startRaw = enumeration?.rdFrom ?? enumeration?.rd_from ?? 1;
+    const endRaw = enumeration?.rdTo ?? enumeration?.rd_to ?? startRaw;
+
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+
+    const s = Math.min(start, end);
+    const e = Math.max(start, end);
+
+    const opts = [];
+    for (let i = s; i <= e; i += 1) opts.push(String(i));
+    return opts;
+  }, [enumeration?.rdFrom, enumeration?.rdTo, enumeration?.rd_from, enumeration?.rd_to]);
+
+  // ---------- SIDE RULE (show dropdown only if BOTH) ----------
+  const siteSideRaw = useMemo(() => {
+    return (
+      enumeration?.side ||
+      enumeration?.site_side ||
+      enumeration?.siteSide ||
+      enumeration?.nameOfSite?.side ||
+      enumeration?.nameOfSite?.site_side ||
+      ''
+    );
+  }, [enumeration]);
+
+  const sideMode = useMemo(() => String(siteSideRaw || '').trim().toLowerCase(), [siteSideRaw]);
+  const showSideDropdown = useMemo(() => sideMode === 'both', [sideMode]);
+  const sideOptions = useMemo(() => ['Left', 'Right'], []);
 
   // ---------- HELPERS ----------
   const normalizeList = json => {
@@ -176,32 +216,22 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   };
 
-  // ✅ SAFER NAVIGATION (Fix for: "The action 'NAVIGATE' ... was not handled by any navigator")
-  // This happens when DISPOSAL_ROUTE/SUPERDARI_ROUTE is not registered in the current navigator.
-  // This helper tries:
-  // 1) current navigator
-  // 2) parent navigator
+  // ✅ SAFER NAVIGATION
   const navigateSafe = useCallback(
     (screenName, params) => {
       if (!screenName) return;
 
-      // 1) try current navigator
       try {
         navigation.navigate(screenName, params);
         return;
-      } catch (e) {
-        // ignore; we'll try parent
-      }
+      } catch (e) {}
 
-      // 2) try parent navigator if nested
       const parentNav = navigation.getParent?.();
       if (parentNav) {
         try {
           parentNav.navigate(screenName, params);
           return;
-        } catch (e) {
-          // ignore and show message below
-        }
+        } catch (e) {}
       }
 
       Alert.alert(
@@ -258,18 +288,10 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     return idx >= 0 ? ROLE_ORDER[idx + 1] || null : null;
   };
 
-  /**
-   * Flow:
-   * Guard -> Block Officer -> SDFO -> DFO -> Surveyor -> Final Approved
-   * Reject => goes back to Guard with remarks; Edit shows, user can resubmit.
-   *
-   * Dispose/Superdari overrides status & hides Edit.
-   */
   const deriveRowUi = r => {
     const disposalExists = hasAny(r?.disposal);
     const superdariExists = hasAny(r?.superdari);
 
-    // Dispose/Superdari overrides everything
     if (disposalExists && superdariExists) {
       return {
         statusText: 'Disposed + Superdari',
@@ -301,23 +323,19 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       };
     }
 
-    // Now rely on latestStatus
     const latest = r?.latestStatus || null;
-
-    // your API may use Approved/Rejected OR Verified
     const actionRaw = String(latest?.action || '').trim();
-    const action = actionRaw.toLowerCase(); // approved / rejected / verified
+    const action = actionRaw.toLowerCase();
     const byRole = normalizeRole(latest?.user_role || '');
     const byDesignation = String(latest?.designation || '').trim();
     const remarks = String(latest?.remarks || '').trim();
 
-    // No status yet
     if (!latest || !actionRaw) {
       return {
         statusText: 'Pending (Block Officer)',
         statusColor: COLORS.textLight,
         showEdit: false,
-        showPills: true, // shows dispose/superdari when not disposed & not superdari
+        showPills: true,
         rowAccent: null,
         isRejected: false,
       };
@@ -326,23 +344,21 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     if (action === 'rejected') {
       const rejectBy = byDesignation || byRole || 'Officer';
       return {
-        statusText: `Rejected by ${rejectBy}`, // do NOT append remarks here
+        statusText: `Rejected by ${rejectBy}`,
         statusColor: COLORS.danger,
-        showEdit: true, // rejected -> allow edit
-        showPills: true, // allow dispose/superdari too (as per your logic)
+        showEdit: true,
+        showPills: true,
         rowAccent: 'rejected',
-        isRejected: true, // clickable to show remarks popup
+        isRejected: true,
         _remarks: remarks,
         _rejectedBy: rejectBy,
       };
     }
 
-    // treat verified same as approved in the workflow
     if (action === 'approved' || action === 'verified') {
       const approver = byRole || 'Block Officer';
       const nxt = nextRole(approver);
 
-      // Surveyor approved => final
       if (!nxt) {
         return {
           statusText: 'Final Approved',
@@ -374,7 +390,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     };
   };
 
-  // ✅ Rejection popup open/close
   const openRejectionPopup = row => {
     const latest = row?.latestStatus || null;
     const action = String(latest?.action || '').trim().toLowerCase();
@@ -395,10 +410,147 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
   };
 
+  // ---------- CAMERA PERMISSION + PICKER MENU ----------
+  const openAppSettings = async () => {
+    try {
+      await Linking.openSettings();
+    } catch {
+      Alert.alert('Settings', 'Please open app settings and allow Camera permission.');
+    }
+  };
+
+  const ensureCameraPermission = async () => {
+    if (Platform.OS !== 'android') return true;
+
+    try {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
+        title: 'Camera Permission',
+        message: 'This app needs camera access to take photos.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Cancel',
+      });
+
+      if (granted === PermissionsAndroid.RESULTS.GRANTED) return true;
+
+      Alert.alert(
+        'Camera Permission Required',
+        'Camera permission is not allowed. Please enable it from Settings to take a photo.',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {text: 'Open Settings', onPress: openAppSettings},
+        ],
+      );
+      return false;
+    } catch {
+      Alert.alert('Permission Error', 'Unable to request camera permission.');
+      return false;
+    }
+  };
+
+  const totalSelectedCount = useMemo(() => {
+    const localCount = pictureAssets?.length || 0;
+    const urlCount = uploadedImageUrls?.length || 0;
+    return localCount > 0 ? localCount : urlCount;
+  }, [pictureAssets, uploadedImageUrls]);
+
+  const showImageSourceMenu = () => {
+    const remaining = MAX_IMAGES - totalSelectedCount;
+    if (remaining <= 0) {
+      return Alert.alert('Limit Reached', `You can add maximum ${MAX_IMAGES} images.`);
+    }
+
+    Alert.alert('Add Images', `Choose source (Remaining: ${remaining})`, [
+      {text: 'Cancel', style: 'cancel'},
+      {
+        text: 'Take Photo',
+        onPress: async () => {
+          const ok = await ensureCameraPermission();
+          if (!ok) return;
+
+          launchCamera(
+            {
+              mediaType: 'photo',
+              quality: 0.7,
+              cameraType: 'back',
+              saveToPhotos: false,
+            },
+            res => {
+              if (res?.didCancel) return;
+
+              if (res?.errorCode) {
+                const code = String(res.errorCode || '');
+                if (code.includes('permission')) {
+                  Alert.alert(
+                    'Camera Permission Required',
+                    'Camera permission is not allowed. Please enable it from Settings.',
+                    [
+                      {text: 'Cancel', style: 'cancel'},
+                      {text: 'Open Settings', onPress: openAppSettings},
+                    ],
+                  );
+                  return;
+                }
+                Alert.alert('Camera Error', res?.errorMessage || res.errorCode);
+                return;
+              }
+
+              const assets = Array.isArray(res?.assets) ? res.assets : [];
+              if (!assets.length) return;
+
+              setUploadedImageUrls([]);
+              setPictureAssets(prev => {
+                const next = [...(Array.isArray(prev) ? prev : []), ...assets].slice(0, MAX_IMAGES);
+                return next;
+              });
+            },
+          );
+        },
+      },
+      {
+        text: 'Choose From Gallery',
+        onPress: () => {
+          launchImageLibrary(
+            {
+              mediaType: 'photo',
+              quality: 0.7,
+              selectionLimit: Math.min(remaining, MAX_IMAGES),
+            },
+            res => {
+              if (res?.didCancel) return;
+
+              if (res?.errorCode) {
+                Alert.alert('Image Error', res?.errorMessage || res.errorCode);
+                return;
+              }
+
+              const assets = Array.isArray(res?.assets) ? res.assets : [];
+              if (!assets.length) return;
+
+              setUploadedImageUrls([]);
+              setPictureAssets(prev => {
+                const base = Array.isArray(prev) ? prev : [];
+                const next = [...base, ...assets].slice(0, MAX_IMAGES);
+                return next;
+              });
+            },
+          );
+        },
+      },
+    ]);
+  };
+
+  const removeLocalImageAt = idx => {
+    setPictureAssets(prev => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      arr.splice(idx, 1);
+      return arr;
+    });
+  };
+
   // ---------- API CALLS ----------
   const fetchServerEnumerations = useCallback(
     async ({refresh = false} = {}) => {
-      const siteId = getNameOfSiteId(); // may be null; if null, show all
+      const siteId = getNameOfSiteId();
       try {
         refresh ? setServerRefreshing(true) : setServerLoading(true);
         setServerError('');
@@ -423,7 +575,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         const rows = Array.isArray(json?.data) ? json.data : normalizeList(json);
         const list = Array.isArray(rows) ? rows : [];
 
-        // If screen is opened for a specific site, filter by name_of_site_id
         const filtered =
           siteId != null ? list.filter(x => String(x?.name_of_site_id) === String(siteId)) : list;
 
@@ -607,39 +758,27 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   }, [modalVisible, isEdit, fetchLocationSmart]);
 
   // ---------- FORM HANDLERS ----------
-  const pickImage = () => {
-    launchImageLibrary(
-      {
-        mediaType: 'photo',
-        quality: 0.7,
-        selectionLimit: 10,
-      },
-      res => {
-        if (res?.didCancel) return;
-
-        if (res?.errorCode) {
-          Alert.alert('Image Error', res?.errorMessage || res.errorCode);
-          return;
-        }
-
-        const assets = Array.isArray(res?.assets) ? res.assets : [];
-        if (!assets.length) return;
-
-        setPictureAssets(assets);
-        setUploadedImageUrls([]);
-      },
-    );
-  };
-
   const resetForm = () => {
     setIsEdit(false);
     setEditingServerId(null);
-    setRdKm(rdRangeText || '');
+
+    setRdKm(rdKmOptions?.[0] ?? '');
+
     setSpecies('');
     setSpeciesId(null);
     setGirth('');
     setCondition('');
     setConditionId(null);
+
+    setTakkiNumber('');
+    setAdditionalRemarks('');
+    setIsDisputed(false);
+
+    // ✅ side default from site setting if not BOTH
+    if (sideMode === 'left') setSide('Left');
+    else if (sideMode === 'right') setSide('Right');
+    else setSide('');
+
     setGpsAuto('');
     setGpsManual('');
     setGpsSource('');
@@ -657,12 +796,24 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setIsEdit(true);
     setEditingServerId(row?.id ?? null);
 
-    setRdKm(String(row?.rd_km ?? ''));
+    setRdKm(row?.rd_km != null ? String(row.rd_km) : rdKmOptions?.[0] ?? '');
+
     setSpecies('');
     setSpeciesId(row?.species_id ?? null);
     setGirth(String(row?.girth ?? ''));
     setCondition('');
     setConditionId(row?.condition_id ?? null);
+
+    // ✅ new fields from server
+    setTakkiNumber(row?.takkiNumber != null ? String(row.takkiNumber) : '');
+    setAdditionalRemarks(String(row?.additionalRemarks ?? row?.additional_remarks ?? ''));
+    setIsDisputed(!!row?.isDisputed);
+
+    const rowSide = String(row?.side || '').trim();
+    if (rowSide) setSide(rowSide);
+    else if (sideMode === 'left') setSide('Left');
+    else if (sideMode === 'right') setSide('Right');
+    else setSide('');
 
     const auto =
       row?.auto_lat != null && row?.auto_long != null ? `${row.auto_lat}, ${row.auto_long}` : '';
@@ -676,7 +827,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setGpsSource(manual ? 'MANUAL' : auto ? 'GPS' : '');
 
     setPictureAssets([]);
-    setUploadedImageUrls(Array.isArray(row?.pictures) ? row.pictures : []);
+    setUploadedImageUrls(Array.isArray(row?.pictures) ? row.pictures.slice(0, MAX_IMAGES) : []);
 
     setModalVisible(true);
   };
@@ -740,31 +891,69 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     if (!chosenSpeciesId) return Alert.alert('Missing', 'Species is required');
     if (!chosenConditionId) return Alert.alert('Missing', 'Condition is required');
 
+    const rdKmNumber = Number(rdKm);
+    if (!Number.isFinite(rdKmNumber) || rdKmNumber <= 0) {
+      return Alert.alert('Missing', 'Please select RD/KM from dropdown');
+    }
+
+    // ✅ side validation (only if BOTH)
+    let finalSide = side;
+    if (showSideDropdown) {
+      if (!finalSide || (finalSide !== 'Left' && finalSide !== 'Right')) {
+        return Alert.alert('Missing', 'Please select Side (Left/Right)');
+      }
+    } else {
+      // auto-fill from site if possible
+      if (sideMode === 'left') finalSide = 'Left';
+      else if (sideMode === 'right') finalSide = 'Right';
+      // if unknown and not BOTH, do not block; send only if non-empty
+    }
+
+    // ✅ takkiNumber (optional but you wanted on top; validate numeric if filled)
+    const tn = String(takkiNumber || '').trim();
+    const takkiNumberValue = tn ? Number(tn) : null;
+    if (tn && !Number.isFinite(takkiNumberValue)) {
+      return Alert.alert('Invalid', 'Takki Number must be numeric');
+    }
+
     const {lat: autoLat, lng: autoLng} = parseLatLng(gpsAuto);
     const {lat: manualLat, lng: manualLng} = parseLatLng(gpsManual);
 
-    const rdNum = Number(String(rdKm || '').replace(/[^\d.]+/g, ''));
-    const rdKmNumber = Number.isFinite(rdNum) ? rdNum : 0;
+    const chosenCount =
+      (pictureAssets?.length || 0) > 0
+        ? pictureAssets?.length || 0
+        : uploadedImageUrls?.length || 0;
+
+    if (chosenCount < MIN_IMAGES) {
+      return Alert.alert('Images Required', `Please add at least ${MIN_IMAGES} image.`);
+    }
+    if (chosenCount > MAX_IMAGES) {
+      return Alert.alert('Too Many Images', `You can add maximum ${MAX_IMAGES} images.`);
+    }
 
     // 1) Upload images (if newly selected)
     let pictures = [];
     try {
       if (pictureAssets?.length) {
-        setUploadingImages(true);
-        const urls = await uploadTreeEnumImages(pictureAssets);
-        setUploadedImageUrls(urls);
+        const assetsToUpload = pictureAssets.slice(0, MAX_IMAGES);
 
-        if (!urls?.length) {
+        setUploadingImages(true);
+        const urls = await uploadTreeEnumImages(assetsToUpload);
+
+        const safeUrls = Array.isArray(urls) ? urls.slice(0, MAX_IMAGES) : [];
+        setUploadedImageUrls(safeUrls);
+
+        if (!safeUrls?.length) {
           Alert.alert(
             'Upload Response',
             'Images uploaded, but server did not return readable URLs. Saving without picture URLs.',
           );
         } else {
-          pictures = urls;
+          pictures = safeUrls;
         }
       } else {
         if (Array.isArray(uploadedImageUrls) && uploadedImageUrls.length) {
-          pictures = uploadedImageUrls;
+          pictures = uploadedImageUrls.slice(0, MAX_IMAGES);
         }
       }
     } catch (e) {
@@ -774,20 +963,31 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       setUploadingImages(false);
     }
 
+    if (!pictures?.length) {
+      return Alert.alert('Images Required', 'Image upload did not return URLs. Please try again.');
+    }
+
+    // ✅ build body per your curl
     const apiBody = {
       name_of_site_id: Number(siteId),
-      rd_km: rdKmNumber,
       species_id: Number(chosenSpeciesId),
       girth: girth ? String(girth) : '',
       condition_id: Number(chosenConditionId),
+      rd_km: rdKmNumber,
+
+      // ✅ new fields
+      isDisputed: !!isDisputed,
+      additionalRemarks: String(additionalRemarks || '').trim(),
+      ...(takkiNumberValue != null ? {takkiNumber: takkiNumberValue} : {}),
+      ...(finalSide ? {side: finalSide} : {}),
+
+      pictures,
       auto_lat: autoLat,
       auto_long: autoLng,
       manual_lat: manualLat,
       manual_long: manualLng,
-      pictures,
     };
 
-    // 2) Edit: PATCH
     if (isEdit) {
       try {
         await patchToApi(editingServerId, apiBody);
@@ -800,7 +1000,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       return;
     }
 
-    // 3) Add: POST
     try {
       await submitToApi(apiBody);
       setModalVisible(false);
@@ -912,6 +1111,10 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         r?.created_at,
         ui?.statusText,
         r?.nameOfSite?.site_name,
+        r?.takkiNumber,
+        r?.additionalRemarks,
+        r?.side,
+        String(r?.isDisputed),
       ]
         .filter(v => v !== null && v !== undefined)
         .join(' ')
@@ -1135,7 +1338,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      {/* ✅ Clickable status only if rejected */}
+                      {/* Clickable status only if rejected */}
                       <View style={[styles.tdCell, {width: 220}]}>
                         {ui.isRejected ? (
                           <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
@@ -1157,7 +1360,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                       </View>
 
                       <View style={[styles.tdCell, styles.actionsCell, {width: 320}]}>
-                        {/* Edit only on rejected, and not disposed/superdari (already handled in deriveRowUi) */}
                         {ui.showEdit && (
                           <TouchableOpacity
                             style={styles.actionButton}
@@ -1167,7 +1369,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                           </TouchableOpacity>
                         )}
 
-                        {/* Dispose / Superdari pills only when BOTH arrays are empty (your requirement) */}
                         {ui.showPills && (
                           <>
                             <TouchableOpacity
@@ -1314,7 +1515,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         </View>
       </Modal>
 
-      {/* ✅ Rejection Reason Modal */}
+      {/* Rejection Reason Modal */}
       <Modal
         transparent
         visible={rejectionModal.visible}
@@ -1410,7 +1611,36 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 style={styles.editModalBody}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled">
-                <FormRow label="RD/KM" value={rdKm} onChangeText={setRdKm} />
+
+                {/* ✅ Takki Number on TOP */}
+                <FormRow
+                  label="Takki Number"
+                  value={takkiNumber}
+                  onChangeText={setTakkiNumber}
+                  placeholder="e.g. 123"
+                  keyboardType="numeric"
+                />
+
+                {/* ✅ Side dropdown only if BOTH */}
+                {showSideDropdown && (
+                  <DropdownRow
+                    label="Side"
+                    value={side}
+                    onChange={v => setSide(v)}
+                    options={sideOptions}
+                    required
+                  />
+                )}
+
+                {/* RD/KM */}
+                <DropdownRow
+                  label="RD/KM"
+                  value={rdKm}
+                  onChange={v => setRdKm(v)}
+                  options={rdKmOptions}
+                  disabled={!rdKmOptions?.length}
+                  required
+                />
 
                 <DropdownRow
                   label={speciesLoading ? 'Species (Loading...)' : 'Species'}
@@ -1439,6 +1669,23 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   disabled={conditionLoading}
                   required
                 />
+
+                {/* ✅ Additional Remarks */}
+                <FormRow
+                  label="Additional Remarks"
+                  value={additionalRemarks}
+                  onChangeText={setAdditionalRemarks}
+                  placeholder="e.g. Located near the river bank"
+                />
+
+                {/* ✅ Is Disputed BELOW Additional Remarks */}
+                <View style={styles.switchRow}>
+                  <View style={{flex: 1}}>
+                    <Text style={styles.switchLabel}>Is Disputed</Text>
+                    <Text style={styles.switchHint}>Turn on if the tree is disputed.</Text>
+                  </View>
+                  <Switch value={isDisputed} onValueChange={setIsDisputed} />
+                </View>
 
                 {/* GPS Section */}
                 <View style={styles.gpsSection}>
@@ -1521,16 +1768,15 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 <View style={styles.imageSection}>
                   <TouchableOpacity
                     style={styles.imageButton}
-                    onPress={pickImage}
+                    onPress={showImageSourceMenu}
                     disabled={uploadingImages}>
-                    <Ionicons name="image-outline" size={24} color={COLORS.primary} />
+                    <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
                     <View style={styles.imageButtonContent}>
                       <Text style={styles.imageButtonTitle}>
-                        {pictureAssets.length ? 'Change Images' : 'Select Images'}
+                        {totalSelectedCount ? 'Add / Change Images' : 'Add Images'}
                       </Text>
                       <Text style={styles.imageButtonSubtitle}>
-                        UploadPath: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName:{' '}
-                        {TREE_ENUM_FILE_NAME}
+                        Minimum {MIN_IMAGES}, Maximum {MAX_IMAGES} images. Selected: {totalSelectedCount}
                       </Text>
                     </View>
 
@@ -1542,35 +1788,65 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   </TouchableOpacity>
 
                   {!!pictureAssets?.length && (
-                    <View style={styles.imagePreview}>
-                      <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
-                      <Text style={styles.imagePreviewText} numberOfLines={1}>
-                        Selected: {pictureAssets.length} image(s)
-                      </Text>
-                    </View>
+                    <>
+                      <View style={styles.imagePreview}>
+                        <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                        <Text style={styles.imagePreviewText} numberOfLines={1}>
+                          Selected (Local): {pictureAssets.length} image(s)
+                        </Text>
+                      </View>
+
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 10}}>
+                        {pictureAssets.map((a, idx) => (
+                          <View key={`${a?.uri || 'img'}_${idx}`} style={styles.thumbWrap}>
+                            <View style={styles.thumbInner}>
+                              <Text style={{fontSize: 11, fontWeight: '800', color: COLORS.text}}>
+                                Img {idx + 1}
+                              </Text>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.thumbClose}
+                              onPress={() => removeLocalImageAt(idx)}
+                              activeOpacity={0.8}>
+                              <Ionicons name="close-circle" size={18} color={COLORS.danger} />
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </ScrollView>
+                    </>
                   )}
 
-                  {!!uploadedImageUrls?.length && (
+                  {!!uploadedImageUrls?.length && !pictureAssets?.length && (
                     <View style={styles.uploadedPreview}>
                       <Ionicons name="cloud-done-outline" size={16} color={COLORS.info} />
                       <Text style={styles.uploadedPreviewText} numberOfLines={2}>
-                        Uploaded/Existing: {uploadedImageUrls.length} file(s)
+                        Existing (Server): {uploadedImageUrls.length} file(s)
                       </Text>
                     </View>
                   )}
 
                   {!!pictureAssets?.length && !uploadedImageUrls?.length && (
                     <View style={styles.imageHint}>
-                      <Ionicons
-                        name="information-circle-outline"
-                        size={16}
-                        color={COLORS.textLight}
-                      />
+                      <Ionicons name="information-circle-outline" size={16} color={COLORS.textLight} />
                       <Text style={styles.imageHintText}>
                         Images will upload automatically when you press “Save Record”.
                       </Text>
                     </View>
                   )}
+
+                  <View style={styles.imageHint}>
+                    <Ionicons name="lock-closed-outline" size={16} color={COLORS.textLight} />
+                    <Text style={styles.imageHintText}>
+                      If Camera permission is blocked, use “Open Settings” when prompted.
+                    </Text>
+                  </View>
+
+                  <View style={styles.imageHint}>
+                    <Ionicons name="folder-outline" size={16} color={COLORS.textLight} />
+                    <Text style={styles.imageHintText}>
+                      UploadPath: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName: {TREE_ENUM_FILE_NAME}
+                    </Text>
+                  </View>
                 </View>
               </ScrollView>
 
@@ -1870,7 +2146,7 @@ const styles = StyleSheet.create({
   },
   fabGradient: {width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center'},
 
-  // Filter + shared modal styles
+  // Shared modal styles
   modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
   modalBackdrop: {...StyleSheet.absoluteFillObject},
   modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
@@ -1906,7 +2182,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   modalBody: {padding: 20},
-  filterRow: {flexDirection: 'row', gap: 12, marginBottom: 16},
+  filterRow: {flexDirection: 'row', lobbying: 0, gap: 12, marginBottom: 16}, // NOTE: kept as-is if you had it; remove "lobbying" if lint complains
   filterColumn: {flex: 1},
   modalActions: {flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 20},
   modalButtonSecondary: {
@@ -1983,6 +2259,21 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+
+  // Switch row
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#fff',
+  },
+  switchLabel: {fontSize: 14, fontWeight: '800', color: COLORS.text},
+  switchHint: {fontSize: 12, color: COLORS.textLight, marginTop: 2},
 
   // GPS Section
   gpsSection: {marginTop: 20},
@@ -2107,4 +2398,33 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   imageHintText: {flex: 1, fontSize: 12, color: COLORS.textLight, lineHeight: 16},
+
+  // Thumb placeholders
+  thumbWrap: {
+    width: 70,
+    height: 70,
+    borderRadius: 14,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  thumbInner: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+  },
+  thumbClose: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 1,
+  },
 });

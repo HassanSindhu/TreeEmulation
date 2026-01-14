@@ -1,4 +1,9 @@
 // PoleCropRecordsScreen.js
+// ✅ UPDATED: Added GPS/Coordinates permission + fetch flow (like MatureTreeRecord)
+// - Ensures location permission before calling Geolocation.getCurrentPosition
+// - If denied/blocked, shows a permission modal with "Try Again" + "Open Settings"
+// - Keeps your existing autoGps/manualGps behavior (auto fills manual unless user edited)
+
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   View,
@@ -248,6 +253,14 @@ const safeDate = raw => {
   return d;
 };
 
+/* ===================== SPECIES COUNTS HELPERS (NEW) ===================== */
+const sumSpeciesCounts = arr => {
+  const list = Array.isArray(arr) ? arr : [];
+  return list.reduce((acc, x) => acc + (Number(x?.count) || 0), 0);
+};
+
+const uniq = arr => Array.from(new Set((Array.isArray(arr) ? arr : []).filter(Boolean)));
+
 export default function PoleCropRecordsScreen({navigation, route}) {
   const enumeration = route?.params?.enumeration;
 
@@ -279,12 +292,22 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
   const [rdFrom, setRdFrom] = useState('');
   const [rdTo, setRdTo] = useState('');
-  const [count, setCount] = useState('');
+
   const [selectedSpeciesNames, setSelectedSpeciesNames] = useState([]);
+
+  // ✅ per-species counts keyed by species_id (string)
+  const [speciesCountMap, setSpeciesCountMap] = useState({});
 
   const [autoGps, setAutoGps] = useState('');
   const [manualGps, setManualGps] = useState('');
   const [gpsLoading, setGpsLoading] = useState(false);
+
+  // ✅ NEW: Location permission modal (like MatureTreeRecord behavior)
+  const [locPermVisible, setLocPermVisible] = useState(false);
+  const [locPermBlocked, setLocPermBlocked] = useState(false);
+  const [locPermMsg, setLocPermMsg] = useState(
+    'This app needs location access to fetch GPS coordinates.',
+  );
 
   const [pickedAssets, setPickedAssets] = useState([]);
 
@@ -380,7 +403,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           return;
         }
         const assets = Array.isArray(res?.assets) ? res.assets : [];
-        addAssets(assets); // camera usually returns 1 asset
+        addAssets(assets);
       },
     );
   }, [addAssets, ensureCameraPermission]);
@@ -514,37 +537,128 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     }, [fetchPoleCropRecords]),
   );
 
-  /* ===================== GPS ===================== */
-  const fetchGps = useCallback((silent = false) => {
-    const now = Date.now();
-    if (now - lastGpsRequestAtRef.current < 1200) return;
-    lastGpsRequestAtRef.current = now;
-
-    setGpsLoading(true);
-    Geolocation.getCurrentPosition(
-      pos => {
-        const {latitude, longitude} = pos.coords;
-        const nextAuto = formatLatLng(latitude, longitude);
-        setAutoGps(nextAuto);
-
-        setManualGps(prev => {
-          const prevAuto = prevAutoGpsRef.current;
-          const prevTrim = String(prev || '').trim();
-          if (!prevTrim) return nextAuto;
-          if (prevTrim === String(prevAuto || '').trim()) return nextAuto;
-          return prevTrim;
-        });
-
-        prevAutoGpsRef.current = nextAuto;
-        setGpsLoading(false);
-      },
-      err => {
-        setGpsLoading(false);
-        if (!silent) Alert.alert('Location Error', err.message);
-      },
-      {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
-    );
+  /* ===================== LOCATION PERMISSION + GPS (UPDATED like MatureTreeRecord) ===================== */
+  const openSettingsSafe = useCallback(() => {
+    Linking.openSettings().catch(() => {
+      Alert.alert('Settings', 'Unable to open Settings on this device.');
+    });
   }, []);
+
+  const ensureLocationPermission = useCallback(async () => {
+    // iOS: request authorization (if needed)
+    if (Platform.OS === 'ios') {
+      try {
+        // Some versions return 'granted'/'denied' etc.
+        // Even if it returns undefined, we still attempt getCurrentPosition and handle error.
+        Geolocation.requestAuthorization?.('whenInUse');
+        return {ok: true, blocked: false};
+      } catch (e) {
+        return {ok: false, blocked: false};
+      }
+    }
+
+    // Android
+    try {
+      // Request both (fine is preferred; coarse acceptable for basic coords)
+      const result = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+      ]);
+
+      const fine = result?.[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
+      const coarse = result?.[PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION];
+
+      const ok =
+        fine === PermissionsAndroid.RESULTS.GRANTED ||
+        coarse === PermissionsAndroid.RESULTS.GRANTED;
+
+      const blocked =
+        fine === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
+        coarse === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
+
+      return {ok, blocked};
+    } catch (e) {
+      return {ok: false, blocked: false};
+    }
+  }, []);
+
+  const showLocationPermissionModal = useCallback(
+    ({blocked = false, message} = {}) => {
+      setLocPermBlocked(!!blocked);
+      setLocPermMsg(
+        message ||
+          (blocked
+            ? 'Location permission is blocked. Please enable it from Settings to fetch GPS coordinates.'
+            : 'This app needs location access to fetch GPS coordinates.'),
+      );
+      setLocPermVisible(true);
+    },
+    [],
+  );
+
+  const fetchGps = useCallback(
+    async (silent = false) => {
+      const now = Date.now();
+      if (now - lastGpsRequestAtRef.current < 1200) return;
+      lastGpsRequestAtRef.current = now;
+
+      // ✅ Ensure permission first
+      const perm = await ensureLocationPermission();
+      if (!perm.ok) {
+        if (!silent) {
+          showLocationPermissionModal({
+            blocked: perm.blocked,
+            message: perm.blocked
+              ? 'Location permission is blocked. Please enable it from Settings.'
+              : 'Location permission is required to fetch GPS coordinates.',
+          });
+        }
+        return;
+      }
+
+      setGpsLoading(true);
+
+      Geolocation.getCurrentPosition(
+        pos => {
+          const {latitude, longitude} = pos.coords;
+          const nextAuto = formatLatLng(latitude, longitude);
+          setAutoGps(nextAuto);
+
+          // ✅ Keep user edits: only overwrite manual if empty OR it previously matched old auto
+          setManualGps(prev => {
+            const prevAuto = prevAutoGpsRef.current;
+            const prevTrim = String(prev || '').trim();
+            if (!prevTrim) return nextAuto;
+            if (prevTrim === String(prevAuto || '').trim()) return nextAuto;
+            return prevTrim;
+          });
+
+          prevAutoGpsRef.current = nextAuto;
+          setGpsLoading(false);
+        },
+        err => {
+          setGpsLoading(false);
+
+          // Common codes:
+          // 1 PERMISSION_DENIED, 2 POSITION_UNAVAILABLE, 3 TIMEOUT
+          const msg = err?.message || 'Unable to fetch location.';
+          if (!silent) {
+            if (String(msg).toLowerCase().includes('permission')) {
+              showLocationPermissionModal({
+                blocked: false,
+                message:
+                  'Location permission was denied. Please allow it to fetch GPS coordinates.',
+              });
+            } else {
+              Alert.alert('Location Error', msg);
+            }
+          }
+        },
+        {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
+      );
+    },
+    [ensureLocationPermission, showLocationPermissionModal],
+  );
 
   useEffect(() => {
     const a = String(autoGps || '').trim();
@@ -557,14 +671,43 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     return m || String(autoGps || '').trim();
   };
 
+  /* ===================== SPECIES COUNT MAP SYNC (NEW) ===================== */
+  const selectedSpeciesIds = useMemo(() => {
+    const ids = selectedSpeciesNames
+      .map(n => speciesRows.find(s => String(s.name) === String(n))?.id)
+      .filter(id => id !== null && id !== undefined)
+      .map(id => String(id));
+    return uniq(ids);
+  }, [selectedSpeciesNames, speciesRows]);
+
+  useEffect(() => {
+    setSpeciesCountMap(prev => {
+      const next = {};
+      selectedSpeciesIds.forEach(id => {
+        next[id] = prev?.[id] ?? '';
+      });
+      return next;
+    });
+  }, [selectedSpeciesIds]);
+
+  const setSpeciesCount = (speciesId, value) => {
+    const clean = String(value ?? '').replace(/[^\d.]/g, '');
+    setSpeciesCountMap(prev => ({...(prev || {}), [String(speciesId)]: clean}));
+  };
+
+  const totalCount = useMemo(() => {
+    const items = selectedSpeciesIds.map(id => ({species_id: id, count: speciesCountMap?.[id]}));
+    return items.reduce((acc, x) => acc + (Number(x.count) || 0), 0);
+  }, [selectedSpeciesIds, speciesCountMap]);
+
   /* ===================== FORM HANDLERS ===================== */
   const resetFormForAdd = () => {
     setIsEdit(false);
     setEditingServerId(null);
     setRdFrom('');
     setRdTo('');
-    setCount('');
     setSelectedSpeciesNames([]);
+    setSpeciesCountMap({});
     setAutoGps('');
     setManualGps('');
     setPickedAssets([]);
@@ -586,18 +729,44 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     setEditingServerId(row?.id ?? null);
     setRdFrom(String(getRdsFrom(row) ?? ''));
     setRdTo(String(getRdsTo(row) ?? ''));
-    setCount(String(row?.count ?? ''));
+
+    const apiSpeciesCounts = Array.isArray(row?.species_counts) ? row.species_counts : [];
 
     const fromNested = Array.isArray(row?.poleCropSpecies)
-      ? row.poleCropSpecies.map(x => x?.species?.name).filter(Boolean)
+      ? row.poleCropSpecies
+          .map(x => x?.species?.name)
+          .filter(Boolean)
       : [];
 
-    const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
-    const fromIds = ids
-      .map(id => speciesRows.find(s => String(s.id) === String(id))?.name)
+    const namesFromSpeciesCounts = apiSpeciesCounts
+      .map(sc => {
+        const id = sc?.species_id;
+        return speciesRows.find(s => String(s.id) === String(id))?.name;
+      })
       .filter(Boolean);
 
-    setSelectedSpeciesNames(fromNested.length ? fromNested : fromIds);
+    const selectedNames =
+      namesFromSpeciesCounts.length > 0 ? namesFromSpeciesCounts : fromNested;
+
+    setSelectedSpeciesNames(selectedNames);
+
+    const nextCountMap = {};
+    if (apiSpeciesCounts.length > 0) {
+      apiSpeciesCounts.forEach(sc => {
+        const sid = sc?.species_id;
+        if (sid !== null && sid !== undefined) nextCountMap[String(sid)] = String(sc?.count ?? '');
+      });
+    } else if (Array.isArray(row?.poleCropSpecies) && row.poleCropSpecies.length) {
+      row.poleCropSpecies.forEach(x => {
+        const sid = x?.species?.id;
+        if (sid !== null && sid !== undefined) nextCountMap[String(sid)] = String(x?.count ?? '');
+      });
+    } else {
+      const firstName = selectedNames?.[0];
+      const sid = speciesRows.find(s => String(s.name) === String(firstName))?.id;
+      if (sid !== null && sid !== undefined) nextCountMap[String(sid)] = String(row?.count ?? '');
+    }
+    setSpeciesCountMap(nextCountMap);
 
     const auto =
       row?.auto_lat != null && row?.auto_long != null ? `${row.auto_lat}, ${row.auto_long}` : '';
@@ -617,7 +786,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     if (!auto) setTimeout(() => fetchGps(true), 250);
   };
 
-  /* ===================== VALIDATION ===================== */
+  /* ===================== VALIDATION (UPDATED) ===================== */
   const validate = () => {
     if (!nameOfSiteId) {
       Alert.alert('Error', 'Parent site id missing.');
@@ -631,19 +800,31 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       Alert.alert('Missing', 'RDS To is required.');
       return false;
     }
-    if (!String(count || '').trim()) {
-      Alert.alert('Missing', 'Count is required.');
-      return false;
-    }
-    const countNum = Number(count);
-    if (!Number.isFinite(countNum) || countNum <= 0) {
-      Alert.alert('Invalid', 'Count must be a positive number.');
-      return false;
-    }
     if (!selectedSpeciesNames?.length) {
       Alert.alert('Missing', 'Please select at least one species.');
       return false;
     }
+
+    if (!selectedSpeciesIds.length) {
+      Alert.alert('Species', 'Species mapping failed (missing ids). Please refresh species list.');
+      return false;
+    }
+
+    for (const sid of selectedSpeciesIds) {
+      const v = speciesCountMap?.[sid];
+      if (!String(v ?? '').trim()) {
+        const name = speciesRows.find(s => String(s.id) === String(sid))?.name || `#${sid}`;
+        Alert.alert('Missing', `Count is required for ${name}.`);
+        return false;
+      }
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) {
+        const name = speciesRows.find(s => String(s.id) === String(sid))?.name || `#${sid}`;
+        Alert.alert('Invalid', `Count must be a positive number for ${name}.`);
+        return false;
+      }
+    }
+
     return true;
   };
 
@@ -673,15 +854,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const upsertRecord = async () => {
     if (!validate()) return;
 
-    const speciesIds = selectedSpeciesNames
-      .map(n => speciesRows.find(s => String(s.name) === String(n))?.id)
-      .filter(id => id !== null && id !== undefined);
-
-    if (!speciesIds.length) {
-      Alert.alert('Species', 'Species mapping failed (missing ids). Please refresh species list.');
-      return;
-    }
-
     const rdFromNum = Number(rdFrom);
     const rdToNum = Number(rdTo);
     if (!Number.isFinite(rdFromNum) || !Number.isFinite(rdToNum)) {
@@ -692,6 +864,11 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     const {lat: autoLat, lng: autoLng} = parseLatLng(autoGps);
     const finalGps = resolveFinalGps();
     const {lat: manualLat, lng: manualLng} = parseLatLng(finalGps);
+
+    const species_counts = selectedSpeciesIds.map(sid => ({
+      species_id: Number(sid),
+      count: Number(speciesCountMap?.[sid]),
+    }));
 
     try {
       const uploadedUrls = await uploadPoleCropImages();
@@ -709,16 +886,13 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
         rds_from: rdFromNum,
         rds_to: rdToNum,
-        rd_km: rdToNum,
-
-        count: Number(count),
 
         auto_lat: autoLat,
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
 
-        species_ids: speciesIds.map(Number),
+        species_counts,
 
         ...(finalPictures.length ? {pictures: finalPictures} : {}),
 
@@ -737,13 +911,28 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
   /* ===================== UI HELPERS ===================== */
   const getSpeciesLabel = r => {
+    const sc = Array.isArray(r?.species_counts) ? r.species_counts : [];
+    if (sc.length) {
+      const parts = sc
+        .map(x => {
+          const name =
+            speciesRows.find(s => String(s.id) === String(x?.species_id))?.name ||
+            `#${x?.species_id}`;
+          const c = Number(x?.count) || 0;
+          return `${name}(${c})`;
+        })
+        .filter(Boolean);
+      if (!parts.length) return '—';
+      return parts.length > 2
+        ? `${parts.slice(0, 2).join(', ')} +${parts.length - 2} more`
+        : parts.join(', ');
+    }
+
     if (Array.isArray(r?.poleCropSpecies) && r.poleCropSpecies.length) {
       const names = r.poleCropSpecies.map(x => x?.species?.name).filter(Boolean);
-      const uniq = Array.from(new Set(names));
-      if (!uniq.length) return '—';
-      return uniq.length > 2
-        ? `${uniq.slice(0, 2).join(', ')} +${uniq.length - 2} more`
-        : uniq.join(', ');
+      const u = uniq(names);
+      if (!u.length) return '—';
+      return u.length > 2 ? `${u.slice(0, 2).join(', ')} +${u.length - 2} more` : u.join(', ');
     }
 
     const ids = Array.isArray(r?.species_ids) ? r.species_ids : [];
@@ -754,6 +943,12 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     return names.length > 2
       ? `${names.slice(0, 2).join(', ')} +${names.length - 2} more`
       : names.join(', ');
+  };
+
+  const getTotalCountForRow = r => {
+    const sc = Array.isArray(r?.species_counts) ? r.species_counts : [];
+    if (sc.length) return sumSpeciesCounts(sc);
+    return Number(r?.count ?? 0) || 0;
   };
 
   const getGpsLabel = r => {
@@ -828,7 +1023,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       }
 
       if (totF !== null || totT !== null) {
-        const total = Number(r?.count ?? NaN);
+        const total = getTotalCountForRow(r);
         if (!Number.isFinite(total)) return false;
         if (totF !== null && total < totF) return false;
         if (totT !== null && total > totT) return false;
@@ -841,7 +1036,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         r?.id,
         getRdsFrom(r),
         getRdsTo(r),
-        r?.count,
+        getTotalCountForRow(r),
         getSpeciesLabel(r),
         getGpsLabel(r),
         normalizeVerificationStatus(r),
@@ -1020,9 +1215,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                     {label: 'ID', width: 80},
                     {label: 'RDS From', width: 110},
                     {label: 'RDS To', width: 110},
-                    {label: 'Count', width: 100},
+                    {label: 'Total Count', width: 120},
                     {label: 'Status', width: 150},
-                    {label: 'Species', width: 260},
+                    {label: 'Species (Count)', width: 320},
                     {label: 'Pictures', width: 170},
                     {label: 'GPS', width: 200},
                     {label: 'Actions', width: 160},
@@ -1064,9 +1259,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 100}]}>
+                      <View style={[styles.tdCell, {width: 120}]}>
                         <View style={styles.countBadge}>
-                          <Text style={styles.countText}>{String(r?.count ?? '—')}</Text>
+                          <Text style={styles.countText}>{String(getTotalCountForRow(r) ?? '—')}</Text>
                         </View>
                       </View>
 
@@ -1082,18 +1277,14 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                             {statusInfo.label}
                           </Text>
                           <Ionicons
-                            name={
-                              hasStatusDetails
-                                ? 'information-circle-outline'
-                                : 'help-circle-outline'
-                            }
+                            name={hasStatusDetails ? 'information-circle-outline' : 'help-circle-outline'}
                             size={16}
                             color={COLORS.textLight}
                           />
                         </TouchableOpacity>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 260}]}>
+                      <View style={[styles.tdCell, {width: 320}]}>
                         <Text style={styles.tdText} numberOfLines={2}>
                           {getSpeciesLabel(r)}
                         </Text>
@@ -1103,9 +1294,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         {pics.length ? (
                           <TouchableOpacity
                             style={styles.picButton}
-                            onPress={() =>
-                              openPicturesViewer(pics, `Record #${r?.id} Pictures`)
-                            }>
+                            onPress={() => openPicturesViewer(pics, `Record #${r?.id} Pictures`)}>
                             <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.picButtonText}>View ({pics.length})</Text>
                           </TouchableOpacity>
@@ -1136,15 +1325,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         {normalizeVerificationStatus(r) === 'disapproved' && (
                           <TouchableOpacity
                             style={styles.reasonButton}
-                            onPress={() =>
-                              Alert.alert('Rejection Reason', buildStatusDetailsText(r))
-                            }
+                            onPress={() => Alert.alert('Rejection Reason', buildStatusDetailsText(r))}
                             activeOpacity={0.7}>
-                            <Ionicons
-                              name="chatbox-ellipses-outline"
-                              size={16}
-                              color={COLORS.danger}
-                            />
+                            <Ionicons name="chatbox-ellipses-outline" size={16} color={COLORS.danger} />
                             <Text style={styles.reasonButtonText}>Reason</Text>
                           </TouchableOpacity>
                         )}
@@ -1165,7 +1348,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         </View>
       </TouchableOpacity>
 
-      {/* Filters Modal */}
+      {/* Filters Modal (UNCHANGED) */}
       <Modal
         transparent
         visible={filterModalVisible}
@@ -1202,9 +1385,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                       ]}
                       onPress={() => setFilters(prev => ({...prev, status: ''}))}>
                       <Text
-                        style={
-                          !filters.status ? styles.filterPillTextActive : styles.filterPillTextInactive
-                        }>
+                        style={!filters.status ? styles.filterPillTextActive : styles.filterPillTextInactive}>
                         All
                       </Text>
                     </TouchableOpacity>
@@ -1398,15 +1579,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                       />
                     </View>
                   </View>
-
-                  <FormRow
-                    label="Count"
-                    value={count}
-                    onChangeText={setCount}
-                    placeholder="e.g. 50"
-                    keyboardType="numeric"
-                    required
-                  />
                 </View>
 
                 <View style={styles.formSection}>
@@ -1418,6 +1590,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                     options={speciesOptions}
                     disabled={speciesLoading}
                   />
+
                   {selectedSpeciesNames.length > 0 && (
                     <View style={styles.selectedSpeciesBadge}>
                       <Text style={styles.selectedSpeciesText}>
@@ -1425,7 +1598,46 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                       </Text>
                     </View>
                   )}
-                  <Text style={styles.helperText}>Selected species will be sent as species_ids[]</Text>
+
+                  {selectedSpeciesIds.length > 0 && (
+                    <View style={styles.speciesCountsCard}>
+                      <View style={styles.speciesCountsHeader}>
+                        <Ionicons name="list" size={18} color={COLORS.primary} />
+                        <Text style={styles.speciesCountsTitle}>Species-wise Counts</Text>
+                        <View style={styles.totalChip}>
+                          <Text style={styles.totalChipText}>Total: {totalCount}</Text>
+                        </View>
+                      </View>
+
+                      {selectedSpeciesIds.map(sid => {
+                        const name =
+                          speciesRows.find(s => String(s.id) === String(sid))?.name || `#${sid}`;
+                        return (
+                          <View key={sid} style={styles.speciesCountRow}>
+                            <View style={styles.speciesCountLeft}>
+                              <Text style={styles.speciesCountName} numberOfLines={1}>
+                                {name}
+                              </Text>
+                              <Text style={styles.speciesCountHint}>Enter plants count</Text>
+                            </View>
+
+                            <TextInput
+                              value={String(speciesCountMap?.[sid] ?? '')}
+                              onChangeText={v => setSpeciesCount(sid, v)}
+                              placeholder="0"
+                              keyboardType="numeric"
+                              placeholderTextColor={COLORS.textLight}
+                              style={styles.speciesCountInput}
+                            />
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+
+                  <Text style={styles.helperText}>
+                    Selected species will be sent as <Text style={{fontWeight: '800'}}>species_counts[]</Text>
+                  </Text>
                 </View>
 
                 <View style={styles.formSection}>
@@ -1539,6 +1751,63 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         </View>
       </Modal>
 
+      {/* ✅ NEW: Location Permission Modal */}
+      <Modal
+        transparent
+        visible={locPermVisible}
+        animationType="fade"
+        onRequestClose={() => setLocPermVisible(false)}>
+        <View style={styles.permOverlay}>
+          <TouchableWithoutFeedback onPress={() => setLocPermVisible(false)}>
+            <View style={styles.permBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.permCard}>
+            <View style={styles.permHeader}>
+              <Ionicons name="location-outline" size={22} color={COLORS.primary} />
+              <Text style={styles.permTitle}>Location Permission</Text>
+            </View>
+
+            <Text style={styles.permText}>{locPermMsg}</Text>
+
+            <View style={styles.permActions}>
+              <TouchableOpacity
+                style={styles.permBtnSecondary}
+                onPress={() => setLocPermVisible(false)}
+                activeOpacity={0.8}>
+                <Text style={styles.permBtnSecondaryText}>Close</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.permBtnPrimary}
+                onPress={async () => {
+                  setLocPermVisible(false);
+                  // If blocked, go to settings; else request again and fetch
+                  if (locPermBlocked) {
+                    openSettingsSafe();
+                    return;
+                  }
+                  await fetchGps(false);
+                }}
+                activeOpacity={0.85}>
+                <Text style={styles.permBtnPrimaryText}>
+                  {locPermBlocked ? 'Open Settings' : 'Try Again'}
+                </Text>
+              </TouchableOpacity>
+
+              {locPermBlocked && (
+                <TouchableOpacity
+                  style={styles.permBtnDanger}
+                  onPress={openSettingsSafe}
+                  activeOpacity={0.85}>
+                  <Text style={styles.permBtnDangerText}>Settings</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Pictures Viewer Modal */}
       <Modal
         visible={viewerVisible}
@@ -1599,7 +1868,7 @@ const styles = StyleSheet.create({
   // Header
   header: {
     backgroundColor: COLORS.primary,
-    paddingTop: Platform.OS === 'ios' ? 50 : StatusBar.currentHeight + 20,
+    paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 20,
     paddingBottom: 20,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
@@ -1960,4 +2229,94 @@ const styles = StyleSheet.create({
   viewerLinkText: {color: '#fff', fontWeight: '800', fontSize: 12},
   viewerFooter: {padding: 12, borderTopWidth: 1, borderTopColor: COLORS.border, alignItems: 'center'},
   viewerFooterText: {color: COLORS.textLight, fontWeight: '700', fontSize: 12},
+
+  /* ===================== NEW STYLES FOR SPECIES COUNTS ===================== */
+  speciesCountsCard: {
+    marginTop: 14,
+    backgroundColor: 'rgba(5, 150, 105, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.12)',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  speciesCountsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(5, 150, 105, 0.12)',
+    backgroundColor: 'rgba(5, 150, 105, 0.06)',
+  },
+  speciesCountsTitle: {flex: 1, fontSize: 14, fontWeight: '800', color: COLORS.text},
+  totalChip: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  totalChipText: {fontSize: 12, fontWeight: '900', color: COLORS.primary},
+  speciesCountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(5, 150, 105, 0.10)',
+  },
+  speciesCountLeft: {flex: 1, paddingRight: 12},
+  speciesCountName: {fontSize: 14, fontWeight: '800', color: COLORS.text},
+  speciesCountHint: {fontSize: 12, fontWeight: '600', color: COLORS.textLight, marginTop: 2},
+  speciesCountInput: {
+    width: 110,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.text,
+    textAlign: 'center',
+  },
+
+  /* ===================== NEW STYLES: LOCATION PERMISSION MODAL ===================== */
+  permOverlay: {flex: 1, backgroundColor: COLORS.overlay, justifyContent: 'center', padding: 20},
+  permBackdrop: {...StyleSheet.absoluteFillObject},
+  permCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  permHeader: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10},
+  permTitle: {fontSize: 16, fontWeight: '900', color: COLORS.text},
+  permText: {fontSize: 13, color: COLORS.text, lineHeight: 18, marginBottom: 14},
+  permActions: {flexDirection: 'row', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end'},
+  permBtnSecondary: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(31,41,55,0.06)',
+  },
+  permBtnSecondaryText: {fontSize: 13, fontWeight: '800', color: COLORS.text},
+  permBtnPrimary: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: COLORS.primary,
+  },
+  permBtnPrimaryText: {fontSize: 13, fontWeight: '900', color: '#fff'},
+  permBtnDanger: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: COLORS.danger,
+  },
+  permBtnDangerText: {fontSize: 13, fontWeight: '900', color: '#fff'},
 });

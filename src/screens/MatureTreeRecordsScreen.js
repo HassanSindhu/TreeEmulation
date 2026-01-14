@@ -16,12 +16,15 @@ import {
   Dimensions,
   StatusBar,
   ActivityIndicator,
+  PermissionsAndroid,
+  Linking,
+  Switch,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
 import NetInfo from '@react-native-community/netinfo';
-import {launchImageLibrary} from 'react-native-image-picker';
+import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
 import {useFocusEffect} from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 
@@ -34,8 +37,6 @@ const {height} = Dimensions.get('window');
  * IMPORTANT
  * - For production you are using: http://be.lte.gisforestry.com
  * - For local testing like your curl: http://localhost:5000
- *
- * Change API_BASE accordingly.
  */
 const API_BASE = 'http://be.lte.gisforestry.com';
 
@@ -45,7 +46,7 @@ const CONDITIONS_URL = `${API_BASE}/forest-tree-conditions`;
 
 // Enumeration CRUD
 const ENUMERATION_SUBMIT_URL = `${API_BASE}/enum/enumeration`; // POST create
-const ENUMERATION_LIST_URL = `${API_BASE}/enum/enumeration`; // GET list (your latest curl)
+const ENUMERATION_LIST_URL = `${API_BASE}/enum/enumeration`; // GET list
 const ENUMERATION_UPDATE_URL = id => `${API_BASE}/enum/enumeration/${id}`; // PATCH edit/resubmit
 
 // Upload
@@ -54,8 +55,13 @@ const TREE_ENUM_UPLOAD_PATH = 'enumaration';
 const TREE_ENUM_IS_MULTI = 'true';
 const TREE_ENUM_FILE_NAME = 'chan';
 
+// Navigator names
 const SUPERDARI_ROUTE = 'Superdari';
 const DISPOSAL_ROUTE = 'Disposal';
+
+// Image rules you requested
+const MIN_IMAGES = 1;
+const MAX_IMAGES = 4;
 
 // Theme Colors
 const COLORS = {
@@ -113,20 +119,62 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const [condition, setCondition] = useState('');
   const [conditionId, setConditionId] = useState(null);
 
+  // ✅ NEW FIELDS (your curl)
+  const [takkiNumber, setTakkiNumber] = useState('');
+  const [additionalRemarks, setAdditionalRemarks] = useState('');
+  const [isDisputed, setIsDisputed] = useState(false);
+  const [side, setSide] = useState(''); // "Left" | "Right"
+
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
   const [gpsSource, setGpsSource] = useState('');
   const [gpsFetching, setGpsFetching] = useState(false);
 
   // Multi Image + upload state
-  const [pictureAssets, setPictureAssets] = useState([]);
+  const [pictureAssets, setPictureAssets] = useState([]); // local selected assets (not uploaded yet)
   const [uploadingImages, setUploadingImages] = useState(false);
-  const [uploadedImageUrls, setUploadedImageUrls] = useState([]);
+  const [uploadedImageUrls, setUploadedImageUrls] = useState([]); // existing/after-upload URLs
 
-  const rdRangeText =
-    enumeration?.rdFrom && enumeration?.rdTo
-      ? `${enumeration.rdFrom} - ${enumeration.rdTo}`
-      : enumeration?.rdFrom || enumeration?.rdTo || '';
+  // ✅ Rejection popup state
+  const [rejectionModal, setRejectionModal] = useState({
+    visible: false,
+    rejectedBy: '',
+    remarks: '',
+  });
+
+  // ---------- RD/KM DROPDOWN OPTIONS ----------
+  const rdKmOptions = useMemo(() => {
+    const startRaw = enumeration?.rdFrom ?? enumeration?.rd_from ?? 1;
+    const endRaw = enumeration?.rdTo ?? enumeration?.rd_to ?? startRaw;
+
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+
+    const s = Math.min(start, end);
+    const e = Math.max(start, end);
+
+    const opts = [];
+    for (let i = s; i <= e; i += 1) opts.push(String(i));
+    return opts;
+  }, [enumeration?.rdFrom, enumeration?.rdTo, enumeration?.rd_from, enumeration?.rd_to]);
+
+  // ---------- SIDE RULE (show dropdown only if BOTH) ----------
+  const siteSideRaw = useMemo(() => {
+    return (
+      enumeration?.side ||
+      enumeration?.site_side ||
+      enumeration?.siteSide ||
+      enumeration?.nameOfSite?.side ||
+      enumeration?.nameOfSite?.site_side ||
+      ''
+    );
+  }, [enumeration]);
+
+  const sideMode = useMemo(() => String(siteSideRaw || '').trim().toLowerCase(), [siteSideRaw]);
+  const showSideDropdown = useMemo(() => sideMode === 'both', [sideMode]);
+  const sideOptions = useMemo(() => ['Left', 'Right'], []);
 
   // ---------- HELPERS ----------
   const normalizeList = json => {
@@ -168,6 +216,32 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   };
 
+  // ✅ SAFER NAVIGATION
+  const navigateSafe = useCallback(
+    (screenName, params) => {
+      if (!screenName) return;
+
+      try {
+        navigation.navigate(screenName, params);
+        return;
+      } catch (e) {}
+
+      const parentNav = navigation.getParent?.();
+      if (parentNav) {
+        try {
+          parentNav.navigate(screenName, params);
+          return;
+        } catch (e) {}
+      }
+
+      Alert.alert(
+        'Navigation Error',
+        `Screen "${screenName}" is not registered in the current navigator.\n\nFix:\n• Ensure you added "${screenName}" in your Stack/Drawer navigator.\n• Or update SUPERDARI_ROUTE/DISPOSAL_ROUTE constants to match your navigator screen name.`,
+      );
+    },
+    [navigation],
+  );
+
   // Upload response helper
   const extractUploadUrls = json => {
     if (!json) return [];
@@ -193,7 +267,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     return Array.from(new Set(urls.filter(Boolean)));
   };
 
-  // ---------- STATUS / UI RULES (GUARD SCREEN) ----------
+  // ---------- STATUS / UI RULES ----------
   const hasAny = v => Array.isArray(v) && v.length > 0;
 
   const normalizeRole = role => {
@@ -214,19 +288,10 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     return idx >= 0 ? ROLE_ORDER[idx + 1] || null : null;
   };
 
-  /**
-   * Your requirement:
-   * - If disposal/superdari empty => show Dispose & Superdari buttons
-   * - If disposal/superdari has data => status shows Disposed/Superdari and hide Edit and hide pills
-   * - Workflow status based on latestStatus:
-   *   Guard -> Block Officer -> SDFO -> DFO -> Surveyor -> Final Approved
-   * - If anyone rejects => goes back to guard with remarks; Edit shows, user can resubmit.
-   */
   const deriveRowUi = r => {
     const disposalExists = hasAny(r?.disposal);
     const superdariExists = hasAny(r?.superdari);
 
-    // Dispose/Superdari overrides everything
     if (disposalExists && superdariExists) {
       return {
         statusText: 'Disposed + Superdari',
@@ -234,6 +299,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         showEdit: false,
         showPills: false,
         rowAccent: null,
+        isRejected: false,
       };
     }
     if (disposalExists) {
@@ -243,6 +309,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         showEdit: false,
         showPills: false,
         rowAccent: null,
+        isRejected: false,
       };
     }
     if (superdariExists) {
@@ -252,52 +319,54 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         showEdit: false,
         showPills: false,
         rowAccent: null,
+        isRejected: false,
       };
     }
 
-    // Now rely on latestStatus
     const latest = r?.latestStatus || null;
-    const action = String(latest?.action || '').trim(); // Approved / Rejected
+    const actionRaw = String(latest?.action || '').trim();
+    const action = actionRaw.toLowerCase();
     const byRole = normalizeRole(latest?.user_role || '');
     const byDesignation = String(latest?.designation || '').trim();
     const remarks = String(latest?.remarks || '').trim();
 
-    // No status yet => pending at Block Officer (as per your flow)
-    if (!latest || !action) {
+    if (!latest || !actionRaw) {
       return {
         statusText: 'Pending (Block Officer)',
         statusColor: COLORS.textLight,
         showEdit: false,
-        // per your rule: buttons show if arrays are empty
         showPills: true,
         rowAccent: null,
+        isRejected: false,
       };
     }
 
-    if (action.toLowerCase() === 'rejected') {
+    if (action === 'rejected') {
       const rejectBy = byDesignation || byRole || 'Officer';
-      const shortRemarks = remarks ? ` • ${remarks}` : '';
       return {
-        statusText: `Rejected by ${rejectBy}${shortRemarks}`,
+        statusText: `Rejected by ${rejectBy}`,
         statusColor: COLORS.danger,
-        showEdit: true, // only rejected returns to Guard
-        showPills: true, // arrays are empty
+        showEdit: true,
+        showPills: true,
         rowAccent: 'rejected',
+        isRejected: true,
+        _remarks: remarks,
+        _rejectedBy: rejectBy,
       };
     }
 
-    if (action.toLowerCase() === 'approved') {
+    if (action === 'approved' || action === 'verified') {
       const approver = byRole || 'Block Officer';
       const nxt = nextRole(approver);
 
-      // Surveyor approved => final
       if (!nxt) {
         return {
           statusText: 'Final Approved',
           statusColor: COLORS.success,
           showEdit: false,
-          showPills: true, // your rule: empty arrays => show buttons
+          showPills: true,
           rowAccent: null,
+          isRejected: false,
         };
       }
 
@@ -305,8 +374,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         statusText: `Approved • Pending (${nxt})`,
         statusColor: COLORS.warning,
         showEdit: false,
-        showPills: true, // your rule: empty arrays => show buttons
+        showPills: true,
         rowAccent: null,
+        isRejected: false,
       };
     }
 
@@ -316,13 +386,171 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       showEdit: false,
       showPills: true,
       rowAccent: null,
+      isRejected: false,
     };
+  };
+
+  const openRejectionPopup = row => {
+    const latest = row?.latestStatus || null;
+    const action = String(latest?.action || '').trim().toLowerCase();
+    if (action !== 'rejected') return;
+
+    const byRole = normalizeRole(latest?.user_role || '');
+    const byDesignation = String(latest?.designation || '').trim();
+    const remarks = String(latest?.remarks || '').trim();
+
+    setRejectionModal({
+      visible: true,
+      rejectedBy: byDesignation || byRole || 'Officer',
+      remarks: remarks || 'No remarks provided.',
+    });
+  };
+
+  const closeRejectionPopup = () => {
+    setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
+  };
+
+  // ---------- CAMERA PERMISSION + PICKER MENU ----------
+  const openAppSettings = async () => {
+    try {
+      await Linking.openSettings();
+    } catch {
+      Alert.alert('Settings', 'Please open app settings and allow Camera permission.');
+    }
+  };
+
+  const ensureCameraPermission = async () => {
+    if (Platform.OS !== 'android') return true;
+
+    try {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
+        title: 'Camera Permission',
+        message: 'This app needs camera access to take photos.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Cancel',
+      });
+
+      if (granted === PermissionsAndroid.RESULTS.GRANTED) return true;
+
+      Alert.alert(
+        'Camera Permission Required',
+        'Camera permission is not allowed. Please enable it from Settings to take a photo.',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {text: 'Open Settings', onPress: openAppSettings},
+        ],
+      );
+      return false;
+    } catch {
+      Alert.alert('Permission Error', 'Unable to request camera permission.');
+      return false;
+    }
+  };
+
+  const totalSelectedCount = useMemo(() => {
+    const localCount = pictureAssets?.length || 0;
+    const urlCount = uploadedImageUrls?.length || 0;
+    return localCount > 0 ? localCount : urlCount;
+  }, [pictureAssets, uploadedImageUrls]);
+
+  const showImageSourceMenu = () => {
+    const remaining = MAX_IMAGES - totalSelectedCount;
+    if (remaining <= 0) {
+      return Alert.alert('Limit Reached', `You can add maximum ${MAX_IMAGES} images.`);
+    }
+
+    Alert.alert('Add Images', `Choose source (Remaining: ${remaining})`, [
+      {text: 'Cancel', style: 'cancel'},
+      {
+        text: 'Take Photo',
+        onPress: async () => {
+          const ok = await ensureCameraPermission();
+          if (!ok) return;
+
+          launchCamera(
+            {
+              mediaType: 'photo',
+              quality: 0.7,
+              cameraType: 'back',
+              saveToPhotos: false,
+            },
+            res => {
+              if (res?.didCancel) return;
+
+              if (res?.errorCode) {
+                const code = String(res.errorCode || '');
+                if (code.includes('permission')) {
+                  Alert.alert(
+                    'Camera Permission Required',
+                    'Camera permission is not allowed. Please enable it from Settings.',
+                    [
+                      {text: 'Cancel', style: 'cancel'},
+                      {text: 'Open Settings', onPress: openAppSettings},
+                    ],
+                  );
+                  return;
+                }
+                Alert.alert('Camera Error', res?.errorMessage || res.errorCode);
+                return;
+              }
+
+              const assets = Array.isArray(res?.assets) ? res.assets : [];
+              if (!assets.length) return;
+
+              setUploadedImageUrls([]);
+              setPictureAssets(prev => {
+                const next = [...(Array.isArray(prev) ? prev : []), ...assets].slice(0, MAX_IMAGES);
+                return next;
+              });
+            },
+          );
+        },
+      },
+      {
+        text: 'Choose From Gallery',
+        onPress: () => {
+          launchImageLibrary(
+            {
+              mediaType: 'photo',
+              quality: 0.7,
+              selectionLimit: Math.min(remaining, MAX_IMAGES),
+            },
+            res => {
+              if (res?.didCancel) return;
+
+              if (res?.errorCode) {
+                Alert.alert('Image Error', res?.errorMessage || res.errorCode);
+                return;
+              }
+
+              const assets = Array.isArray(res?.assets) ? res.assets : [];
+              if (!assets.length) return;
+
+              setUploadedImageUrls([]);
+              setPictureAssets(prev => {
+                const base = Array.isArray(prev) ? prev : [];
+                const next = [...base, ...assets].slice(0, MAX_IMAGES);
+                return next;
+              });
+            },
+          );
+        },
+      },
+    ]);
+  };
+
+  const removeLocalImageAt = idx => {
+    setPictureAssets(prev => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      arr.splice(idx, 1);
+      return arr;
+    });
   };
 
   // ---------- API CALLS ----------
   const fetchServerEnumerations = useCallback(
     async ({refresh = false} = {}) => {
-      const siteId = getNameOfSiteId(); // may be null; if null, show all
+      const siteId = getNameOfSiteId();
       try {
         refresh ? setServerRefreshing(true) : setServerLoading(true);
         setServerError('');
@@ -330,7 +558,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         const token = await getAuthToken();
         if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-        // ✅ Latest API (your curl): GET /enum/enumeration
         const res = await fetch(ENUMERATION_LIST_URL, {
           method: 'GET',
           headers: {
@@ -348,7 +575,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         const rows = Array.isArray(json?.data) ? json.data : normalizeList(json);
         const list = Array.isArray(rows) ? rows : [];
 
-        // If screen is opened for a specific site, filter by name_of_site_id
         const filtered =
           siteId != null ? list.filter(x => String(x?.name_of_site_id) === String(siteId)) : list;
 
@@ -460,7 +686,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
     const net = await NetInfo.fetch();
     const online = !!net.isConnected && (net.isInternetReachable ?? true);
-    if (!online) throw new Error('No internet connection. Please connect to internet to upload images.');
+    if (!online)
+      throw new Error('No internet connection. Please connect to internet to upload images.');
 
     const fd = new FormData();
 
@@ -531,39 +758,27 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   }, [modalVisible, isEdit, fetchLocationSmart]);
 
   // ---------- FORM HANDLERS ----------
-  const pickImage = () => {
-    launchImageLibrary(
-      {
-        mediaType: 'photo',
-        quality: 0.7,
-        selectionLimit: 10,
-      },
-      res => {
-        if (res?.didCancel) return;
-
-        if (res?.errorCode) {
-          Alert.alert('Image Error', res?.errorMessage || res.errorCode);
-          return;
-        }
-
-        const assets = Array.isArray(res?.assets) ? res.assets : [];
-        if (!assets.length) return;
-
-        setPictureAssets(assets);
-        setUploadedImageUrls([]);
-      },
-    );
-  };
-
   const resetForm = () => {
     setIsEdit(false);
     setEditingServerId(null);
-    setRdKm(rdRangeText || '');
+
+    setRdKm(rdKmOptions?.[0] ?? '');
+
     setSpecies('');
     setSpeciesId(null);
     setGirth('');
     setCondition('');
     setConditionId(null);
+
+    setTakkiNumber('');
+    setAdditionalRemarks('');
+    setIsDisputed(false);
+
+    // ✅ side default from site setting if not BOTH
+    if (sideMode === 'left') setSide('Left');
+    else if (sideMode === 'right') setSide('Right');
+    else setSide('');
+
     setGpsAuto('');
     setGpsManual('');
     setGpsSource('');
@@ -581,12 +796,24 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setIsEdit(true);
     setEditingServerId(row?.id ?? null);
 
-    setRdKm(String(row?.rd_km ?? ''));
+    setRdKm(row?.rd_km != null ? String(row.rd_km) : rdKmOptions?.[0] ?? '');
+
     setSpecies('');
     setSpeciesId(row?.species_id ?? null);
     setGirth(String(row?.girth ?? ''));
     setCondition('');
     setConditionId(row?.condition_id ?? null);
+
+    // ✅ new fields from server
+    setTakkiNumber(row?.takkiNumber != null ? String(row.takkiNumber) : '');
+    setAdditionalRemarks(String(row?.additionalRemarks ?? row?.additional_remarks ?? ''));
+    setIsDisputed(!!row?.isDisputed);
+
+    const rowSide = String(row?.side || '').trim();
+    if (rowSide) setSide(rowSide);
+    else if (sideMode === 'left') setSide('Left');
+    else if (sideMode === 'right') setSide('Right');
+    else setSide('');
 
     const auto =
       row?.auto_lat != null && row?.auto_long != null ? `${row.auto_lat}, ${row.auto_long}` : '';
@@ -600,7 +827,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setGpsSource(manual ? 'MANUAL' : auto ? 'GPS' : '');
 
     setPictureAssets([]);
-    setUploadedImageUrls(Array.isArray(row?.pictures) ? row.pictures : []);
+    setUploadedImageUrls(Array.isArray(row?.pictures) ? row.pictures.slice(0, MAX_IMAGES) : []);
 
     setModalVisible(true);
   };
@@ -664,31 +891,69 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     if (!chosenSpeciesId) return Alert.alert('Missing', 'Species is required');
     if (!chosenConditionId) return Alert.alert('Missing', 'Condition is required');
 
+    const rdKmNumber = Number(rdKm);
+    if (!Number.isFinite(rdKmNumber) || rdKmNumber <= 0) {
+      return Alert.alert('Missing', 'Please select RD/KM from dropdown');
+    }
+
+    // ✅ side validation (only if BOTH)
+    let finalSide = side;
+    if (showSideDropdown) {
+      if (!finalSide || (finalSide !== 'Left' && finalSide !== 'Right')) {
+        return Alert.alert('Missing', 'Please select Side (Left/Right)');
+      }
+    } else {
+      // auto-fill from site if possible
+      if (sideMode === 'left') finalSide = 'Left';
+      else if (sideMode === 'right') finalSide = 'Right';
+      // if unknown and not BOTH, do not block; send only if non-empty
+    }
+
+    // ✅ takkiNumber (optional but you wanted on top; validate numeric if filled)
+    const tn = String(takkiNumber || '').trim();
+    const takkiNumberValue = tn ? Number(tn) : null;
+    if (tn && !Number.isFinite(takkiNumberValue)) {
+      return Alert.alert('Invalid', 'Takki Number must be numeric');
+    }
+
     const {lat: autoLat, lng: autoLng} = parseLatLng(gpsAuto);
     const {lat: manualLat, lng: manualLng} = parseLatLng(gpsManual);
 
-    const rdNum = Number(String(rdKm || '').replace(/[^\d.]+/g, ''));
-    const rdKmNumber = Number.isFinite(rdNum) ? rdNum : 0;
+    const chosenCount =
+      (pictureAssets?.length || 0) > 0
+        ? pictureAssets?.length || 0
+        : uploadedImageUrls?.length || 0;
 
-    // 1) Upload images (if newly selected) via tree-enum API
+    if (chosenCount < MIN_IMAGES) {
+      return Alert.alert('Images Required', `Please add at least ${MIN_IMAGES} image.`);
+    }
+    if (chosenCount > MAX_IMAGES) {
+      return Alert.alert('Too Many Images', `You can add maximum ${MAX_IMAGES} images.`);
+    }
+
+    // 1) Upload images (if newly selected)
     let pictures = [];
     try {
       if (pictureAssets?.length) {
-        setUploadingImages(true);
-        const urls = await uploadTreeEnumImages(pictureAssets);
-        setUploadedImageUrls(urls);
+        const assetsToUpload = pictureAssets.slice(0, MAX_IMAGES);
 
-        if (!urls?.length) {
+        setUploadingImages(true);
+        const urls = await uploadTreeEnumImages(assetsToUpload);
+
+        const safeUrls = Array.isArray(urls) ? urls.slice(0, MAX_IMAGES) : [];
+        setUploadedImageUrls(safeUrls);
+
+        if (!safeUrls?.length) {
           Alert.alert(
             'Upload Response',
             'Images uploaded, but server did not return readable URLs. Saving without picture URLs.',
           );
         } else {
-          pictures = urls;
+          pictures = safeUrls;
         }
       } else {
         if (Array.isArray(uploadedImageUrls) && uploadedImageUrls.length) {
-          pictures = uploadedImageUrls;
+          pictures = uploadedImageUrls.slice(0, MAX_IMAGES);
         }
       }
     } catch (e) {
@@ -698,20 +963,31 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       setUploadingImages(false);
     }
 
+    if (!pictures?.length) {
+      return Alert.alert('Images Required', 'Image upload did not return URLs. Please try again.');
+    }
+
+    // ✅ build body per your curl
     const apiBody = {
       name_of_site_id: Number(siteId),
-      rd_km: rdKmNumber,
       species_id: Number(chosenSpeciesId),
       girth: girth ? String(girth) : '',
       condition_id: Number(chosenConditionId),
+      rd_km: rdKmNumber,
+
+      // ✅ new fields
+      isDisputed: !!isDisputed,
+      additionalRemarks: String(additionalRemarks || '').trim(),
+      ...(takkiNumberValue != null ? {takkiNumber: takkiNumberValue} : {}),
+      ...(finalSide ? {side: finalSide} : {}),
+
+      pictures,
       auto_lat: autoLat,
       auto_long: autoLng,
       manual_lat: manualLat,
       manual_long: manualLng,
-      pictures,
     };
 
-    // 2) Edit: PATCH
     if (isEdit) {
       try {
         await patchToApi(editingServerId, apiBody);
@@ -724,7 +1000,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       return;
     }
 
-    // 3) Add: POST
     try {
       await submitToApi(apiBody);
       setModalVisible(false);
@@ -836,6 +1111,10 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         r?.created_at,
         ui?.statusText,
         r?.nameOfSite?.site_name,
+        r?.takkiNumber,
+        r?.additionalRemarks,
+        r?.side,
+        String(r?.isDisputed),
       ]
         .filter(v => v !== null && v !== undefined)
         .join(' ')
@@ -1059,37 +1338,52 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
+                      {/* Clickable status only if rejected */}
                       <View style={[styles.tdCell, {width: 220}]}>
-                        <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                          <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                          <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
-                            {ui.statusText}
-                          </Text>
-                        </View>
+                        {ui.isRejected ? (
+                          <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
+                            <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                              <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                              <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                                {ui.statusText}
+                              </Text>
+                            </View>
+                          </TouchableOpacity>
+                        ) : (
+                          <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
+                            <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                            <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                              {ui.statusText}
+                            </Text>
+                          </View>
+                        )}
                       </View>
 
                       <View style={[styles.tdCell, styles.actionsCell, {width: 320}]}>
-                        {/* Edit only on rejected, and not disposed/superdari (already handled in deriveRowUi) */}
                         {ui.showEdit && (
-                          <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
+                          <TouchableOpacity
+                            style={styles.actionButton}
+                            onPress={() => openEditFormServer(r)}>
                             <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.actionButtonText}>Edit</Text>
                           </TouchableOpacity>
                         )}
 
-
-                        {/* Dispose / Superdari pills only when BOTH arrays are empty (your requirement) */}
                         {ui.showPills && (
                           <>
                             <TouchableOpacity
                               style={[styles.actionPill, {backgroundColor: COLORS.primaryDark}]}
-                              onPress={() => navigation.navigate(DISPOSAL_ROUTE, {treeId: r.id, enumeration})}>
+                              onPress={() =>
+                                navigateSafe(DISPOSAL_ROUTE, {treeId: r.id, enumeration})
+                              }>
                               <Text style={styles.actionPillText}>Dispose</Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity
                               style={[styles.actionPill, {backgroundColor: COLORS.info}]}
-                              onPress={() => navigation.navigate(SUPERDARI_ROUTE, {treeId: r.id, enumeration})}>
+                              onPress={() =>
+                                navigateSafe(SUPERDARI_ROUTE, {treeId: r.id, enumeration})
+                              }>
                               <Text style={styles.actionPillText}>Superdari</Text>
                             </TouchableOpacity>
                           </>
@@ -1129,7 +1423,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   <Ionicons name="filter" size={24} color={COLORS.primary} />
                   <Text style={styles.modalTitle}>Advanced Filters</Text>
                 </View>
-                <TouchableOpacity style={styles.modalClose} onPress={() => setFilterModalVisible(false)}>
+                <TouchableOpacity
+                  style={styles.modalClose}
+                  onPress={() => setFilterModalVisible(false)}>
                   <Ionicons name="close" size={24} color={COLORS.text} />
                 </TouchableOpacity>
               </View>
@@ -1219,6 +1515,71 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         </View>
       </Modal>
 
+      {/* Rejection Reason Modal */}
+      <Modal
+        transparent
+        visible={rejectionModal.visible}
+        animationType="fade"
+        onRequestClose={closeRejectionPopup}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={closeRejectionPopup}>
+            <View style={styles.modalBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.modalContainer}>
+            <View style={[styles.modalContent, {maxHeight: height * 0.5}]}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
+                  <Text style={styles.modalTitle}>Rejection Reason</Text>
+                </View>
+                <TouchableOpacity style={styles.modalClose} onPress={closeRejectionPopup}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{padding: 20}}>
+                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                  Rejected By
+                </Text>
+                <Text style={{fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 14}}>
+                  {rejectionModal.rejectedBy || 'Officer'}
+                </Text>
+
+                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                  Remarks
+                </Text>
+                <View
+                  style={{
+                    marginTop: 8,
+                    backgroundColor: 'rgba(239,68,68,0.06)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(239,68,68,0.20)',
+                    borderRadius: 14,
+                    padding: 14,
+                  }}>
+                  <Text style={{fontSize: 14, fontWeight: '600', color: COLORS.text, lineHeight: 20}}>
+                    {rejectionModal.remarks}
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={{
+                    marginTop: 16,
+                    backgroundColor: COLORS.danger,
+                    paddingVertical: 14,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                  }}
+                  onPress={closeRejectionPopup}>
+                  <Text style={{color: '#fff', fontWeight: '800'}}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Add/Edit Modal */}
       <Modal
         visible={modalVisible}
@@ -1232,12 +1593,16 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
             <LinearGradient colors={['#fff', '#f8fafc']} style={styles.editModalContent}>
               <View style={styles.editModalHeader}>
                 <View>
-                  <Text style={styles.editModalTitle}>{isEdit ? 'Edit Tree Record' : 'Add New Tree'}</Text>
+                  <Text style={styles.editModalTitle}>
+                    {isEdit ? 'Edit Tree Record' : 'Add New Tree'}
+                  </Text>
                   {isEdit && editingServerId && (
                     <Text style={styles.editModalSubtitle}>ID: {editingServerId}</Text>
                   )}
                 </View>
-                <TouchableOpacity style={styles.editModalClose} onPress={() => setModalVisible(false)}>
+                <TouchableOpacity
+                  style={styles.editModalClose}
+                  onPress={() => setModalVisible(false)}>
                   <Ionicons name="close" size={24} color={COLORS.text} />
                 </TouchableOpacity>
               </View>
@@ -1246,7 +1611,36 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 style={styles.editModalBody}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled">
-                <FormRow label="RD/KM" value={rdKm} onChangeText={setRdKm} />
+
+                {/* ✅ Takki Number on TOP */}
+                <FormRow
+                  label="Takki Number"
+                  value={takkiNumber}
+                  onChangeText={setTakkiNumber}
+                  placeholder="e.g. 123"
+                  keyboardType="numeric"
+                />
+
+                {/* ✅ Side dropdown only if BOTH */}
+                {showSideDropdown && (
+                  <DropdownRow
+                    label="Side"
+                    value={side}
+                    onChange={v => setSide(v)}
+                    options={sideOptions}
+                    required
+                  />
+                )}
+
+                {/* RD/KM */}
+                <DropdownRow
+                  label="RD/KM"
+                  value={rdKm}
+                  onChange={v => setRdKm(v)}
+                  options={rdKmOptions}
+                  disabled={!rdKmOptions?.length}
+                  required
+                />
 
                 <DropdownRow
                   label={speciesLoading ? 'Species (Loading...)' : 'Species'}
@@ -1275,6 +1669,23 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   disabled={conditionLoading}
                   required
                 />
+
+                {/* ✅ Additional Remarks */}
+                <FormRow
+                  label="Additional Remarks"
+                  value={additionalRemarks}
+                  onChangeText={setAdditionalRemarks}
+                  placeholder="e.g. Located near the river bank"
+                />
+
+                {/* ✅ Is Disputed BELOW Additional Remarks */}
+                <View style={styles.switchRow}>
+                  <View style={{flex: 1}}>
+                    <Text style={styles.switchLabel}>Is Disputed</Text>
+                    <Text style={styles.switchHint}>Turn on if the tree is disputed.</Text>
+                  </View>
+                  <Switch value={isDisputed} onValueChange={setIsDisputed} />
+                </View>
 
                 {/* GPS Section */}
                 <View style={styles.gpsSection}>
@@ -1355,14 +1766,17 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
                 {/* Image Section */}
                 <View style={styles.imageSection}>
-                  <TouchableOpacity style={styles.imageButton} onPress={pickImage} disabled={uploadingImages}>
-                    <Ionicons name="image-outline" size={24} color={COLORS.primary} />
+                  <TouchableOpacity
+                    style={styles.imageButton}
+                    onPress={showImageSourceMenu}
+                    disabled={uploadingImages}>
+                    <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
                     <View style={styles.imageButtonContent}>
                       <Text style={styles.imageButtonTitle}>
-                        {pictureAssets.length ? 'Change Images' : 'Select Images'}
+                        {totalSelectedCount ? 'Add / Change Images' : 'Add Images'}
                       </Text>
                       <Text style={styles.imageButtonSubtitle}>
-                        UploadPath: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName: {TREE_ENUM_FILE_NAME}
+                        Minimum {MIN_IMAGES}, Maximum {MAX_IMAGES} images. Selected: {totalSelectedCount}
                       </Text>
                     </View>
 
@@ -1374,19 +1788,39 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   </TouchableOpacity>
 
                   {!!pictureAssets?.length && (
-                    <View style={styles.imagePreview}>
-                      <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
-                      <Text style={styles.imagePreviewText} numberOfLines={1}>
-                        Selected: {pictureAssets.length} image(s)
-                      </Text>
-                    </View>
+                    <>
+                      <View style={styles.imagePreview}>
+                        <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                        <Text style={styles.imagePreviewText} numberOfLines={1}>
+                          Selected (Local): {pictureAssets.length} image(s)
+                        </Text>
+                      </View>
+
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 10}}>
+                        {pictureAssets.map((a, idx) => (
+                          <View key={`${a?.uri || 'img'}_${idx}`} style={styles.thumbWrap}>
+                            <View style={styles.thumbInner}>
+                              <Text style={{fontSize: 11, fontWeight: '800', color: COLORS.text}}>
+                                Img {idx + 1}
+                              </Text>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.thumbClose}
+                              onPress={() => removeLocalImageAt(idx)}
+                              activeOpacity={0.8}>
+                              <Ionicons name="close-circle" size={18} color={COLORS.danger} />
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </ScrollView>
+                    </>
                   )}
 
-                  {!!uploadedImageUrls?.length && (
+                  {!!uploadedImageUrls?.length && !pictureAssets?.length && (
                     <View style={styles.uploadedPreview}>
                       <Ionicons name="cloud-done-outline" size={16} color={COLORS.info} />
                       <Text style={styles.uploadedPreviewText} numberOfLines={2}>
-                        Uploaded/Existing: {uploadedImageUrls.length} file(s)
+                        Existing (Server): {uploadedImageUrls.length} file(s)
                       </Text>
                     </View>
                   )}
@@ -1399,11 +1833,27 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                       </Text>
                     </View>
                   )}
+
+                  <View style={styles.imageHint}>
+                    <Ionicons name="lock-closed-outline" size={16} color={COLORS.textLight} />
+                    <Text style={styles.imageHintText}>
+                      If Camera permission is blocked, use “Open Settings” when prompted.
+                    </Text>
+                  </View>
+
+                  <View style={styles.imageHint}>
+                    <Ionicons name="folder-outline" size={16} color={COLORS.textLight} />
+                    <Text style={styles.imageHintText}>
+                      UploadPath: {TREE_ENUM_UPLOAD_PATH}, isMulti: {TREE_ENUM_IS_MULTI}, fileName: {TREE_ENUM_FILE_NAME}
+                    </Text>
+                  </View>
                 </View>
               </ScrollView>
 
               <View style={styles.editModalFooter}>
-                <TouchableOpacity style={styles.footerButtonSecondary} onPress={() => setModalVisible(false)}>
+                <TouchableOpacity
+                  style={styles.footerButtonSecondary}
+                  onPress={() => setModalVisible(false)}>
                   <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
                 </TouchableOpacity>
 
@@ -1411,7 +1861,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   style={[styles.footerButtonPrimary, uploadingImages && {opacity: 0.7}]}
                   disabled={uploadingImages}
                   onPress={saveRecord}>
-                  <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.footerButtonGradient}>
+                  <LinearGradient
+                    colors={[COLORS.primary, COLORS.primaryDark]}
+                    style={styles.footerButtonGradient}>
                     {uploadingImages ? (
                       <>
                         <ActivityIndicator size="small" color="#fff" />
@@ -1420,7 +1872,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     ) : (
                       <>
                         <Ionicons name="save-outline" size={20} color="#fff" />
-                        <Text style={styles.footerButtonPrimaryText}>{isEdit ? 'Update' : 'Save Record'}</Text>
+                        <Text style={styles.footerButtonPrimaryText}>
+                          {isEdit ? 'Update' : 'Save Record'}
+                        </Text>
                       </>
                     )}
                   </LinearGradient>
@@ -1567,12 +2021,22 @@ const styles = StyleSheet.create({
   errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
   errorTitle: {fontSize: 16, fontWeight: '700', color: COLORS.danger},
   errorMessage: {fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: 12},
-  errorButton: {backgroundColor: COLORS.danger, borderRadius: 12, paddingVertical: 12, alignItems: 'center'},
+  errorButton: {
+    backgroundColor: COLORS.danger,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
   errorButtonText: {color: '#fff', fontSize: 14, fontWeight: '700'},
 
   // Section
   section: {marginHorizontal: 20, marginBottom: 20},
-  sectionHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
   sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
 
@@ -1587,7 +2051,13 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
-  emptyText: {fontSize: 14, color: COLORS.textLight, textAlign: 'center', marginBottom: 20, lineHeight: 20},
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.textLight,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
   emptyAction: {backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12},
   emptyActionText: {color: '#fff', fontSize: 14, fontWeight: '700'},
 
@@ -1642,7 +2112,13 @@ const styles = StyleSheet.create({
     maxWidth: 210,
   },
   statusDot: {width: 8, height: 8, borderRadius: 4},
-  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1},
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    flexShrink: 1,
+  },
   actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
   actionButton: {
     flexDirection: 'row',
@@ -1670,14 +2146,13 @@ const styles = StyleSheet.create({
   },
   fabGradient: {width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center'},
 
-  // Filter Modal
+  // Shared modal styles
   modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
   modalBackdrop: {...StyleSheet.absoluteFillObject},
   modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
   modalContent: {
     borderRadius: 24,
     overflow: 'hidden',
-    maxHeight: height * 0.8,
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
@@ -1685,6 +2160,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 20,
     elevation: 10,
+    backgroundColor: '#fff',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1706,7 +2182,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   modalBody: {padding: 20},
-  filterRow: {flexDirection: 'row', gap: 12, marginBottom: 16},
+  filterRow: {flexDirection: 'row', lobbying: 0, gap: 12, marginBottom: 16}, // NOTE: kept as-is if you had it; remove "lobbying" if lint complains
   filterColumn: {flex: 1},
   modalActions: {flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 20},
   modalButtonSecondary: {
@@ -1717,7 +2193,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
-  modalButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  modalButtonPrimary: {
+    flex: 2,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
   modalButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
 
   // Edit Modal
@@ -1752,17 +2234,65 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
-  editModalFooter: {flexDirection: 'row', gap: 12, paddingHorizontal: 24, paddingVertical: 20, borderTopWidth: 1, borderTopColor: COLORS.border},
-  footerButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  editModalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  footerButtonSecondary: {
+    flex: 1,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
   footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
   footerButtonPrimary: {flex: 2, borderRadius: 14, overflow: 'hidden'},
-  footerButtonGradient: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8},
+  footerButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
+  },
   footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+
+  // Switch row
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#fff',
+  },
+  switchLabel: {fontSize: 14, fontWeight: '800', color: COLORS.text},
+  switchHint: {fontSize: 12, color: COLORS.textLight, marginTop: 2},
 
   // GPS Section
   gpsSection: {marginTop: 20},
-  sectionLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5},
-  gpsAutoCard: {backgroundColor: 'rgba(5, 150, 105, 0.03)', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.1)', marginBottom: 16},
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  gpsAutoCard: {
+    backgroundColor: 'rgba(5, 150, 105, 0.03)',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    marginBottom: 16,
+  },
   gpsHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8},
   gpsLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text},
   gpsStatus: {flexDirection: 'row', alignItems: 'center', gap: 8},
@@ -1770,15 +2300,45 @@ const styles = StyleSheet.create({
   gpsSourceText: {fontSize: 12, fontWeight: '800', color: COLORS.primary},
   gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 4},
   gpsLoadingText: {fontSize: 12, fontWeight: '600', color: COLORS.warning},
-  gpsValue: {fontSize: 16, fontWeight: '700', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 12},
+  gpsValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.text,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginBottom: 12,
+  },
   gpsButtons: {flexDirection: 'row', gap: 12},
-  gpsButton: {flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, paddingVertical: 12, borderRadius: 12, gap: 8},
+  gpsButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 8,
+  },
   gpsButtonDisabled: {opacity: 0.6},
   gpsButtonText: {fontSize: 14, fontWeight: '700', color: '#fff'},
   gpsButtonAlt: {backgroundColor: COLORS.text},
-  finalGpsPreview: {flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, padding: 12, marginTop: 16},
+  finalGpsPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 16,
+  },
   finalGpsLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text, marginRight: 8},
-  finalGpsValue: {flex: 1, fontSize: 14, fontWeight: '600', color: COLORS.primary, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+  finalGpsValue: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.primary,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
 
   // Image Section
   imageSection: {marginTop: 20},
@@ -1807,7 +2367,13 @@ const styles = StyleSheet.create({
     marginTop: 8,
     gap: 8,
   },
-  imagePreviewText: {flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.success, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+  imagePreviewText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.success,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   uploadedPreview: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1832,4 +2398,33 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   imageHintText: {flex: 1, fontSize: 12, color: COLORS.textLight, lineHeight: 16},
+
+  // Thumb placeholders
+  thumbWrap: {
+    width: 70,
+    height: 70,
+    borderRadius: 14,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  thumbInner: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+  },
+  thumbClose: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 1,
+  },
 });

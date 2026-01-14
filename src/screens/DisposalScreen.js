@@ -6,16 +6,17 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  ImageBackground,
   Image,
   ActivityIndicator,
   StatusBar,
   Platform,
   Modal,
+  PermissionsAndroid,
+  Linking,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {launchImageLibrary} from 'react-native-image-picker';
+import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
 import {Calendar} from 'react-native-calendars';
 
 import FormRow from '../components/FormRow';
@@ -154,13 +155,115 @@ export default function DisposalScreen({navigation, route}) {
     }
   };
 
-  const pickImages = setter => {
-    launchImageLibrary({mediaType: 'photo', selectionLimit: 0, quality: 0.7}, res => {
-      if (!res.assets?.length) return;
-      const uris = res.assets.map(a => a.uri).filter(Boolean);
-      if (!uris.length) return;
-      setter(prev => [...prev, ...uris]);
-    });
+  // ---------------------------
+  // Images: Camera + Gallery + Permission handling
+  // ---------------------------
+  const openAppSettings = () => {
+    Alert.alert(
+      'Permission Required',
+      'Camera permission is required to take photos. Please allow it from Settings.',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Open Settings',
+          onPress: async () => {
+            try {
+              await Linking.openSettings();
+            } catch (e) {
+              // ignore
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const addAssetsToState = (setter, res) => {
+    if (!res?.assets?.length) return;
+    const uris = res.assets.map(a => a?.uri).filter(Boolean);
+    if (!uris.length) return;
+    setter(prev => [...(Array.isArray(prev) ? prev : []), ...uris]);
+  };
+
+  const pickFromGallery = setter => {
+    launchImageLibrary(
+      {mediaType: 'photo', selectionLimit: 0, quality: 0.7},
+      res => {
+        if (res?.didCancel) return;
+        if (res?.errorCode) {
+          Alert.alert('Error', res?.errorMessage || 'Failed to pick image.');
+          return;
+        }
+        addAssetsToState(setter, res);
+      },
+    );
+  };
+
+  const ensureAndroidCameraPermission = async () => {
+    if (Platform.OS !== 'android') return true;
+
+    try {
+      const result = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.CAMERA,
+        {
+          title: 'Camera Permission',
+          message: 'This app needs camera access to take photos.',
+          buttonNegative: 'Cancel',
+          buttonPositive: 'Allow',
+        },
+      );
+
+      if (result === PermissionsAndroid.RESULTS.GRANTED) return true;
+
+      // DENIED or NEVER_ASK_AGAIN -> guide to settings
+      openAppSettings();
+      return false;
+    } catch (e) {
+      Alert.alert('Error', 'Unable to request camera permission.');
+      return false;
+    }
+  };
+
+  const takeFromCamera = async setter => {
+    const ok = await ensureAndroidCameraPermission();
+    if (!ok) return;
+
+    launchCamera(
+      {
+        mediaType: 'photo',
+        cameraType: 'back',
+        quality: 0.7,
+        saveToPhotos: false,
+      },
+      res => {
+        if (res?.didCancel) return;
+
+        if (res?.errorCode) {
+          const msg = res?.errorMessage || 'Failed to open camera.';
+
+          // iOS permission errors often come here
+          const lc = String(msg).toLowerCase();
+          const ec = String(res?.errorCode || '').toLowerCase();
+          if (lc.includes('permission') || ec.includes('permission')) {
+            openAppSettings();
+            return;
+          }
+
+          Alert.alert('Error', msg);
+          return;
+        }
+
+        addAssetsToState(setter, res);
+      },
+    );
+  };
+
+  const showImageSourcePicker = setter => {
+    Alert.alert('Add Photo', 'Choose a source', [
+      {text: 'Camera', onPress: () => takeFromCamera(setter)},
+      {text: 'Gallery', onPress: () => pickFromGallery(setter)},
+      {text: 'Cancel', style: 'cancel'},
+    ]);
   };
 
   const removeImage = (setter, uri) => {
@@ -174,7 +277,7 @@ export default function DisposalScreen({navigation, route}) {
     setShowDatePicker(true);
   };
 
-  const handleDateSelect = (date) => {
+  const handleDateSelect = date => {
     const selectedDate = date.dateString;
     setTempDate(selectedDate);
 
@@ -195,6 +298,8 @@ export default function DisposalScreen({navigation, route}) {
       case 'auctionDate':
         setAuctionDate(selectedDate);
         break;
+      default:
+        break;
     }
 
     setShowDatePicker(false);
@@ -208,14 +313,14 @@ export default function DisposalScreen({navigation, route}) {
     return `${year}-${month}-${day}`;
   };
 
-  const formatDateDisplay = (dateString) => {
+  const formatDateDisplay = dateString => {
     if (!dateString) return '';
     const [year, month, day] = dateString.split('-');
     return `${day}-${month}-${year}`;
   };
 
   // ---- Date helpers ----
-  const toIsoDateOrNull = (val) => {
+  const toIsoDateOrNull = val => {
     const s = String(val || '').trim();
     if (!s) return null;
 
@@ -250,7 +355,7 @@ export default function DisposalScreen({navigation, route}) {
     );
   }, [enumeration?.id, record?.enumerationId]);
 
-  const submitToApi = async (body) => {
+  const submitToApi = async body => {
     const token = await getAuthToken();
     if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
@@ -376,14 +481,10 @@ export default function DisposalScreen({navigation, route}) {
   };
 
   // Date Input Component
-  const DateInput = ({ label, value, onPress, placeholder = "Select date" }) => (
+  const DateInput = ({label, value, onPress, placeholder = 'Select date'}) => (
     <View style={styles.dateInputContainer}>
       <Text style={styles.dateLabel}>{label}</Text>
-      <TouchableOpacity
-        style={styles.dateInput}
-        onPress={onPress}
-        activeOpacity={0.7}
-      >
+      <TouchableOpacity style={styles.dateInput} onPress={onPress} activeOpacity={0.7}>
         <Text style={value ? styles.dateInputText : styles.dateInputPlaceholder}>
           {value ? formatDateDisplay(value) : placeholder}
         </Text>
@@ -431,7 +532,6 @@ export default function DisposalScreen({navigation, route}) {
         style={styles.container}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}>
-
         {/* Linking Card */}
         <View style={styles.linkingCard}>
           <View style={styles.linkingCardHeader}>
@@ -471,7 +571,7 @@ export default function DisposalScreen({navigation, route}) {
           <View style={styles.picRow}>
             <TouchableOpacity
               style={styles.picBtn}
-              onPress={() => pickImages(setDrImages)}
+              onPress={() => showImageSourcePicker(setDrImages)}
               activeOpacity={0.7}>
               <Ionicons name="image" size={18} color="#fff" />
               <Text style={styles.picBtnText}>Add DR Pictures</Text>
@@ -479,7 +579,10 @@ export default function DisposalScreen({navigation, route}) {
           </View>
 
           {drImages.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesContainer}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.imagesContainer}>
               {drImages.map(uri => (
                 <View key={uri} style={styles.thumbWrap}>
                   <Image source={{uri}} style={styles.thumb} />
@@ -512,7 +615,11 @@ export default function DisposalScreen({navigation, route}) {
             style={styles.checkRow}
             onPress={() => setFirChecked(!firChecked)}
             activeOpacity={0.7}>
-            <Ionicons name={firChecked ? 'checkbox' : 'square-outline'} size={20} color={COLORS.text} />
+            <Ionicons
+              name={firChecked ? 'checkbox' : 'square-outline'}
+              size={20}
+              color={COLORS.text}
+            />
             <Text style={styles.checkText}>FIR (Incase if DPC not implemented)</Text>
           </TouchableOpacity>
 
@@ -530,7 +637,7 @@ export default function DisposalScreen({navigation, route}) {
               <View style={styles.picRow}>
                 <TouchableOpacity
                   style={styles.picBtn}
-                  onPress={() => pickImages(setFirImages)}
+                  onPress={() => showImageSourcePicker(setFirImages)}
                   activeOpacity={0.7}>
                   <Ionicons name="image" size={18} color="#fff" />
                   <Text style={styles.picBtnText}>Add FIR Pictures</Text>
@@ -538,7 +645,10 @@ export default function DisposalScreen({navigation, route}) {
               </View>
 
               {firImages.length > 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesContainer}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.imagesContainer}>
                   {firImages.map(uri => (
                     <View key={uri} style={styles.thumbWrap}>
                       <Image source={{uri}} style={styles.thumb} />
@@ -555,13 +665,7 @@ export default function DisposalScreen({navigation, route}) {
             </>
           )}
 
-          <FormRow
-            label="Remarks"
-            value={remarks}
-            onChangeText={setRemarks}
-            multiline
-            numberOfLines={3}
-          />
+          <FormRow label="Remarks" value={remarks} onChangeText={setRemarks} multiline numberOfLines={3} />
         </View>
 
         {/* PEEDA */}
@@ -571,7 +675,11 @@ export default function DisposalScreen({navigation, route}) {
             onPress={() => setPeedaChecked(!peedaChecked)}
             activeOpacity={0.7}>
             <View style={styles.toggleContent}>
-              <Ionicons name={peedaChecked ? 'checkbox' : 'square-outline'} size={20} color={COLORS.text} />
+              <Ionicons
+                name={peedaChecked ? 'checkbox' : 'square-outline'}
+                size={20}
+                color={COLORS.text}
+              />
               <Text style={styles.cardTitle}>PEEDA Act (Incase if no legal action)</Text>
             </View>
             <Ionicons
@@ -609,18 +717,12 @@ export default function DisposalScreen({navigation, route}) {
                 placeholder="Select Act Date"
               />
 
-              <FormRow
-                label="Act Remarks"
-                value={actRemarks}
-                onChangeText={setActRemarks}
-                multiline
-                numberOfLines={3}
-              />
+              <FormRow label="Act Remarks" value={actRemarks} onChangeText={setActRemarks} multiline numberOfLines={3} />
 
               <View style={styles.picRow}>
                 <TouchableOpacity
                   style={styles.picBtn}
-                  onPress={() => pickImages(setPeedaImages)}
+                  onPress={() => showImageSourcePicker(setPeedaImages)}
                   activeOpacity={0.7}>
                   <Ionicons name="image" size={18} color="#fff" />
                   <Text style={styles.picBtnText}>Add PEEDA Pictures</Text>
@@ -628,7 +730,10 @@ export default function DisposalScreen({navigation, route}) {
               </View>
 
               {peedaImages.length > 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesContainer}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.imagesContainer}>
                   {peedaImages.map(uri => (
                     <View key={uri} style={styles.thumbWrap}>
                       <Image source={{uri}} style={styles.thumb} />
@@ -653,7 +758,11 @@ export default function DisposalScreen({navigation, route}) {
             onPress={() => setAuctionChecked(!auctionChecked)}
             activeOpacity={0.7}>
             <View style={styles.toggleContent}>
-              <Ionicons name={auctionChecked ? 'checkbox' : 'square-outline'} size={20} color={COLORS.text} />
+              <Ionicons
+                name={auctionChecked ? 'checkbox' : 'square-outline'}
+                size={20}
+                color={COLORS.text}
+              />
               <Text style={styles.cardTitle}>Auction</Text>
             </View>
             <Ionicons
@@ -680,28 +789,18 @@ export default function DisposalScreen({navigation, route}) {
                 placeholder="Select Auction Date"
               />
 
-              <FormRow
-                label="Name of Authority"
-                value={auctionAuthorityName}
-                onChangeText={setAuctionAuthorityName}
-              />
+              <FormRow label="Name of Authority" value={auctionAuthorityName} onChangeText={setAuctionAuthorityName} />
               <FormRow
                 label="Designation of Authority"
                 value={auctionAuthorityDesignation}
                 onChangeText={setAuctionAuthorityDesignation}
               />
-              <FormRow
-                label="Auction Remarks"
-                value={auctionRemarks}
-                onChangeText={setAuctionRemarks}
-                multiline
-                numberOfLines={3}
-              />
+              <FormRow label="Auction Remarks" value={auctionRemarks} onChangeText={setAuctionRemarks} multiline numberOfLines={3} />
 
               <View style={styles.picRow}>
                 <TouchableOpacity
                   style={styles.picBtn}
-                  onPress={() => pickImages(setAuctionImages)}
+                  onPress={() => showImageSourcePicker(setAuctionImages)}
                   activeOpacity={0.7}>
                   <Ionicons name="image" size={18} color="#fff" />
                   <Text style={styles.picBtnText}>Add Auction Pictures</Text>
@@ -709,7 +808,10 @@ export default function DisposalScreen({navigation, route}) {
               </View>
 
               {auctionImages.length > 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesContainer}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.imagesContainer}>
                   {auctionImages.map(uri => (
                     <View key={uri} style={styles.thumbWrap}>
                       <Image source={{uri}} style={styles.thumb} />
@@ -752,16 +854,12 @@ export default function DisposalScreen({navigation, route}) {
         visible={showDatePicker}
         transparent
         animationType="slide"
-        onRequestClose={() => setShowDatePicker(false)}
-      >
+        onRequestClose={() => setShowDatePicker(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.datePickerContainer}>
             <View style={styles.datePickerHeader}>
               <Text style={styles.datePickerTitle}>Select Date</Text>
-              <TouchableOpacity
-                onPress={() => setShowDatePicker(false)}
-                style={styles.closeButton}
-              >
+              <TouchableOpacity onPress={() => setShowDatePicker(false)} style={styles.closeButton}>
                 <Ionicons name="close" size={24} color={COLORS.text} />
               </TouchableOpacity>
             </View>
@@ -773,7 +871,7 @@ export default function DisposalScreen({navigation, route}) {
                 [tempDate]: {
                   selected: true,
                   selectedColor: COLORS.primary,
-                }
+                },
               }}
               theme={{
                 backgroundColor: '#ffffff',
@@ -796,7 +894,9 @@ export default function DisposalScreen({navigation, route}) {
 
             <View style={styles.selectedDateContainer}>
               <Text style={styles.selectedDateLabel}>Selected:</Text>
-              <Text style={styles.selectedDateValue}>{tempDate ? formatDateDisplay(tempDate) : 'No date selected'}</Text>
+              <Text style={styles.selectedDateValue}>
+                {tempDate ? formatDateDisplay(tempDate) : 'No date selected'}
+              </Text>
             </View>
           </View>
         </View>
@@ -821,13 +921,13 @@ const styles = StyleSheet.create({
   // Header
   header: {
     backgroundColor: COLORS.primary,
-    paddingTop: Platform.OS === 'ios' ? 50 : StatusBar.currentHeight + 20,
+    paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 20,
     paddingBottom: 20,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: {width: 0, height: 4},
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
@@ -892,7 +992,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {width: 0, height: 2},
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -943,7 +1043,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {width: 0, height: 2},
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -1053,7 +1153,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#fff',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {width: 0, height: 2},
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 2,
@@ -1084,7 +1184,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
     shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: {width: 0, height: 4},
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,

@@ -17,7 +17,7 @@ import {BlurView} from '@react-native-community/blur';
 import {useAuth} from '../context/AuthContext';
 import colors from '../theme/colors';
 
-export default function LoginScreen() {
+export default function LoginScreen({navigation}) {
   const {login} = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,6 +32,20 @@ export default function LoginScreen() {
       setErr('Please enter email and password');
       return;
     }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setErr('Please enter a valid email address');
+      return;
+    }
+
+    // Password length validation
+    if (password.length < 6) {
+      setErr('Password must be at least 6 characters');
+      return;
+    }
+
     try {
       setLoading(true);
       await login({email, password, remember});
@@ -42,10 +56,15 @@ export default function LoginScreen() {
     }
   };
 
+  const handleSignUpPress = () => {
+    navigation.navigate('Signup');
+  };
+
   return (
     <KeyboardAvoidingView
       style={{flex: 1}}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
       <ImageBackground
         source={require('../assets/images/login-BG.png')}
         style={styles.bg}
@@ -98,6 +117,13 @@ export default function LoginScreen() {
                   autoCapitalize="none"
                   keyboardType="email-address"
                   returnKeyType="next"
+                  autoComplete="email"
+                  textContentType="emailAddress"
+                  accessibilityLabel="Email address input"
+                  accessibilityHint="Enter your email address for login"
+                  onSubmitEditing={() => {
+                    // Focus on password field if available
+                  }}
                 />
               </View>
 
@@ -117,10 +143,18 @@ export default function LoginScreen() {
                   secureTextEntry={secure}
                   returnKeyType="done"
                   onSubmitEditing={onSubmit}
+                  autoComplete="password"
+                  textContentType="password"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  accessibilityLabel="Password input"
+                  accessibilityHint="Enter your password for login"
                 />
                 <TouchableOpacity
                   style={styles.trailing}
-                  onPress={() => setSecure(s => !s)}>
+                  onPress={() => setSecure(s => !s)}
+                  accessibilityLabel={secure ? "Show password" : "Hide password"}
+                  accessibilityRole="button">
                   <Ionicons
                     name={secure ? 'eye-off' : 'eye'}
                     size={20}
@@ -132,22 +166,30 @@ export default function LoginScreen() {
               <View style={styles.rowJustify}>
                 <TouchableOpacity
                   style={styles.rowCenter}
-                  onPress={() => setRemember(r => !r)}>
+                  onPress={() => setRemember(r => !r)}
+                  accessibilityLabel="Remember me checkbox"
+                  accessibilityRole="checkbox"
+                  accessibilityState={{checked: remember}}>
                   <View style={[styles.checkbox, remember && styles.checkboxChecked]}>
                     {remember && <Ionicons name="checkmark" size={14} color="#fff" />}
                   </View>
                   <Text style={styles.chkTxt}>Remember me</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity>
+                <TouchableOpacity
+                  accessibilityLabel="Forgot password"
+                  accessibilityRole="link">
                   <Text style={styles.link}>Forgot password?</Text>
                 </TouchableOpacity>
               </View>
 
               <TouchableOpacity
-                style={styles.signInBtn}
+                style={[styles.signInBtn, loading && styles.disabledBtn]}
                 onPress={onSubmit}
-                disabled={loading}>
+                disabled={loading}
+                accessibilityLabel={loading ? "Signing in" : "Sign in button"}
+                accessibilityRole="button"
+                accessibilityState={{disabled: loading}}>
                 {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
@@ -162,6 +204,20 @@ export default function LoginScreen() {
                   </>
                 )}
               </TouchableOpacity>
+
+              {/* Sign Up Link */}
+              <View style={styles.signupContainer}>
+                <Text style={styles.signupText}>
+                  Don't have an account?{' '}
+                  <Text
+                    style={styles.signupLink}
+                    onPress={handleSignUpPress}
+                    accessibilityLabel="Create new account"
+                    accessibilityRole="link">
+                    Sign up
+                  </Text>
+                </Text>
+              </View>
 
               <View style={styles.helperRow}>
                 <Ionicons
@@ -185,7 +241,12 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.40)',
   },
-  centerWrap: {flex: 1, justifyContent: 'center', paddingHorizontal: 16},
+  centerWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+  },
 
   brandBlock: {
     alignItems: 'center',
@@ -203,8 +264,18 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 10,
   },
-  brandTitle: {color: '#fff', fontWeight: '900', fontSize: 20, textAlign: 'center'},
-  brandSub: {color: 'rgba(255,255,255,0.85)', marginTop: 4, fontSize: 12, textAlign: 'center'},
+  brandTitle: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 20,
+    textAlign: 'center',
+  },
+  brandSub: {
+    color: 'rgba(255,255,255,0.85)',
+    marginTop: 4,
+    fontSize: 12,
+    textAlign: 'center',
+  },
 
   glassOuter: {
     borderRadius: 18,
@@ -217,14 +288,23 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 6,
   },
-  glassInner: {padding: 16, backgroundColor: 'rgba(255,255,255,0.20)'},
+  glassInner: {
+    padding: 16,
+    backgroundColor: 'rgba(255,255,255,0.20)',
+  },
 
-  title: {fontSize: 22, fontWeight: '900', color: '#111827'},
+  title: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#111827',
+    textAlign: 'center',
+  },
   subtitle: {
     marginTop: 4,
     color: 'rgba(17,24,39,0.70)',
     marginBottom: 14,
     fontWeight: '600',
+    textAlign: 'center',
   },
 
   errBox: {
@@ -238,7 +318,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 10,
   },
-  errTxt: {color: '#b91c1c', marginLeft: 6, fontWeight: '700'},
+  errTxt: {
+    color: '#b91c1c',
+    marginLeft: 6,
+    fontWeight: '700',
+    flex: 1,
+    flexWrap: 'wrap',
+  },
 
   inputRow: {
     flexDirection: 'row',
@@ -252,16 +338,33 @@ const styles = StyleSheet.create({
     height: 52,
   },
   inputIcon: {marginRight: 8},
-  input: {flex: 1, color: '#111827', paddingVertical: 10, fontWeight: '700'},
-  trailing: {paddingLeft: 8, paddingVertical: 6},
+  input: {
+    flex: 1,
+    color: '#111827',
+    paddingVertical: 10,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  trailing: {
+    paddingLeft: 8,
+    paddingVertical: 6,
+    minWidth: 30,
+    alignItems: 'center',
+  },
 
   rowJustify: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 2,
+    marginBottom: 4,
   },
-  rowCenter: {flexDirection: 'row', alignItems: 'center'},
+  rowCenter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingRight: 4,
+  },
   checkbox: {
     width: 18,
     height: 18,
@@ -273,10 +376,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.55)',
   },
-  checkboxChecked: {backgroundColor: colors.primary, borderColor: colors.primary},
-  chkTxt: {color: 'rgba(17,24,39,0.80)', fontWeight: '800'},
+  checkboxChecked: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  chkTxt: {
+    color: 'rgba(17,24,39,0.80)',
+    fontWeight: '800',
+    fontSize: 14,
+  },
 
-  link: {color: colors.primary, fontWeight: '900'},
+  link: {
+    color: colors.primary,
+    fontWeight: '900',
+    fontSize: 14,
+  },
 
   signInBtn: {
     backgroundColor: colors.primary,
@@ -291,8 +405,45 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
-  signInTxt: {color: '#fff', fontWeight: '900', fontSize: 16},
+  disabledBtn: {
+    opacity: 0.7,
+  },
+  signInTxt: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 16,
+  },
 
-  helperRow: {flexDirection: 'row', justifyContent: 'center', marginTop: 12},
-  helperText: {color: 'rgba(17,24,39,0.70)', fontWeight: '600'},
+  // Sign Up Link Styles
+  signupContainer: {
+    alignItems: 'center',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  signupText: {
+    color: 'rgba(17,24,39,0.70)',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  signupLink: {
+    color: colors.primary,
+    fontWeight: '900',
+    fontSize: 14,
+  },
+
+  helperRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(17,24,39,0.15)',
+  },
+  helperText: {
+    color: 'rgba(17,24,39,0.70)',
+    fontWeight: '600',
+    fontSize: 13,
+    marginLeft: 4,
+  },
 });

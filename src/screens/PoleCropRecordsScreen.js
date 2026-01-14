@@ -1,3 +1,4 @@
+// PoleCropRecordsScreen.js
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   View,
@@ -17,12 +18,13 @@ import {
   StatusBar,
   Image,
   Linking,
+  PermissionsAndroid,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
 import {useFocusEffect} from '@react-navigation/native';
-import {launchImageLibrary} from 'react-native-image-picker';
+import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
 
 import FormRow from '../components/FormRow';
 import {MultiSelectRow} from '../components/SelectRows';
@@ -66,10 +68,18 @@ const BUCKET_FILE_NAME = 'chan';
 
 const getToken = async () => (await AsyncStorage.getItem('AUTH_TOKEN')) || '';
 
+/** normalizeList: handles server responses like:
+ * - array
+ * - { data: [] }
+ * - { data: { data: [] } }
+ */
 const normalizeList = json => {
   if (!json) return [];
   if (Array.isArray(json)) return json;
-  if (typeof json === 'object' && Array.isArray(json.data)) return json.data;
+  if (typeof json === 'object') {
+    if (Array.isArray(json.data)) return json.data;
+    if (json.data && Array.isArray(json.data.data)) return json.data.data;
+  }
   return [];
 };
 
@@ -101,6 +111,141 @@ const toFormFile = asset => {
   const type = asset?.type || 'image/jpeg';
 
   return {uri, name, type};
+};
+
+/* ===================== STATUS (FIXED for latestStatus / verification) ===================== */
+const truthy = v => v === true || v === 'true' || v === 1 || v === '1';
+
+const pickFirst = (obj, keys = []) => {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  return null;
+};
+
+// ✅ NEW: Extracts the best status object from API response
+const getLatestStatusObj = rec => {
+  if (!rec || typeof rec !== 'object') return null;
+
+  // 1) Prefer latestStatus
+  if (rec?.latestStatus && typeof rec.latestStatus === 'object') {
+    const a = rec.latestStatus?.action;
+    if (a !== undefined && a !== null && String(a).trim() !== '') return rec.latestStatus;
+  }
+
+  // 2) Fallback to last verification entry
+  if (Array.isArray(rec?.verification) && rec.verification.length) {
+    const last = rec.verification[rec.verification.length - 1];
+    if (last && typeof last === 'object') {
+      const a = last?.action;
+      if (a !== undefined && a !== null && String(a).trim() !== '') return last;
+    }
+  }
+
+  return null;
+};
+
+// ✅ NEW: Normalizes into: approved | disapproved | pending
+const normalizeVerificationStatus = rec => {
+  const latest = getLatestStatusObj(rec);
+  const latestAction = latest?.action ? String(latest.action).trim().toLowerCase() : '';
+
+  if (latestAction === 'verified' || latestAction === 'approved' || latestAction === 'accepted')
+    return 'approved';
+
+  if (
+    latestAction === 'rejected' ||
+    latestAction === 'disapproved' ||
+    latestAction.includes('reject')
+  )
+    return 'disapproved';
+
+  const raw =
+    pickFirst(rec, [
+      'verification_status',
+      'verificationStatus',
+      'status',
+      'current_status',
+      'currentStatus',
+      'approval_status',
+      'approvalStatus',
+      'action',
+    ]) || '';
+
+  const rawStr = String(raw).toLowerCase();
+
+  const isVerified = truthy(pickFirst(rec, ['is_verified', 'isVerified', 'verified']));
+  const isRejected = truthy(pickFirst(rec, ['is_rejected', 'isRejected', 'rejected']));
+
+  if (isVerified) return 'approved';
+  if (isRejected) return 'disapproved';
+
+  if (
+    rawStr.includes('approve') ||
+    rawStr === 'verified' ||
+    rawStr === 'accepted' ||
+    rawStr === 'approved'
+  )
+    return 'approved';
+
+  if (rawStr.includes('reject') || rawStr.includes('return') || rawStr === 'disapproved')
+    return 'disapproved';
+
+  return 'pending';
+};
+
+const getStatusInfo = recOrStatus => {
+  const key =
+    typeof recOrStatus === 'object'
+      ? normalizeVerificationStatus(recOrStatus)
+      : normalizeVerificationStatus({status: recOrStatus});
+
+  if (key === 'approved')
+    return {label: 'Approved', color: COLORS.success, icon: 'checkmark-done'};
+
+  if (key === 'disapproved')
+    return {label: 'Disapproved', color: COLORS.danger, icon: 'close-circle'};
+
+  return {label: 'Pending', color: COLORS.warning, icon: 'time'};
+};
+
+// ✅ NEW: builds a readable message (designation/role/remarks/date) to show on tap
+const buildStatusDetailsText = rec => {
+  const key = normalizeVerificationStatus(rec);
+  const latest = getLatestStatusObj(rec);
+
+  if (!latest) {
+    return key === 'pending'
+      ? 'Status: Pending\n\nNo verification action found yet.'
+      : `Status: ${key}\n\nNo verification details found.`;
+  }
+
+  const action = latest?.action ? String(latest.action) : '—';
+  const designation = latest?.designation ? String(latest.designation) : '—';
+  const role = latest?.user_role ? String(latest.user_role) : '—';
+  const remarksRaw = latest?.remarks;
+  const remarks = String(remarksRaw ?? '').trim() ? String(remarksRaw).trim() : '—';
+  const createdAtRaw = latest?.createdAt || latest?.created_at || latest?.createdAtUtc || null;
+  const createdAt = createdAtRaw ? new Date(createdAtRaw) : null;
+  const createdAtText =
+    createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleString() : '—';
+
+  return `Status: ${
+    key === 'approved' ? 'Approved' : key === 'disapproved' ? 'Disapproved' : 'Pending'
+  }\n\nAction: ${action}\nRole: ${role}\nDesignation: ${designation}\nRemarks: ${remarks}\nAction Time: ${createdAtText}`;
+};
+
+/* ===================== FIELD HELPERS ===================== */
+const getRdsFrom = row => row?.rds_from ?? row?.rd_from ?? row?.rdFrom ?? '';
+const getRdsTo = row => row?.rds_to ?? row?.rd_km ?? row?.rd_to ?? row?.rdTo ?? '';
+const getPictures = row => (Array.isArray(row?.pictures) ? row.pictures.filter(Boolean) : []);
+
+const safeDate = raw => {
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
 };
 
 export default function PoleCropRecordsScreen({navigation, route}) {
@@ -155,71 +300,29 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     return enumeration?.name_of_site_id ?? enumeration?.id ?? null;
   }, [enumeration]);
 
-  /* ===================== STATUS (MatureTree-like normalization) ===================== */
-  const truthy = v => v === true || v === 'true' || v === 1 || v === '1';
-
-  const pickFirst = (obj, keys = []) => {
-    for (const k of keys) {
-      const v = obj?.[k];
-      if (v !== undefined && v !== null && v !== '') return v;
-    }
-    return null;
-  };
-
-  const normalizeVerificationStatus = rec => {
-    const raw =
-      pickFirst(rec, [
-        'verification_status',
-        'verificationStatus',
-        'status',
-        'current_status',
-        'currentStatus',
-        'approval_status',
-        'approvalStatus',
-        'action',
-      ]) || '';
-
-    const rawStr = String(raw).toLowerCase();
-
-    const isVerified = truthy(pickFirst(rec, ['is_verified', 'isVerified', 'verified']));
-    const isRejected = truthy(pickFirst(rec, ['is_rejected', 'isRejected', 'rejected']));
-
-    if (isVerified) return 'approved';
-    if (isRejected) return 'disapproved';
-
-    // approved/verified
-    if (
-      rawStr.includes('approve') ||
-      rawStr === 'verified' ||
-      rawStr === 'accepted' ||
-      rawStr === 'approved'
-    )
-      return 'approved';
-
-    // disapproved/rejected/returned
-    if (rawStr.includes('reject') || rawStr.includes('return') || rawStr === 'disapproved')
-      return 'disapproved';
-
-    // default pending
-    return 'pending';
-  };
-
-  const getStatusInfo = recOrStatus => {
-    const key =
-      typeof recOrStatus === 'object'
-        ? normalizeVerificationStatus(recOrStatus)
-        : normalizeVerificationStatus({status: recOrStatus});
-
-    if (key === 'approved')
-      return {label: 'Approved', color: COLORS.success, icon: 'checkmark-done'};
-
-    if (key === 'disapproved')
-      return {label: 'Disapproved', color: COLORS.danger, icon: 'close-circle'};
-
-    return {label: 'Pending', color: COLORS.warning, icon: 'time'};
-  };
-
   /* ===================== IMAGE HANDLERS ===================== */
+  const addAssets = useCallback(newAssets => {
+    const incoming = Array.isArray(newAssets) ? newAssets : [];
+    if (!incoming.length) return;
+
+    setPickedAssets(prev => {
+      const prevArr = Array.isArray(prev) ? prev : [];
+      const map = new Map();
+
+      // preserve old first
+      prevArr.forEach(a => {
+        if (a?.uri) map.set(a.uri, a);
+      });
+
+      // add/overwrite by uri
+      incoming.forEach(a => {
+        if (a?.uri) map.set(a.uri, a);
+      });
+
+      return Array.from(map.values());
+    });
+  }, []);
+
   const pickImages = () => {
     launchImageLibrary(
       {
@@ -234,11 +337,53 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           return;
         }
         const assets = Array.isArray(res?.assets) ? res.assets : [];
-        if (!assets.length) return;
-        setPickedAssets(assets);
+        addAssets(assets);
       },
     );
   };
+
+  const ensureCameraPermission = useCallback(async () => {
+    if (Platform.OS !== 'android') return true;
+
+    try {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
+        title: 'Camera Permission',
+        message: 'This app needs camera access to capture pole crop images.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Deny',
+      });
+
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (e) {
+      return false;
+    }
+  }, []);
+
+  const captureImage = useCallback(async () => {
+    const ok = await ensureCameraPermission();
+    if (!ok) {
+      Alert.alert('Permission Required', 'Camera permission is required to take a photo.');
+      return;
+    }
+
+    launchCamera(
+      {
+        mediaType: 'photo',
+        quality: 0.8,
+        saveToPhotos: false,
+        cameraType: 'back',
+      },
+      res => {
+        if (res?.didCancel) return;
+        if (res?.errorCode) {
+          Alert.alert('Camera Error', res.errorMessage || res.errorCode);
+          return;
+        }
+        const assets = Array.isArray(res?.assets) ? res.assets : [];
+        addAssets(assets); // camera usually returns 1 asset
+      },
+    );
+  }, [addAssets, ensureCameraPermission]);
 
   const clearImages = () => setPickedAssets([]);
 
@@ -263,7 +408,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
     const json = await res.json().catch(() => null);
     if (!res.ok || !json?.status) {
-      const msg = json?.message || json?.error || `Bucket upload failed (${res.status})`;
+      const msg = json?.message || json?.error || `upload failed (${res.status})`;
       throw new Error(msg);
     }
 
@@ -315,7 +460,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     fetchSpecies();
   }, [fetchSpecies]);
 
-  /* ===================== RECORDS FETCH ===================== */
+  /* ===================== RECORDS FETCH (REALTIME ONLY) ===================== */
   const fetchPoleCropRecords = useCallback(
     async ({refresh = false} = {}) => {
       if (!nameOfSiteId) {
@@ -382,7 +527,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         const nextAuto = formatLatLng(latitude, longitude);
         setAutoGps(nextAuto);
 
-        // auto gps also fills manual coordinates (preserve user's manual if typed)
         setManualGps(prev => {
           const prevAuto = prevAutoGpsRef.current;
           const prevTrim = String(prev || '').trim();
@@ -402,7 +546,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     );
   }, []);
 
-  // If autoGps changes and manual is empty, sync it (safety)
   useEffect(() => {
     const a = String(autoGps || '').trim();
     if (!a) return;
@@ -433,15 +576,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     setTimeout(() => fetchGps(true), 250);
   };
 
-  // Helpers for server field compatibility
-  const getRdsFrom = row => row?.rds_from ?? row?.rd_from ?? row?.rdFrom ?? '';
-  const getRdsTo = row => row?.rds_to ?? row?.rd_km ?? row?.rd_to ?? row?.rdTo ?? '';
-  const getPictures = row => (Array.isArray(row?.pictures) ? row.pictures.filter(Boolean) : []);
-
   const openEditFormServer = row => {
-    // ✅ Guard: only allow edit when disapproved (MatureTree-like)
     if (normalizeVerificationStatus(row) !== 'disapproved') {
-      Alert.alert('Not Allowed', 'This record can only be edited when it is Disapproved.');
+      Alert.alert('Not Allowed', 'This record can only be edited when it is Disapproved (Rejected).');
       return;
     }
 
@@ -451,12 +588,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     setRdTo(String(getRdsTo(row) ?? ''));
     setCount(String(row?.count ?? ''));
 
-    // species from response: poleCropSpecies
     const fromNested = Array.isArray(row?.poleCropSpecies)
       ? row.poleCropSpecies.map(x => x?.species?.name).filter(Boolean)
       : [];
 
-    // fallback: old species_ids mapping
     const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
     const fromIds = ids
       .map(id => speciesRows.find(s => String(s.id) === String(id))?.name)
@@ -538,7 +673,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const upsertRecord = async () => {
     if (!validate()) return;
 
-    // map species names -> ids
     const speciesIds = selectedSpeciesNames
       .map(n => speciesRows.find(s => String(s.name) === String(n))?.id)
       .filter(id => id !== null && id !== undefined);
@@ -562,29 +696,33 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     try {
       const uploadedUrls = await uploadPoleCropImages();
 
-      // ✅ Status handling:
-      // - New records: pending
-      // - Edit: keep existing server status if present (or pending)
       const existingRow = isEdit
         ? records.find(x => String(x?.id) === String(editingServerId))
         : null;
 
-      const statusValue = isEdit ? normalizeVerificationStatus(existingRow) : 'pending';
+      const finalPictures =
+        uploadedUrls.length > 0 ? uploadedUrls : isEdit ? getPictures(existingRow) : [];
 
       const payload = {
         ...(isEdit && editingServerId ? {id: Number(editingServerId)} : {}),
         nameOfSiteId: String(nameOfSiteId),
+
         rds_from: rdFromNum,
         rds_to: rdToNum,
         rd_km: rdToNum,
+
         count: Number(count),
+
         auto_lat: autoLat,
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
+
         species_ids: speciesIds.map(Number),
-        pictures: uploadedUrls.length ? uploadedUrls : undefined,
-        status: statusValue,
+
+        ...(finalPictures.length ? {pictures: finalPictures} : {}),
+
+        ...(isEdit ? {} : {status: 'pending'}),
       };
 
       await submitToApi({payload});
@@ -603,7 +741,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       const names = r.poleCropSpecies.map(x => x?.species?.name).filter(Boolean);
       const uniq = Array.from(new Set(names));
       if (!uniq.length) return '—';
-      return uniq.length > 2 ? `${uniq.slice(0, 2).join(', ')} +${uniq.length - 2} more` : uniq.join(', ');
+      return uniq.length > 2
+        ? `${uniq.slice(0, 2).join(', ')} +${uniq.length - 2} more`
+        : uniq.join(', ');
     }
 
     const ids = Array.isArray(r?.species_ids) ? r.species_ids : [];
@@ -611,7 +751,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     const names = ids
       .map(id => speciesRows.find(s => String(s.id) === String(id))?.name || `#${id}`)
       .filter(Boolean);
-    return names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2} more` : names.join(', ');
+    return names.length > 2
+      ? `${names.slice(0, 2).join(', ')} +${names.length - 2} more`
+      : names.join(', ');
   };
 
   const getGpsLabel = r => {
@@ -671,10 +813,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       }
 
       if (df || dt) {
-        const dRaw = r?.created_at || r?.createdAt || r?.updated_at;
-        if (!dRaw) return false;
-        const d = new Date(dRaw);
-        if (Number.isNaN(d.getTime())) return false;
+        const dRaw = r?.created_at || r?.createdAt || r?.updated_at || r?.updatedAt;
+        const d = safeDate(dRaw);
+        if (!d) return false;
         if (df && d < df) return false;
         if (dt && d > dt) return false;
       }
@@ -695,6 +836,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
       if (!q) return true;
 
+      const latest = getLatestStatusObj(r);
       const blob = [
         r?.id,
         getRdsFrom(r),
@@ -703,6 +845,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         getSpeciesLabel(r),
         getGpsLabel(r),
         normalizeVerificationStatus(r),
+        latest?.action,
+        latest?.remarks,
+        latest?.designation,
         (getPictures(r) || []).join(' '),
         r?.created_at,
       ]
@@ -770,7 +915,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           />
         }
         showsVerticalScrollIndicator={false}>
-
         {/* Search Section */}
         <View style={styles.searchSection}>
           <View style={styles.searchContainer}>
@@ -778,7 +922,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search by ID, RDS range, species, GPS..."
+              placeholder="Search by ID, RDS range, species, GPS, remarks..."
               placeholderTextColor={COLORS.textLight}
               style={styles.searchInput}
             />
@@ -877,11 +1021,11 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                     {label: 'RDS From', width: 110},
                     {label: 'RDS To', width: 110},
                     {label: 'Count', width: 100},
-                    {label: 'Status', width: 130},
+                    {label: 'Status', width: 150},
                     {label: 'Species', width: 260},
                     {label: 'Pictures', width: 170},
                     {label: 'GPS', width: 200},
-                    {label: 'Actions', width: 140},
+                    {label: 'Actions', width: 160},
                   ].map((col, idx) => (
                     <View key={idx} style={[styles.thCell, {width: col.width}]}>
                       <Text style={styles.thText}>{col.label}</Text>
@@ -894,13 +1038,14 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   const statusInfo = getStatusInfo(r);
                   const pics = getPictures(r);
                   const rdsToValue = getRdsTo(r);
-                  const canEdit = normalizeVerificationStatus(r) === 'disapproved'; // ✅ Only when disapproved
+                  const canEdit = normalizeVerificationStatus(r) === 'disapproved';
+                  const latest = getLatestStatusObj(r);
+                  const hasStatusDetails = !!latest;
 
                   return (
                     <View
                       key={String(r?.id ?? idx)}
                       style={[styles.tableRow, idx % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
-
                       <View style={[styles.tdCell, {width: 80}]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r?.id ?? '—')}
@@ -925,13 +1070,27 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         </View>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 130}]}>
-                        <View style={[styles.statusBadge, {borderColor: statusInfo.color}]}>
+                      <View style={[styles.tdCell, {width: 150}]}>
+                        <TouchableOpacity
+                          activeOpacity={0.8}
+                          onPress={() => Alert.alert('Status Details', buildStatusDetailsText(r))}
+                          style={[styles.statusBadge, {borderColor: statusInfo.color}]}>
                           <Ionicons name={statusInfo.icon} size={14} color={statusInfo.color} />
-                          <Text style={[styles.statusText, {color: statusInfo.color}]} numberOfLines={1}>
+                          <Text
+                            style={[styles.statusText, {color: statusInfo.color}]}
+                            numberOfLines={1}>
                             {statusInfo.label}
                           </Text>
-                        </View>
+                          <Ionicons
+                            name={
+                              hasStatusDetails
+                                ? 'information-circle-outline'
+                                : 'help-circle-outline'
+                            }
+                            size={16}
+                            color={COLORS.textLight}
+                          />
+                        </TouchableOpacity>
                       </View>
 
                       <View style={[styles.tdCell, {width: 260}]}>
@@ -944,7 +1103,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         {pics.length ? (
                           <TouchableOpacity
                             style={styles.picButton}
-                            onPress={() => openPicturesViewer(pics, `Record #${r?.id} Pictures`)}>
+                            onPress={() =>
+                              openPicturesViewer(pics, `Record #${r?.id} Pictures`)
+                            }>
                             <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.picButtonText}>View ({pics.length})</Text>
                           </TouchableOpacity>
@@ -959,7 +1120,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 140}]}>
+                      <View style={[styles.tdCell, styles.actionsCell, {width: 160}]}>
                         {canEdit ? (
                           <TouchableOpacity
                             style={styles.actionButton}
@@ -970,6 +1131,22 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                           </TouchableOpacity>
                         ) : (
                           <Text style={styles.mutedText}>—</Text>
+                        )}
+
+                        {normalizeVerificationStatus(r) === 'disapproved' && (
+                          <TouchableOpacity
+                            style={styles.reasonButton}
+                            onPress={() =>
+                              Alert.alert('Rejection Reason', buildStatusDetailsText(r))
+                            }
+                            activeOpacity={0.7}>
+                            <Ionicons
+                              name="chatbox-ellipses-outline"
+                              size={16}
+                              color={COLORS.danger}
+                            />
+                            <Text style={styles.reasonButtonText}>Reason</Text>
+                          </TouchableOpacity>
                         )}
                       </View>
                     </View>
@@ -1024,7 +1201,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         !filters.status ? styles.filterPillActive : styles.filterPillInactive,
                       ]}
                       onPress={() => setFilters(prev => ({...prev, status: ''}))}>
-                      <Text style={!filters.status ? styles.filterPillTextActive : styles.filterPillTextInactive}>
+                      <Text
+                        style={
+                          !filters.status ? styles.filterPillTextActive : styles.filterPillTextInactive
+                        }>
                         All
                       </Text>
                     </TouchableOpacity>
@@ -1298,6 +1478,16 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         </View>
                       </TouchableOpacity>
 
+                      <TouchableOpacity
+                        style={styles.imageCameraButton}
+                        onPress={captureImage}
+                        activeOpacity={0.7}>
+                        <View style={styles.imageUploadButtonContent}>
+                          <Ionicons name="camera-outline" size={20} color="#fff" />
+                          <Text style={styles.imageUploadButtonText}>Camera</Text>
+                        </View>
+                      </TouchableOpacity>
+
                       {pickedAssets.length > 0 && (
                         <TouchableOpacity
                           style={styles.imageClearButton}
@@ -1332,7 +1522,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.footerButtonPrimary} onPress={upsertRecord} activeOpacity={0.7}>
+                <TouchableOpacity
+                  style={styles.footerButtonPrimary}
+                  onPress={upsertRecord}
+                  activeOpacity={0.7}>
                   <View style={styles.footerButtonContent}>
                     <Ionicons name={isEdit ? 'save-outline' : 'add-circle-outline'} size={20} color="#fff" />
                     <Text style={styles.footerButtonPrimaryText}>
@@ -1373,12 +1566,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
             <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.viewerScroll}>
               {viewerImages.map((u, i) => (
                 <View key={String(u) + i} style={styles.viewerSlide}>
-                  <Image
-                    source={{uri: u}}
-                    style={styles.viewerImage}
-                    resizeMode="contain"
-                    onError={() => {}}
-                  />
+                  <Image source={{uri: u}} style={styles.viewerImage} resizeMode="contain" onError={() => {}} />
                   <TouchableOpacity
                     style={styles.viewerLinkBtn}
                     onPress={() => Linking.openURL(u).catch(() => Alert.alert('Error', 'Cannot open link'))}>
@@ -1401,18 +1589,12 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   );
 }
 
+/* ===================== STYLES ===================== */
 const styles = StyleSheet.create({
   // Base
-  screen: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  container: {
-    flex: 1,
-  },
-  contentContainer: {
-    paddingBottom: 100,
-  },
+  screen: {flex: 1, backgroundColor: COLORS.background},
+  container: {flex: 1},
+  contentContainer: {paddingBottom: 100},
 
   // Header
   header: {
@@ -1427,11 +1609,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  headerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
+  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
   backButton: {
     width: 44,
     height: 44,
@@ -1441,9 +1619,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {
-    flex: 1,
-  },
+  headerContent: {flex: 1},
   headerTitle: {
     fontSize: 24,
     fontWeight: '800',
@@ -1451,12 +1627,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     letterSpacing: 0.5,
   },
-  headerInfo: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 8,
-  },
+  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
   infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1466,17 +1637,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 4,
   },
-  infoChipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  siteId: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.9)',
-    letterSpacing: 0.3,
-  },
+  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
+  siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3},
   refreshButton: {
     width: 44,
     height: 44,
@@ -1511,18 +1673,9 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  searchIcon: {
-    marginRight: 12,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '500',
-    color: COLORS.text,
-  },
-  searchClear: {
-    padding: 4,
-  },
+  searchIcon: {marginRight: 12},
+  searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
+  searchClear: {padding: 4},
   filterButton: {
     width: 56,
     height: 56,
@@ -1549,12 +1702,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: COLORS.primary,
   },
-  filterBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '900',
-    paddingHorizontal: 4,
-  },
+  filterBadgeText: {color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4},
 
   // Stats Card
   statsCard: {
@@ -1573,26 +1721,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  statItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: COLORS.primary,
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.textLight,
-  },
-  statDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: COLORS.border,
-  },
+  statItem: {flex: 1, alignItems: 'center'},
+  statValue: {fontSize: 24, fontWeight: '800', color: COLORS.primary, marginBottom: 4},
+  statLabel: {fontSize: 12, fontWeight: '600', color: COLORS.textLight},
+  statDivider: {width: 1, height: 40, backgroundColor: COLORS.border},
 
   // Error Card
   errorCard: {
@@ -1604,56 +1736,17 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
   },
-  errorHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  errorTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.danger,
-  },
-  errorMessage: {
-    fontSize: 14,
-    color: COLORS.text,
-    lineHeight: 20,
-    marginBottom: 12,
-  },
-  errorButton: {
-    backgroundColor: COLORS.danger,
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  errorButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
+  errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
+  errorTitle: {fontSize: 16, fontWeight: '700', color: COLORS.danger},
+  errorMessage: {fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: 12},
+  errorButton: {backgroundColor: COLORS.danger, borderRadius: 12, paddingVertical: 12, alignItems: 'center'},
+  errorButtonText: {color: '#fff', fontSize: 14, fontWeight: '700'},
 
   // Section
-  section: {
-    marginHorizontal: 20,
-    marginBottom: 20,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  sectionSubtitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.textLight,
-  },
+  section: {marginHorizontal: 20, marginBottom: 20},
+  sectionHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
+  sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
+  sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
 
   // Empty State
   emptyState: {
@@ -1665,37 +1758,13 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     borderStyle: 'dashed',
   },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: COLORS.textLight,
-    textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 20,
-  },
-  emptyAction: {
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 12,
-  },
-  emptyActionText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
+  emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
+  emptyText: {fontSize: 14, color: COLORS.textLight, textAlign: 'center', marginBottom: 20, lineHeight: 20},
+  emptyAction: {backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12},
+  emptyActionText: {color: '#fff', fontSize: 14, fontWeight: '700'},
 
   // Table
-  tableContainer: {
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
+  tableContainer: {borderRadius: 16, overflow: 'hidden'},
   table: {
     borderRadius: 16,
     overflow: 'hidden',
@@ -1715,65 +1784,17 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     minHeight: 56,
   },
-  thCell: {
-    paddingHorizontal: 12,
-    justifyContent: 'center',
-    borderRightWidth: 1,
-    borderRightColor: COLORS.border,
-  },
-  thText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.text,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  tableRow: {
-    flexDirection: 'row',
-    minHeight: 60,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  rowEven: {
-    backgroundColor: '#fff',
-  },
-  rowOdd: {
-    backgroundColor: 'rgba(5, 150, 105, 0.02)',
-  },
-  tdCell: {
-    paddingHorizontal: 12,
-    justifyContent: 'center',
-    borderRightWidth: 1,
-    borderRightColor: COLORS.border,
-  },
-  tdText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  mutedText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.textLight,
-  },
-  gpsText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.text,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  countBadge: {
-    backgroundColor: 'rgba(14, 165, 233, 0.1)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    alignSelf: 'flex-start',
-  },
-  countText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.secondary,
-  },
+  thCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
+  thText: {fontSize: 12, fontWeight: '800', color: COLORS.text, textTransform: 'uppercase', letterSpacing: 0.5},
+  tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
+  rowEven: {backgroundColor: '#fff'},
+  rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
+  tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
+  tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
+  mutedText: {fontSize: 13, fontWeight: '600', color: COLORS.textLight},
+  gpsText: {fontSize: 11, fontWeight: '600', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+  countBadge: {backgroundColor: 'rgba(14, 165, 233, 0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, alignSelf: 'flex-start'},
+  countText: {fontSize: 13, fontWeight: '800', color: COLORS.secondary},
 
   // Status badge
   statusBadge: {
@@ -1787,10 +1808,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     backgroundColor: 'rgba(0,0,0,0.03)',
   },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
+  statusText: {fontSize: 12, fontWeight: '800'},
 
   // Pictures button
   picButton: {
@@ -1803,17 +1821,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignSelf: 'flex-start',
   },
-  picButtonText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.secondary,
-  },
-  actionsCell: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-  },
+  picButtonText: {fontSize: 12, fontWeight: '800', color: COLORS.secondary},
+
+  actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1823,45 +1833,30 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 4,
   },
-  actionButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.secondary,
+  actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
+
+  // Reason button
+  reasonButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(220, 38, 38, 0.15)',
   },
+  reasonButtonText: {fontSize: 12, fontWeight: '800', color: COLORS.danger},
 
   // FAB
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 30,
-    shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  fabContent: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  fab: {position: 'absolute', right: 20, bottom: 30, shadowColor: COLORS.primary, shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 8, elevation: 8},
+  fabContent: {width: 64, height: 64, borderRadius: 32, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center'},
 
   // Modals
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: COLORS.overlay,
-  },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 20,
-  },
+  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
+  modalBackdrop: {...StyleSheet.absoluteFillObject},
+  modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
   modalContent: {
     backgroundColor: '#fff',
     borderRadius: 24,
@@ -1875,458 +1870,94 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 10,
   },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  modalTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  modalClose: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(31, 41, 55, 0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalBody: {
-    padding: 20,
-  },
+  modalHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 20, borderBottomWidth: 1, borderBottomColor: COLORS.border},
+  modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
+  modalTitle: {fontSize: 20, fontWeight: '800', color: COLORS.text},
+  modalClose: {width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(31, 41, 55, 0.05)', alignItems: 'center', justifyContent: 'center'},
+  modalBody: {padding: 20},
 
   // Filter Sections
-  filterSection: {
-    marginBottom: 20,
-  },
-  filterSectionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  filterPills: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  filterPill: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  filterPillInactive: {
-    backgroundColor: '#fff',
-  },
-  filterPillActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  filterPillTextInactive: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  filterPillTextActive: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#fff',
-  },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  filterColumn: {
-    flex: 1,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
-  },
-  modalButtonSecondary: {
-    flex: 1,
-    backgroundColor: 'rgba(31, 41, 55, 0.05)',
-    paddingVertical: 16,
-    borderRadius: 14,
-    alignItems: 'center',
-  },
-  modalButtonSecondaryText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  modalButtonPrimary: {
-    flex: 2,
-    backgroundColor: COLORS.primary,
-    paddingVertical: 16,
-    borderRadius: 14,
-    alignItems: 'center',
-  },
-  modalButtonPrimaryText: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#fff',
-  },
+  filterSection: {marginBottom: 20},
+  filterSectionTitle: {fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5},
+  filterPills: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
+  filterPill: {paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 1, borderColor: COLORS.border},
+  filterPillInactive: {backgroundColor: '#fff'},
+  filterPillActive: {backgroundColor: COLORS.primary, borderColor: COLORS.primary},
+  filterPillTextInactive: {fontSize: 14, fontWeight: '700', color: COLORS.text},
+  filterPillTextActive: {fontSize: 14, fontWeight: '800', color: '#fff'},
+  filterRow: {flexDirection: 'row', gap: 12},
+  filterColumn: {flex: 1},
+  modalActions: {flexDirection: 'row', gap: 12, marginTop: 8},
+  modalButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  modalButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  modalButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  modalButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
 
   // Edit Modal
-  editModalOverlay: {
-    flex: 1,
-    backgroundColor: COLORS.overlay,
-  },
-  editModalContainer: {
-    flex: 1,
-    marginTop: Platform.OS === 'ios' ? 40 : 20,
-  },
-  editModalContent: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  editModalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    paddingHorizontal: 24,
-    paddingTop: 28,
-    paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  editModalTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: COLORS.text,
-    marginBottom: 4,
-  },
-  editModalSubtitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.textLight,
-  },
-  editModalClose: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(31, 41, 55, 0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  editModalBody: {
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 20,
-  },
-  editModalFooter: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 24,
-    paddingVertical: 20,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
+  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
+  editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
+  editModalContent: {flex: 1, backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border},
+  editModalHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 24, paddingTop: 28, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: COLORS.border},
+  editModalTitle: {fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4},
+  editModalSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  editModalClose: {width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(31, 41, 55, 0.05)', alignItems: 'center', justifyContent: 'center'},
+  editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
+  editModalFooter: {flexDirection: 'row', gap: 12, paddingHorizontal: 24, paddingVertical: 20, borderTopWidth: 1, borderTopColor: COLORS.border},
 
   // Form Sections
-  formSection: {
-    marginBottom: 24,
-  },
-  formSectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 16,
-    letterSpacing: 0.5,
-  },
-  formRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  formColumn: {
-    flex: 1,
-  },
-  helperText: {
-    fontSize: 12,
-    color: COLORS.textLight,
-    marginTop: 8,
-    fontStyle: 'italic',
-  },
-  selectedSpeciesBadge: {
-    backgroundColor: 'rgba(5, 150, 105, 0.1)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    marginTop: 8,
-    alignSelf: 'flex-start',
-  },
-  selectedSpeciesText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.primary,
-  },
+  formSection: {marginBottom: 24},
+  formSectionTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16, letterSpacing: 0.5},
+  formRow: {flexDirection: 'row', gap: 12, marginBottom: 16},
+  formColumn: {flex: 1},
+  helperText: {fontSize: 12, color: COLORS.textLight, marginTop: 8, fontStyle: 'italic'},
+  selectedSpeciesBadge: {backgroundColor: 'rgba(5, 150, 105, 0.1)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, marginTop: 8, alignSelf: 'flex-start'},
+  selectedSpeciesText: {fontSize: 12, fontWeight: '700', color: COLORS.primary},
 
   // GPS Card
-  gpsCard: {
-    backgroundColor: 'rgba(5, 150, 105, 0.03)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(5, 150, 105, 0.1)',
-    marginBottom: 16,
-    overflow: 'hidden',
-  },
-  gpsCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: 'rgba(5, 150, 105, 0.05)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(5, 150, 105, 0.1)',
-  },
-  gpsCardTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  gpsFetchButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    gap: 6,
-  },
-  gpsFetchButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  gpsCardBody: {
-    padding: 16,
-  },
-  gpsValue: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    marginBottom: 8,
-  },
-  gpsLoading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  gpsLoadingText: {
-    fontSize: 12,
-    color: COLORS.textLight,
-    fontWeight: '600',
-  },
-  gpsNote: {
-    fontSize: 12,
-    color: COLORS.textLight,
-    marginTop: 8,
-    fontStyle: 'italic',
-  },
+  gpsCard: {backgroundColor: 'rgba(5, 150, 105, 0.03)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.1)', marginBottom: 16, overflow: 'hidden'},
+  gpsCardHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'rgba(5, 150, 105, 0.05)', borderBottomWidth: 1, borderBottomColor: 'rgba(5, 150, 105, 0.1)'},
+  gpsCardTitle: {fontSize: 14, fontWeight: '700', color: COLORS.text},
+  gpsFetchButton: {flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, gap: 6},
+  gpsFetchButtonText: {fontSize: 12, fontWeight: '700', color: '#fff'},
+  gpsCardBody: {padding: 16},
+  gpsValue: {fontSize: 14, fontWeight: '700', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 8},
+  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 8},
+  gpsLoadingText: {fontSize: 12, color: COLORS.textLight, fontWeight: '600'},
+  gpsNote: {fontSize: 12, color: COLORS.textLight, marginTop: 8, fontStyle: 'italic'},
 
   // Image Upload
-  imageUploadSection: {
-    marginBottom: 8,
-  },
-  imageUploadButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  imageUploadButton: {
-    flex: 2,
-    backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  imageUploadButtonContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    gap: 8,
-  },
-  imageUploadButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  imageClearButton: {
-    flex: 1,
-    backgroundColor: 'rgba(239,68,68,0.1)',
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(239,68,68,0.2)',
-  },
-  imageClearButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.danger,
-  },
-  imagePreview: {
-    backgroundColor: 'rgba(22, 163, 74, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(22, 163, 74, 0.2)',
-    borderRadius: 12,
-    padding: 12,
-  },
-  imagePreviewHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  imagePreviewTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.success,
-  },
-  imagePreviewText: {
-    fontSize: 12,
-    color: COLORS.textLight,
-  },
+  imageUploadSection: {marginBottom: 8},
+  imageUploadButtons: {flexDirection: 'row', gap: 12, marginBottom: 12},
+  imageUploadButton: {flex: 2, backgroundColor: COLORS.primary, borderRadius: 12, overflow: 'hidden'},
+  imageCameraButton: {flex: 1.2, backgroundColor: COLORS.secondary, borderRadius: 12, overflow: 'hidden'},
+  imageUploadButtonContent: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, gap: 8},
+  imageUploadButtonText: {fontSize: 16, fontWeight: '700', color: '#fff'},
+  imageClearButton: {flex: 1, backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)'},
+  imageClearButtonText: {fontSize: 14, fontWeight: '700', color: COLORS.danger},
+  imagePreview: {backgroundColor: 'rgba(22, 163, 74, 0.1)', borderWidth: 1, borderColor: 'rgba(22, 163, 74, 0.2)', borderRadius: 12, padding: 12},
+  imagePreviewHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4},
+  imagePreviewTitle: {fontSize: 14, fontWeight: '700', color: COLORS.success},
+  imagePreviewText: {fontSize: 12, color: COLORS.textLight},
 
   // Footer Buttons
-  footerButtonSecondary: {
-    flex: 1,
-    backgroundColor: 'rgba(31, 41, 55, 0.05)',
-    paddingVertical: 16,
-    borderRadius: 14,
-    alignItems: 'center',
-  },
-  footerButtonSecondaryText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  footerButtonPrimary: {
-    flex: 2,
-    backgroundColor: COLORS.primary,
-    paddingVertical: 16,
-    borderRadius: 14,
-  },
-  footerButtonContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  footerButtonPrimaryText: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#fff',
-  },
+  footerButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
+  footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  footerButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14},
+  footerButtonContent: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8},
+  footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
 
   // Viewer
-  viewerOverlay: {
-    flex: 1,
-    backgroundColor: COLORS.overlay,
-    justifyContent: 'center',
-    padding: 16,
-  },
-  viewerBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  viewerCard: {
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    maxHeight: height * 0.75,
-  },
-  viewerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  viewerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: COLORS.text,
-    flex: 1,
-    marginRight: 10,
-  },
-  viewerClose: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(31,41,55,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  viewerScroll: {
-    backgroundColor: '#fff',
-  },
-  viewerSlide: {
-    width: width - 32,
-    height: Math.min(height * 0.55, 420),
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-  },
-  viewerImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.04)',
-  },
-  viewerLinkBtn: {
-    position: 'absolute',
-    bottom: 16,
-    right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  viewerLinkText: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 12,
-  },
-  viewerFooter: {
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    alignItems: 'center',
-  },
-  viewerFooterText: {
-    color: COLORS.textLight,
-    fontWeight: '700',
-    fontSize: 12,
-  },
+  viewerOverlay: {flex: 1, backgroundColor: COLORS.overlay, justifyContent: 'center', padding: 16},
+  viewerBackdrop: {...StyleSheet.absoluteFillObject},
+  viewerCard: {backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, maxHeight: height * 0.75},
+  viewerHeader: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: COLORS.border},
+  viewerTitle: {fontSize: 16, fontWeight: '800', color: COLORS.text, flex: 1, marginRight: 10},
+  viewerClose: {width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(31,41,55,0.06)', alignItems: 'center', justifyContent: 'center'},
+  viewerScroll: {backgroundColor: '#fff'},
+  viewerSlide: {width: width - 32, height: Math.min(height * 0.55, 420), alignItems: 'center', justifyContent: 'center', padding: 10},
+  viewerImage: {width: '100%', height: '100%', borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.04)'},
+  viewerLinkBtn: {position: 'absolute', bottom: 16, right: 16, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primary, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12},
+  viewerLinkText: {color: '#fff', fontWeight: '800', fontSize: 12},
+  viewerFooter: {padding: 12, borderTopWidth: 1, borderTopColor: COLORS.border, alignItems: 'center'},
+  viewerFooterText: {color: COLORS.textLight, fontWeight: '700', fontSize: 12},
 });

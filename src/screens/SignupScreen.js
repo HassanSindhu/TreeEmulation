@@ -20,6 +20,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {BlurView} from '@react-native-community/blur';
 import axios from 'axios';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import Clipboard from '@react-native-clipboard/clipboard';
 import colors from '../theme/colors';
 
 // ✅ API base
@@ -27,6 +28,61 @@ const API_BASE_URL = 'http://be.lte.gisforestry.com';
 
 // ✅ Empty token (as per your requirement)
 const EMPTY_TOKEN = '';
+
+/**
+ * ✅ FIX: InlineAddRow moved OUTSIDE SignupScreen
+ * Prevents remount on every keystroke -> keyboard no longer closes.
+ */
+const InlineAddRow = React.memo(function InlineAddRow({
+  visible,
+  placeholder,
+  value,
+  onChange,
+  onCancel,
+  onSave,
+  saving,
+}) {
+  if (!visible) return null;
+
+  return (
+    <View style={styles.inlineAddWrap}>
+      <View style={styles.inlineAddInputRow}>
+        <Ionicons
+          name="create-outline"
+          size={18}
+          color="rgba(17,24,39,0.65)"
+          style={{marginRight: 8}}
+        />
+        <TextInput
+          style={styles.inlineAddInput}
+          placeholder={placeholder}
+          placeholderTextColor="rgba(17,24,39,0.45)"
+          value={value}
+          onChangeText={onChange}
+          autoCapitalize="words"
+          returnKeyType="done"
+          blurOnSubmit={false}
+        />
+      </View>
+
+      <View style={styles.inlineAddBtns}>
+        <TouchableOpacity
+          style={[styles.inlineBtn, styles.inlineBtnCancel]}
+          onPress={onCancel}
+          disabled={saving}>
+          <Text style={styles.inlineBtnTextCancel}>Cancel</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.inlineBtn, styles.inlineBtnSave, saving && {opacity: 0.7}]}
+          onPress={onSave}
+          disabled={saving}>
+          {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.inlineBtnTextSave}>Save</Text>}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+});
 
 export default function SignupScreen({navigation}) {
   // ---------------------------
@@ -203,7 +259,7 @@ export default function SignupScreen({navigation}) {
       if (type === 'beat') data = await createBeat(name);
 
       if (data?.statusCode === 200 || data?.statusCode === 201) {
-        // Your backend may return created object in data.data
+        // Backend may return created object in data.data
         const created = data?.data;
 
         // Fallback if API returns only message → refetch list
@@ -243,57 +299,9 @@ export default function SignupScreen({navigation}) {
     }
   };
 
-  const InlineAddRow = ({type, placeholder}) => {
-    if (!addMode[type]) return null;
-
-    return (
-      <View style={styles.inlineAddWrap}>
-        <View style={styles.inlineAddInputRow}>
-          <Ionicons
-            name="create-outline"
-            size={18}
-            color="rgba(17,24,39,0.65)"
-            style={{marginRight: 8}}
-          />
-          <TextInput
-            style={styles.inlineAddInput}
-            placeholder={placeholder}
-            placeholderTextColor="rgba(17,24,39,0.45)"
-            value={newName[type]}
-            onChangeText={t => setNewName(p => ({...p, [type]: t}))}
-            autoCapitalize="words"
-          />
-        </View>
-
-        <View style={styles.inlineAddBtns}>
-          <TouchableOpacity
-            style={[styles.inlineBtn, styles.inlineBtnCancel]}
-            onPress={() => closeInlineAdd(type)}
-            disabled={savingInline[type]}>
-            <Text style={styles.inlineBtnTextCancel}>Cancel</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.inlineBtn, styles.inlineBtnSave, savingInline[type] && {opacity: 0.7}]}
-            onPress={() => handleInlineSave(type)}
-            disabled={savingInline[type]}>
-            {savingInline[type] ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.inlineBtnTextSave}>Save</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  };
-
   // ---------------------------
   // ROLE → REQUIRED HIERARCHY
   // ---------------------------
-  // ✅ IMPORTANT FIX:
-  // Your API returns slugs like: dfo, sdfo, block_officer, beat_officer
-  // Earlier code expected: block-officer / beat-officer (hyphen), so it never matched.
   const REQUIRED_LEVELS_BY_ROLE = useMemo(
     () => ({
       dfo: ['zone', 'circle', 'division'],
@@ -328,12 +336,6 @@ export default function SignupScreen({navigation}) {
     if (req.includes('beat') && !beatId) return false;
 
     return true;
-  };
-
-  const getSelectedRoleName = () => {
-    if (!formData.roleSlug) return 'No role selected';
-    const r = roles.find(x => x.code === formData.roleSlug);
-    return r ? r.name : formData.roleSlug;
   };
 
   // ---------------------------
@@ -411,7 +413,6 @@ export default function SignupScreen({navigation}) {
 
       const {roleSlug, zoneId, circleId, divisionId, subDivisionId, blockId, beatId} = formData;
       if (!roleSlug) return;
-
       if (!hasAllFieldsForRole()) return;
 
       const payload = {
@@ -430,7 +431,6 @@ export default function SignupScreen({navigation}) {
 
       try {
         setLoadingDesignation(true);
-        console.log('get-designation-email payload:', payload);
 
         const res = await axios.post(`${API_BASE_URL}/auth/get-designation-email`, payload, {
           headers: {'Content-Type': 'application/json'},
@@ -482,9 +482,6 @@ export default function SignupScreen({navigation}) {
       });
 
       if (res.data?.statusCode === 200) {
-        // ✅ IMPORTANT FIX:
-        // API returns slugs: block_officer, beat_officer (underscore)
-        // Earlier filter used: block-officer, beat-officer (hyphen)
         const list = (res.data.data || [])
           .filter(r => r.isActive && !r.isSystemRole)
           .filter(r => ['dfo', 'sdfo', 'block_officer', 'beat_officer'].includes(r.code))
@@ -507,11 +504,8 @@ export default function SignupScreen({navigation}) {
   const fetchZones = async () => {
     try {
       const res = await axios.get(`${API_BASE_URL}/forest-info/zones`, {timeout: 20000});
-      if (res.data?.statusCode === 200) {
-        setZones(res.data.data || []);
-      } else {
-        setZones([]);
-      }
+      if (res.data?.statusCode === 200) setZones(res.data.data || []);
+      else setZones([]);
     } catch (e) {
       console.error('fetchZones error:', e?.response?.data || e?.message || e);
       setZones([]);
@@ -523,11 +517,8 @@ export default function SignupScreen({navigation}) {
       const res = await axios.get(`${API_BASE_URL}/forest-info/circles?zone_id=${zoneId}`, {
         timeout: 20000,
       });
-      if (res.data?.statusCode === 200) {
-        setCircles(res.data.data || []);
-      } else {
-        setCircles([]);
-      }
+      if (res.data?.statusCode === 200) setCircles(res.data.data || []);
+      else setCircles([]);
     } catch (e) {
       console.error('fetchCircles error:', e?.response?.data || e?.message || e);
       setCircles([]);
@@ -539,11 +530,8 @@ export default function SignupScreen({navigation}) {
       const res = await axios.get(`${API_BASE_URL}/forest-info/divisions?circle_id=${circleId}`, {
         timeout: 20000,
       });
-      if (res.data?.statusCode === 200) {
-        setDivisions(res.data.data || []);
-      } else {
-        setDivisions([]);
-      }
+      if (res.data?.statusCode === 200) setDivisions(res.data.data || []);
+      else setDivisions([]);
     } catch (e) {
       console.error('fetchDivisions error:', e?.response?.data || e?.message || e);
       setDivisions([]);
@@ -556,11 +544,8 @@ export default function SignupScreen({navigation}) {
         `${API_BASE_URL}/forest-info/sub-divisions?division_id=${divisionId}`,
         {timeout: 20000},
       );
-      if (res.data?.statusCode === 200) {
-        setSubDivisions(res.data.data || []);
-      } else {
-        setSubDivisions([]);
-      }
+      if (res.data?.statusCode === 200) setSubDivisions(res.data.data || []);
+      else setSubDivisions([]);
     } catch (e) {
       console.error('fetchSubDivisions error:', e?.response?.data || e?.message || e);
       setSubDivisions([]);
@@ -573,11 +558,8 @@ export default function SignupScreen({navigation}) {
         `${API_BASE_URL}/forest-info/blocks?sub_division_id=${subDivisionId}`,
         {timeout: 20000},
       );
-      if (res.data?.statusCode === 200) {
-        setBlocks(res.data.data || []);
-      } else {
-        setBlocks([]);
-      }
+      if (res.data?.statusCode === 200) setBlocks(res.data.data || []);
+      else setBlocks([]);
     } catch (e) {
       console.error('fetchBlocks error:', e?.response?.data || e?.message || e);
       setBlocks([]);
@@ -589,11 +571,8 @@ export default function SignupScreen({navigation}) {
       const res = await axios.get(`${API_BASE_URL}/forest-info/beats?block_id=${blockId}`, {
         timeout: 20000,
       });
-      if (res.data?.statusCode === 200) {
-        setBeats(res.data.data || []);
-      } else {
-        setBeats([]);
-      }
+      if (res.data?.statusCode === 200) setBeats(res.data.data || []);
+      else setBeats([]);
     } catch (e) {
       console.error('fetchBeats error:', e?.response?.data || e?.message || e);
       setBeats([]);
@@ -606,7 +585,7 @@ export default function SignupScreen({navigation}) {
   const clearDependentData = level => {
     lastDesignationKeyRef.current = '';
 
-    // also close inline adds if hierarchy changes
+    // close inline add boxes if hierarchy changes
     setAddMode({subDivision: false, block: false, beat: false});
     setNewName({subDivision: '', block: '', beat: ''});
 
@@ -761,22 +740,15 @@ export default function SignupScreen({navigation}) {
       if (formData.blockId) payload.blockId = Number(formData.blockId);
       if (formData.beatId) payload.beatId = Number(formData.beatId);
 
-      console.log('register-enhanced payload:', payload);
-
       const res = await axios.post(`${API_BASE_URL}/auth/register-enhanced`, payload, {
         headers: {'Content-Type': 'application/json'},
         timeout: 25000,
       });
 
-      console.log('register-enhanced response:', res.data);
-
       if (res.data?.statusCode === 201) {
         setSuccess(res.data?.data?.message || 'Registration successful');
         Alert.alert('Success', res.data?.data?.message || 'Registration successful', [
-          {
-            text: 'OK',
-            onPress: () => navigation.navigate('Login'),
-          },
+          {text: 'OK', onPress: () => navigation.navigate('Login')},
         ]);
       } else {
         setError(res.data?.message || 'Registration failed');
@@ -828,6 +800,7 @@ export default function SignupScreen({navigation}) {
               <FlatList
                 data={items}
                 keyExtractor={item => String(getValue(item))}
+                keyboardShouldPersistTaps="handled"
                 renderItem={({item}) => {
                   const val = getValue(item);
                   const isSelected = String(selectedValue) === String(val);
@@ -867,6 +840,7 @@ export default function SignupScreen({navigation}) {
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
           <View style={styles.centerWrap}>
             <View style={styles.brandBlock}>
@@ -985,12 +959,7 @@ export default function SignupScreen({navigation}) {
                 <Text style={styles.sectionTitle}>Account Security</Text>
 
                 <View style={styles.inputRow}>
-                  <Ionicons
-                    name="lock-closed"
-                    size={20}
-                    color="rgba(17,24,39,0.65)"
-                    style={styles.inputIcon}
-                  />
+                  <Ionicons name="lock-closed" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
                   <TextInput
                     style={styles.input}
                     placeholder="Password (min. 6 characters)"
@@ -1005,12 +974,7 @@ export default function SignupScreen({navigation}) {
                 </View>
 
                 <View style={styles.inputRow}>
-                  <Ionicons
-                    name="lock-closed"
-                    size={20}
-                    color="rgba(17,24,39,0.65)"
-                    style={styles.inputIcon}
-                  />
+                  <Ionicons name="lock-closed" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
                   <TextInput
                     style={styles.input}
                     placeholder="Confirm Password"
@@ -1028,12 +992,7 @@ export default function SignupScreen({navigation}) {
                 <Text style={styles.sectionTitle}>Department Role & Posting</Text>
 
                 <View style={styles.inputRow}>
-                  <Ionicons
-                    name="briefcase"
-                    size={20}
-                    color="rgba(17,24,39,0.65)"
-                    style={styles.inputIcon}
-                  />
+                  <Ionicons name="briefcase" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
                   {loadingRoles ? (
                     <ActivityIndicator size="small" color={colors.primary} />
                   ) : (
@@ -1117,12 +1076,7 @@ export default function SignupScreen({navigation}) {
                     <View style={styles.addHeaderRow}>
                       <View style={{flex: 1}}>
                         <View style={styles.inputRow}>
-                          <Ionicons
-                            name="location"
-                            size={20}
-                            color="rgba(17,24,39,0.65)"
-                            style={styles.inputIcon}
-                          />
+                          <Ionicons name="location" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
                           {renderDropdown({
                             items: subDivisions,
                             selectedValue: formData.subDivisionId,
@@ -1141,7 +1095,15 @@ export default function SignupScreen({navigation}) {
                       </TouchableOpacity>
                     </View>
 
-                    <InlineAddRow type="subDivision" placeholder="Enter new Sub Division name" />
+                    <InlineAddRow
+                      visible={addMode.subDivision}
+                      placeholder="Enter new Sub Division name"
+                      value={newName.subDivision}
+                      onChange={(t) => setNewName(p => ({...p, subDivision: t}))}
+                      onCancel={() => closeInlineAdd('subDivision')}
+                      onSave={() => handleInlineSave('subDivision')}
+                      saving={savingInline.subDivision}
+                    />
                   </>
                 )}
 
@@ -1151,12 +1113,7 @@ export default function SignupScreen({navigation}) {
                     <View style={styles.addHeaderRow}>
                       <View style={{flex: 1}}>
                         <View style={styles.inputRow}>
-                          <Ionicons
-                            name="location"
-                            size={20}
-                            color="rgba(17,24,39,0.65)"
-                            style={styles.inputIcon}
-                          />
+                          <Ionicons name="location" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
                           {renderDropdown({
                             items: blocks,
                             selectedValue: formData.blockId,
@@ -1175,7 +1132,15 @@ export default function SignupScreen({navigation}) {
                       </TouchableOpacity>
                     </View>
 
-                    <InlineAddRow type="block" placeholder="Enter new Block name" />
+                    <InlineAddRow
+                      visible={addMode.block}
+                      placeholder="Enter new Block name"
+                      value={newName.block}
+                      onChange={(t) => setNewName(p => ({...p, block: t}))}
+                      onCancel={() => closeInlineAdd('block')}
+                      onSave={() => handleInlineSave('block')}
+                      saving={savingInline.block}
+                    />
                   </>
                 )}
 
@@ -1185,12 +1150,7 @@ export default function SignupScreen({navigation}) {
                     <View style={styles.addHeaderRow}>
                       <View style={{flex: 1}}>
                         <View style={styles.inputRow}>
-                          <Ionicons
-                            name="location"
-                            size={20}
-                            color="rgba(17,24,39,0.65)"
-                            style={styles.inputIcon}
-                          />
+                          <Ionicons name="location" size={20} color="rgba(17,24,39,0.65)" style={styles.inputIcon} />
                           {renderDropdown({
                             items: beats,
                             selectedValue: formData.beatId,
@@ -1209,11 +1169,19 @@ export default function SignupScreen({navigation}) {
                       </TouchableOpacity>
                     </View>
 
-                    <InlineAddRow type="beat" placeholder="Enter new Beat name" />
+                    <InlineAddRow
+                      visible={addMode.beat}
+                      placeholder="Enter new Beat name"
+                      value={newName.beat}
+                      onChange={(t) => setNewName(p => ({...p, beat: t}))}
+                      onCancel={() => closeInlineAdd('beat')}
+                      onSave={() => handleInlineSave('beat')}
+                      saving={savingInline.beat}
+                    />
                   </>
                 )}
 
-                {/* Designation Email */}
+                {/* Designation Email + Copy */}
                 {loadingDesignation ? (
                   <View style={styles.inputRow}>
                     <ActivityIndicator size="small" color={colors.primary} />
@@ -1222,9 +1190,19 @@ export default function SignupScreen({navigation}) {
                 ) : formData.designationEmail ? (
                   <View style={styles.designationBox}>
                     <Ionicons name="mail" size={16} color="#059669" />
-                    <Text style={styles.designationText}>
+                    <Text style={styles.designationText} numberOfLines={1}>
                       Designation Email: {formData.designationEmail}
                     </Text>
+
+                    <TouchableOpacity
+                      style={styles.copyBtn}
+                      onPress={() => {
+                        Clipboard.setString(formData.designationEmail);
+                        Alert.alert('Copied', 'Designation email copied to clipboard.');
+                      }}>
+                      <Ionicons name="copy-outline" size={18} color="#059669" />
+                      <Text style={styles.copyBtnText}>Copy</Text>
+                    </TouchableOpacity>
                   </View>
                 ) : showDesignationHint ? (
                   <View style={styles.infoBox}>
@@ -1447,8 +1425,32 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     marginBottom: 12,
   },
-  designationText: {color: '#059669', marginLeft: 6, fontWeight: '700', flex: 1, fontSize: 14},
+  designationText: {
+    color: '#059669',
+    marginLeft: 6,
+    fontWeight: '700',
+    flex: 1,
+    fontSize: 14,
+  },
   loadingText: {color: 'rgba(17,24,39,0.6)', marginLeft: 8, fontStyle: 'italic', fontSize: 14},
+
+  // ✅ Copy button styles
+  copyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    height: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(5,150,105,0.35)',
+    backgroundColor: 'rgba(209,250,229,0.45)',
+  },
+  copyBtnText: {
+    color: '#059669',
+    fontWeight: '900',
+    fontSize: 12,
+  },
 
   dateButton: {flex: 1, paddingVertical: 10},
   dateText: {color: '#111827', fontWeight: '700', fontSize: 14},

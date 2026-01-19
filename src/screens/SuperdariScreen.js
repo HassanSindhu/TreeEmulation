@@ -49,6 +49,8 @@ const SUPERDARI_URL = `${API_BASE}/enum/superdari`;
 const TREE_CONDITION_SOURCE_URL = `${API_BASE}/forest-tree-conditions`; // as per your request
 
 export default function SuperdariScreen({navigation, route}) {
+  // ✅ Now Superdari links to Tree ID (enumerationId) always.
+  // disposalId is OPTIONAL (only if tree is disposed).
   const {treeId, disposalId: routeDisposalId, enumeration} = route.params || {};
 
   const [record, setRecord] = useState(null);
@@ -172,8 +174,8 @@ export default function SuperdariScreen({navigation, route}) {
         .map(x => {
           if (typeof x === 'string') return {id: null, label: x};
           return {
-            id: x?.id ?? x?.species_id ?? null,
-            label: x?.name ?? x?.species_name ?? '',
+            id: x?.id ?? null,
+            label: x?.name ?? '',
           };
         })
         .filter(x => x.label);
@@ -281,21 +283,15 @@ export default function SuperdariScreen({navigation, route}) {
       return;
     }
 
-    const disposalId =
+    // ✅ disposalId is OPTIONAL now.
+    // We'll send it ONLY if available, otherwise omit from payload.
+    const resolvedDisposalId =
       routeDisposalId ||
       record?.disposalId ||
       record?.disposal?.id ||
       record?.disposal?.disposalId ||
       record?.disposal?.serverDisposalId ||
       null;
-
-    if (!disposalId) {
-      Alert.alert(
-        'Missing',
-        'disposalId not found. Please pass disposalId in navigation params or store it on the record after disposal POST.',
-      );
-      return;
-    }
 
     const treeConditionId = getConditionId(treeCondition);
     if (treeConditionId === null) {
@@ -306,8 +302,17 @@ export default function SuperdariScreen({navigation, route}) {
     const {lat: auto_lat, long: auto_long} = parseLatLong(autoGps);
     const {lat: manual_lat, long: manual_long} = parseLatLong(manualGps);
 
+    // ✅ Latest API body:
+    // {
+    //   disposalId?: number,
+    //   enumerationId: number (TreeID),
+    //   superdar_name, contact_no, cnic_no,
+    //   treeConditionId,
+    //   auto_lat, auto_long, manual_lat, manual_long,
+    //   pictures: [...]
+    // }
     const payload = {
-      disposalId: Number(disposalId),
+      enumerationId: Number(treeId), // TreeID linking
       superdar_name: name.trim(),
       contact_no: contact.trim(),
       cnic_no: cnic.trim(),
@@ -318,6 +323,11 @@ export default function SuperdariScreen({navigation, route}) {
       manual_long: manual_long ?? null,
       pictures: buildPicturesForApi(),
     };
+
+    // only attach disposalId when present
+    if (resolvedDisposalId !== null && resolvedDisposalId !== undefined && resolvedDisposalId !== '') {
+      payload.disposalId = Number(resolvedDisposalId);
+    }
 
     setSubmitting(true);
     try {
@@ -341,7 +351,13 @@ export default function SuperdariScreen({navigation, route}) {
                 gpsLatLong: gpsFinal,
                 remarks,
                 pictureUris: pictureUris || [],
-                disposalId: Number(disposalId),
+                // store both links
+                enumerationId: Number(treeId),
+                // disposalId optional in local too
+                disposalId:
+                  resolvedDisposalId !== null && resolvedDisposalId !== undefined && resolvedDisposalId !== ''
+                    ? Number(resolvedDisposalId)
+                    : null,
                 apiResponse: apiResp || null,
                 savedAt: new Date().toISOString(),
               },
@@ -391,6 +407,8 @@ export default function SuperdariScreen({navigation, route}) {
                 <Text style={styles.infoChipText}>{enumeration?.year || '—'}</Text>
               </View>
             </View>
+
+            {/* ✅ now showing enumerationId(TreeID) as linking key */}
             <Text style={styles.siteId}>Tree ID: {String(treeId ?? '—')}</Text>
           </View>
         </View>
@@ -409,8 +427,23 @@ export default function SuperdariScreen({navigation, route}) {
           </View>
           <View style={styles.linkingInfo}>
             <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Tree ID:</Text>
+              <Text style={styles.infoLabel}>Tree ID (enumerationId):</Text>
               <Text style={styles.infoValue}>{String(treeId ?? '—')}</Text>
+            </View>
+
+            {/* Optional disposalId display (if available) */}
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Disposal ID (optional):</Text>
+              <Text style={styles.infoValue}>
+                {String(
+                  routeDisposalId ||
+                    record?.disposalId ||
+                    record?.disposal?.id ||
+                    record?.disposal?.disposalId ||
+                    record?.disposal?.serverDisposalId ||
+                    '—',
+                )}
+              </Text>
             </View>
           </View>
         </View>
@@ -455,9 +488,7 @@ export default function SuperdariScreen({navigation, route}) {
             required
             disabled={conditionLoading}
           />
-          <Text style={styles.hintText}>
-            Options are fetched from: {TREE_CONDITION_SOURCE_URL}
-          </Text>
+          <Text style={styles.hintText}>Options are fetched from: {TREE_CONDITION_SOURCE_URL}</Text>
         </View>
 
         {/* GPS Coordinates */}
@@ -484,9 +515,7 @@ export default function SuperdariScreen({navigation, route}) {
               onPress={() => fetchAutoGps(false)}
               activeOpacity={0.7}>
               <Ionicons name="locate" size={18} color="#fff" />
-              <Text style={styles.gpsButtonText}>
-                {gpsLoading ? 'Fetching...' : 'Refresh GPS'}
-              </Text>
+              <Text style={styles.gpsButtonText}>{gpsLoading ? 'Fetching...' : 'Refresh GPS'}</Text>
             </TouchableOpacity>
 
             {gpsLoading && (
@@ -523,7 +552,10 @@ export default function SuperdariScreen({navigation, route}) {
                 {pictureUris.length} picture(s) selected • API will send: {buildPicturesForApi().length} link(s)
               </Text>
 
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesContainer}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.imagesContainer}>
                 {pictureUris.map(uri => (
                   <View key={uri} style={styles.thumbWrap}>
                     <Image source={{uri}} style={styles.thumb} />

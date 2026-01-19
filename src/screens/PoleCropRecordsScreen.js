@@ -59,7 +59,7 @@ const API_BASE = 'http://be.lte.gisforestry.com';
 const AWS_Base = 'https://app.eco.gisforestry.com';
 
 // Species
-const SPECIES_URL = `${API_BASE}/enum/species`;
+const SPECIES_URL = `${API_BASE}/lpe3/species`;
 
 // Pole Crop APIs
 const POLE_CROP_LIST_URL = `${API_BASE}/enum/pole-crop/user-site-wise-pole-crop`;

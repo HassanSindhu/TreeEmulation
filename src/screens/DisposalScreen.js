@@ -387,7 +387,7 @@ export default function DisposalScreen({navigation, route}) {
 
     // Build payload exactly per your curl
     const apiBody = {
-      enumerationId: Number(enumerationIdResolved),
+      enumerationId: Number(treeId),
 
       dr_no: drNo?.trim() || '',
       dr_date: toIsoDateOrNull(drDate),

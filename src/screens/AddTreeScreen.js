@@ -24,8 +24,8 @@ import {useAuth} from '../context/AuthContext';
 
 /* ===================== API ===================== */
 const API_BASE = 'http://be.lte.gisforestry.com';
-const ENUM_CREATE_URL = `${API_BASE}/enum/name-of-site`;
-const ENUM_MY_SITES_URL = `${API_BASE}/enum/name-of-site/my/sites`;
+const ENUM_CREATE_URL = `${API_BASE}/lpe3/name-of-site`;
+const ENUM_MY_SITES_URL = `${API_BASE}/lpe3/name-of-site/my/sites`;
 
 /* ---------- safe json ---------- */
 async function safeJson(res) {
@@ -180,7 +180,7 @@ export default function AddTreeScreen({navigation}) {
   const [rdTo, setRdTo] = useState('');
   const [remarks, setRemarks] = useState('');
 
-  const linearTypeOptions = ['Road', 'Rail', 'Canal'].map((name, idx) => ({
+  const linearTypeOptions = ['Road Side', 'Rail Side', 'Canal Side'].map((name, idx) => ({
     id: String(idx + 1),
     name,
   }));
@@ -198,18 +198,18 @@ export default function AddTreeScreen({navigation}) {
   ].map((name, idx) => ({id: String(idx + 1), name}));
 
   const getSideOptions = type => {
-    if (type === 'Road') return ['Left', 'Right', 'Both', 'Median'];
-    if (type === 'Rail') return ['Left', 'Right', 'Both'];
-    if (type === 'Canal') return ['Left', 'Right', 'Both'];
+    if (type === 'Road Side') return ['Left', 'Right', 'Both', 'Median'];
+    if (type === 'Rail Side') return ['Left', 'Right', 'Both'];
+    if (type === 'Canal Side') return ['Left', 'Right', 'Both'];
     return [];
   };
 
   const rdKmLabelFrom = () =>
-    linearType === 'Canal' ? 'RDs for Canal' : 'KMs for Road/Rail';
+    linearType === 'Canal' ? 'RDs for Canal' : 'KMs for Road/Rail Side';
   const rdKmLabelTo = () => 'RDs/KMs To';
 
   const sideLabel =
-    linearType === 'Road'
+    linearType === 'Road Side'
       ? 'Side (Left / Right / Both / Median)'
       : 'Side (Left / Right / Both)';
 
@@ -649,16 +649,16 @@ export default function AddTreeScreen({navigation}) {
   };
 
   const iconForType = t => {
-    if (t === 'Road') return 'car-sport-outline';
-    if (t === 'Rail') return 'train-outline';
-    if (t === 'Canal') return 'water-outline';
+    if (t === 'Road Side') return 'car-sport-outline';
+    if (t === 'Rail Side') return 'train-outline';
+    if (t === 'Canal Side') return 'water-outline';
     return 'leaf-outline';
   };
 
   const colorForType = t => {
-    if (t === 'Road') return '#f97316';
-    if (t === 'Rail') return '#0ea5e9';
-    if (t === 'Canal') return '#059669';
+    if (t === 'Road Side') return '#f97316';
+    if (t === 'Rail Side') return '#0ea5e9';
+    if (t === 'Canal Side') return '#059669';
     return '#8b5cf6';
   };
 
@@ -911,7 +911,7 @@ export default function AddTreeScreen({navigation}) {
 
             <ScrollView showsVerticalScrollIndicator={false} style={styles.filterScroll}>
               <View style={styles.filterSection}>
-                <Text style={styles.filterLabel}>Type (Road/Rail/Canal)</Text>
+                <Text style={styles.filterLabel}>Type (Road/Rail/Canal Side)</Text>
                 <View style={styles.filterOptionsRow}>
                   {linearTypeOptions.map(opt => {
                     const active = filters.linearType === opt.name;

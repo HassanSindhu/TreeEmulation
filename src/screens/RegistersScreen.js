@@ -37,7 +37,10 @@ const {height} = Dimensions.get('window');
 const API_BASE = 'http://be.lte.gisforestry.com';
 
 // ---------- ENUM ENDPOINTS ----------
-const SPECIES_URL = `${API_BASE}/enum/species`;
+// ✅ Species endpoint you shared (requires Authorization)
+const SPECIES_URL = `${API_BASE}/lpe3/species`;
+const SPECIES_CREATE_URL = `${API_BASE}/lpe3/species`;
+
 const CONDITIONS_URL = `${API_BASE}/forest-tree-conditions`;
 
 // Enumeration
@@ -99,6 +102,88 @@ const STATUS_FILTERS = {
   SUPERDARI: 'superdari',
 };
 
+// ---------- Helpers: Afforestation Species (latest audit snapshot per species) ----------
+const normalizeAuditNo = v => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const pickLatestAfforestationSpeciesPerId = arr => {
+  if (!Array.isArray(arr)) return [];
+  const byId = new Map();
+
+  for (const row of arr) {
+    const sid = Number(row?.id ?? row?.species_id);
+    if (!Number.isFinite(sid)) continue;
+
+    const audit = normalizeAuditNo(row?.audit_no);
+    const prev = byId.get(sid);
+
+    if (!prev || audit > prev._audit) {
+      byId.set(sid, {
+        species_id: sid,
+        name: String(row?.name || '').trim(),
+        count: row?.count ?? 0,
+        _audit: audit,
+      });
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((a, b) => {
+      const an = (a.name || '').toLowerCase();
+      const bn = (b.name || '').toLowerCase();
+      if (an < bn) return -1;
+      if (an > bn) return 1;
+      return a.species_id - b.species_id;
+    })
+    .map(x => ({
+      species_id: x.species_id,
+      name: x.name,
+      count: x.count,
+    }));
+};
+
+/**
+ * ✅ NEW (Pole Crop): latest audit snapshot per species from `poleCropSpecies`
+ * Backend latest response: poleCropSpecies: [{id,name,count,audit_no,...}]
+ */
+const pickLatestPoleCropSpeciesPerId = arr => {
+  if (!Array.isArray(arr)) return [];
+  const byId = new Map();
+
+  for (const row of arr) {
+    const sid = Number(row?.id ?? row?.species_id);
+    if (!Number.isFinite(sid)) continue;
+
+    const audit = normalizeAuditNo(row?.audit_no);
+    const prev = byId.get(sid);
+
+    if (!prev || audit > prev._audit) {
+      byId.set(sid, {
+        species_id: sid,
+        name: String(row?.name || '').trim(),
+        count: row?.count ?? 0,
+        _audit: audit,
+      });
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((a, b) => {
+      const an = (a.name || '').toLowerCase();
+      const bn = (b.name || '').toLowerCase();
+      if (an < bn) return -1;
+      if (an > bn) return 1;
+      return a.species_id - b.species_id;
+    })
+    .map(x => ({
+      species_id: x.species_id,
+      name: x.name,
+      count: x.count,
+    }));
+};
+
 export default function RegistersScreen({navigation}) {
   // ---------- TOP TAB ----------
   const [activeType, setActiveType] = useState('aff');
@@ -134,6 +219,12 @@ export default function RegistersScreen({navigation}) {
   const [conditionOptions, setConditionOptions] = useState([]);
   const [conditionLoading, setConditionLoading] = useState(false);
 
+  // ---------- NEW SPECIES (Other) ----------
+  const [showNewSpeciesBox, setShowNewSpeciesBox] = useState(false);
+  const [newSpeciesName, setNewSpeciesName] = useState('');
+  const [newSpeciesTarget, setNewSpeciesTarget] = useState({type: null, index: null}); // {type:'pole'|'aff', index:number}
+  const [creatingSpecies, setCreatingSpecies] = useState(false);
+
   // ---------- GPS ----------
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
@@ -158,17 +249,14 @@ export default function RegistersScreen({navigation}) {
   // Pole Crop fields
   const [rdsFrom, setRdsFrom] = useState('');
   const [rdsTo, setRdsTo] = useState('');
-  const [count, setCount] = useState('');
-  const [speciesMulti, setSpeciesMulti] = useState([]); // array of ids
-  const [speciesMultiText, setSpeciesMultiText] = useState(''); // comma separated ids OR names
+  // ✅ multi species counts like your PATCH curl
+  const [poleSpeciesCounts, setPoleSpeciesCounts] = useState([{species_id: null, count: ''}]);
 
-  // Afforestation fields
+  // Afforestation fields (✅ ONLY KEEP USED FIELDS)
   const [avMilesKm, setAvMilesKm] = useState('');
-  const [successPercentage, setSuccessPercentage] = useState('');
-  const [year, setYear] = useState('');
-  const [schemeType, setSchemeType] = useState('');
-  const [projectName, setProjectName] = useState('');
   const [noOfPlants, setNoOfPlants] = useState('');
+  // ✅ multi species counts (latest audit shown on edit like pole)
+  const [affSpeciesCounts, setAffSpeciesCounts] = useState([{species_id: null, count: ''}]);
 
   // ---------- HELPERS ----------
   const safeJson = async res => {
@@ -518,28 +606,33 @@ export default function RegistersScreen({navigation}) {
     [activeType],
   );
 
+  // ✅ species list needs Authorization
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
-      const res = await fetch(SPECIES_URL);
+      const token = await getAuthToken();
+      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+
+      const res = await fetch(SPECIES_URL, {headers});
       const json = await safeJson(res);
       const rows = normalizeList(json);
 
-      const normalized = rows
-        .map(x => {
-          if (typeof x === 'string') return {id: null, name: x};
-          return {
-            id: x?.id ?? x?.species_id ?? null,
-            name: x?.name ?? x?.species_name ?? '',
-          };
-        })
-        .filter(x => x.name);
+      const normalized = (Array.isArray(rows) ? rows : [])
+        .map(x => ({
+          id: x?.id ?? x?.species_id ?? null,
+          name: String(x?.name ?? x?.species_name ?? '').trim(),
+        }))
+        .filter(x => x?.name);
 
       setSpeciesRows(normalized);
-      setSpeciesOptions(normalized.map(x => x.name));
+
+      // ✅ add "Other" option at end
+      const opts = normalized.map(x => x.name);
+      opts.push('Other (Add New)');
+      setSpeciesOptions(opts);
     } catch {
       setSpeciesRows([]);
-      setSpeciesOptions([]);
+      setSpeciesOptions(['Other (Add New)']);
     } finally {
       setSpeciesLoading(false);
     }
@@ -591,10 +684,19 @@ export default function RegistersScreen({navigation}) {
     fetchLocationSmart({silent: true});
   }, [modalVisible, isEdit, fetchLocationSmart]);
 
-  // ---------- DECORATE (species name + takki # + disputed) ----------
+  // ---------- MAPS ----------
   const speciesById = useMemo(() => {
     const map = new Map();
     speciesRows.forEach(s => map.set(String(s.id), s.name));
+    return map;
+  }, [speciesRows]);
+
+  const speciesIdByNameLower = useMemo(() => {
+    const map = new Map();
+    speciesRows.forEach(s => {
+      if (!s?.name) return;
+      map.set(String(s.name).trim().toLowerCase(), s.id);
+    });
     return map;
   }, [speciesRows]);
 
@@ -604,6 +706,32 @@ export default function RegistersScreen({navigation}) {
     return map;
   }, [conditionRows]);
 
+  // ✅ Keep dropdown values correct in EDIT (Enumeration)
+  useEffect(() => {
+    if (!modalVisible || !isEdit) return;
+    if (activeType !== 'enumeration') return;
+
+    if (speciesSingleId != null && !speciesSingle) {
+      const nm = speciesById.get(String(speciesSingleId));
+      if (nm) setSpeciesSingle(nm);
+    }
+    if (conditionId != null && !condition) {
+      const nm = conditionById.get(String(conditionId));
+      if (nm) setCondition(nm);
+    }
+  }, [
+    modalVisible,
+    isEdit,
+    activeType,
+    speciesSingleId,
+    conditionId,
+    speciesSingle,
+    condition,
+    speciesById,
+    conditionById,
+  ]);
+
+  // ---------- Takki + Disputed ----------
   const getTakkiValue = row => {
     const v =
       row?.takki_number ??
@@ -632,6 +760,51 @@ export default function RegistersScreen({navigation}) {
     return s === 'true' || s === '1' || s === 'yes' || s === 'y';
   };
 
+  // ---------- Multi Species Summaries ----------
+  const buildSpeciesSummaryFromSpeciesCounts = species_counts => {
+    const arr = Array.isArray(species_counts) ? species_counts : [];
+    if (!arr.length) return '—';
+    return arr
+      .map(sc => {
+        const sid = Number(sc?.species_id ?? sc?.id);
+        if (!Number.isFinite(sid)) return null;
+        const nm = speciesById.get(String(sid)) || `#${sid}`;
+        const cnt = sc?.count ?? '';
+        return `${nm}: ${cnt}`;
+      })
+      .filter(Boolean)
+      .join(', ');
+  };
+
+  // ✅ UPDATED (Pole Crop): build summary from `poleCropSpecies`
+  const buildSpeciesSummaryForPole = row => {
+    const latest = pickLatestPoleCropSpeciesPerId(row?.poleCropSpecies || []);
+    if (!latest.length) return '—';
+
+    return latest
+      .map(x => {
+        const sid = Number(x?.species_id);
+        const nm = speciesById.get(String(sid)) || x?.name || `#${sid}`;
+        return `${nm}: ${x?.count ?? ''}`;
+      })
+      .filter(Boolean)
+      .join(', ');
+  };
+
+  const buildSpeciesSummaryForAff = row => {
+    const latest = pickLatestAfforestationSpeciesPerId(row?.afforestationSpecies || []);
+    if (!latest.length) return '—';
+    return latest
+      .map(x => {
+        const sid = Number(x?.species_id);
+        const nm = speciesById.get(String(sid)) || x?.name || `#${sid}`;
+        return `${nm}: ${x?.count ?? ''}`;
+      })
+      .filter(Boolean)
+      .join(', ');
+  };
+
+  // ---------- DECORATE ----------
   const decoratedRows = useMemo(() => {
     return serverRows.map(r => {
       const autoGps =
@@ -652,15 +825,28 @@ export default function RegistersScreen({navigation}) {
         (r?.condition_id != null ? conditionById.get(String(r.condition_id)) : null) ||
         (r?.condition_id != null ? `#${r.condition_id}` : '—');
 
-      // Pole/Afforestation: multi species ids
-      const ids = Array.isArray(r?.species_ids) ? r.species_ids : [];
-      const spMulti =
-        ids.length > 0
-          ? ids
-              .map(id => speciesById.get(String(id)) || `#${id}`)
-              .filter(Boolean)
-              .join(', ')
-          : '—';
+      /**
+       * ✅ UPDATED (Pole section priority order):
+       * 1) poleCropSpecies (new API)
+       * 2) species_counts (older)
+       * 3) species_ids (older fallback)
+       * 4) afforestationSpecies (aff list)
+       */
+      let spMulti = '—';
+
+      // ✅ Pole: new response
+      if (Array.isArray(r?.poleCropSpecies) && r.poleCropSpecies.length) {
+        spMulti = buildSpeciesSummaryForPole(r);
+      } else if (Array.isArray(r?.species_counts) && r.species_counts.length) {
+        spMulti = buildSpeciesSummaryFromSpeciesCounts(r.species_counts);
+      } else if (Array.isArray(r?.species_ids) && r.species_ids.length) {
+        spMulti = r.species_ids
+          .map(id => speciesById.get(String(id)) || `#${id}`)
+          .filter(Boolean)
+          .join(', ');
+      } else if (Array.isArray(r?.afforestationSpecies) && r.afforestationSpecies.length) {
+        spMulti = buildSpeciesSummaryForAff(r);
+      }
 
       const takki = getTakkiValue(r);
       const disputed = getDisputedBool(r);
@@ -701,12 +887,7 @@ export default function RegistersScreen({navigation}) {
         r?.rd_km,
         r?.rds_from,
         r?.rds_to,
-        r?.count,
         r?.av_miles_km,
-        r?.success_percentage,
-        r?.year,
-        r?.scheme_type,
-        r?.project_name,
         r?.no_of_plants,
         r?._speciesSingleLabel,
         r?._conditionSingleLabel,
@@ -725,6 +906,51 @@ export default function RegistersScreen({navigation}) {
     });
   }, [decoratedRows, search, statusFilter]);
 
+  // ---------- Multi Species UI Helpers ----------
+  const addSpeciesCountRow = type => {
+    if (type === 'pole') {
+      setPoleSpeciesCounts(prev => [...prev, {species_id: null, count: ''}]);
+      return;
+    }
+    setAffSpeciesCounts(prev => [...prev, {species_id: null, count: ''}]);
+  };
+
+  const removeSpeciesCountRow = (type, index) => {
+    const remover = prev => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      arr.splice(index, 1);
+      return arr.length ? arr : [{species_id: null, count: ''}];
+    };
+    if (type === 'pole') setPoleSpeciesCounts(remover);
+    else setAffSpeciesCounts(remover);
+  };
+
+  const updateSpeciesCountRow = (type, index, patch) => {
+    const updater = prev => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      if (!arr[index]) arr[index] = {species_id: null, count: ''};
+      arr[index] = {...arr[index], ...patch};
+      return arr;
+    };
+    if (type === 'pole') setPoleSpeciesCounts(updater);
+    else setAffSpeciesCounts(updater);
+  };
+
+  const cleanSpeciesCountsPayload = list => {
+    const arr = Array.isArray(list) ? list : [];
+    const cleaned = arr
+      .map(x => ({
+        species_id: Number(x?.species_id),
+        count: Number(String(x?.count ?? '').replace(/[^\d.]+/g, '')),
+      }))
+      .filter(x => Number.isFinite(x.species_id) && Number.isFinite(x.count));
+
+    // dedupe by species_id (keep last)
+    const map = new Map();
+    cleaned.forEach(x => map.set(x.species_id, x));
+    return Array.from(map.values());
+  };
+
   // ---------- FORM HELPERS ----------
   const resetForm = () => {
     setIsEdit(false);
@@ -740,16 +966,12 @@ export default function RegistersScreen({navigation}) {
 
     setRdsFrom('');
     setRdsTo('');
-    setCount('');
-    setSpeciesMulti([]);
-    setSpeciesMultiText('');
+    setPoleSpeciesCounts([{species_id: null, count: ''}]);
 
+    // ✅ Afforestation (only used fields)
     setAvMilesKm('');
-    setSuccessPercentage('');
-    setYear('');
-    setSchemeType('');
-    setProjectName('');
     setNoOfPlants('');
+    setAffSpeciesCounts([{species_id: null, count: ''}]);
 
     setGpsAuto('');
     setGpsManual('');
@@ -758,6 +980,10 @@ export default function RegistersScreen({navigation}) {
     setPictureAssets([]);
     setUploadedImageUrls([]);
     setUploadingImages(false);
+
+    setShowNewSpeciesBox(false);
+    setNewSpeciesName('');
+    setNewSpeciesTarget({type: null, index: null});
   };
 
   const openAddForm = () => {
@@ -802,31 +1028,64 @@ export default function RegistersScreen({navigation}) {
     if (activeType === 'pole') {
       setRdsFrom(String(row?.rds_from ?? ''));
       setRdsTo(String(row?.rds_to ?? ''));
-      setCount(String(row?.count ?? ''));
-      const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
-      setSpeciesMulti(ids.map(x => Number(x)).filter(n => Number.isFinite(n)));
-      // show names if possible, otherwise ids
-      const text = ids
-        .map(id => speciesById.get(String(id)) || String(id))
-        .filter(Boolean)
-        .join(', ');
-      setSpeciesMultiText(text);
+
+      /**
+       * ✅ UPDATED (Pole edit prefill priority):
+       * 1) poleCropSpecies (new API) -> take latest audit per species -> map to {species_id,count}
+       * 2) species_counts (older)
+       * 3) species_ids (fallback)
+       */
+      const poleLatest = pickLatestPoleCropSpeciesPerId(row?.poleCropSpecies || []);
+      if (poleLatest.length) {
+        setPoleSpeciesCounts(
+          poleLatest.map(x => ({
+            species_id: x?.species_id ?? null,
+            count: String(x?.count ?? ''),
+          })),
+        );
+      } else if (Array.isArray(row?.species_counts) && row.species_counts.length) {
+        setPoleSpeciesCounts(
+          row.species_counts.map(x => ({
+            species_id: x?.species_id ?? x?.id ?? null,
+            count: String(x?.count ?? ''),
+          })),
+        );
+      } else if (Array.isArray(row?.species_ids) && row?.species_ids?.length) {
+        setPoleSpeciesCounts(
+          row.species_ids.map((sid, i) => ({
+            species_id: sid,
+            count: i === 0 ? String(row?.count ?? '') : '',
+          })),
+        );
+      } else {
+        setPoleSpeciesCounts([{species_id: null, count: ''}]);
+      }
     }
 
     if (activeType === 'aff') {
+      // ✅ ONLY set used fields
       setAvMilesKm(String(row?.av_miles_km ?? ''));
-      setSuccessPercentage(String(row?.success_percentage ?? ''));
-      setYear(String(row?.year ?? ''));
-      setSchemeType(String(row?.scheme_type ?? ''));
-      setProjectName(String(row?.project_name ?? ''));
       setNoOfPlants(String(row?.no_of_plants ?? ''));
-      const ids = Array.isArray(row?.species_ids) ? row.species_ids : [];
-      setSpeciesMulti(ids.map(x => Number(x)).filter(n => Number.isFinite(n)));
-      const text = ids
-        .map(id => speciesById.get(String(id)) || String(id))
-        .filter(Boolean)
-        .join(', ');
-      setSpeciesMultiText(text);
+
+      // ✅ EDIT AUTO-SELECT LOGIC (Prefer latest audit snapshot)
+      const latest = pickLatestAfforestationSpeciesPerId(row?.afforestationSpecies || []);
+      if (latest.length) {
+        setAffSpeciesCounts(
+          latest.map(x => ({
+            species_id: x?.species_id ?? null,
+            count: String(x?.count ?? ''),
+          })),
+        );
+      } else if (Array.isArray(row?.species_counts) && row.species_counts.length) {
+        setAffSpeciesCounts(
+          row.species_counts.map(x => ({
+            species_id: x?.species_id ?? x?.id ?? null,
+            count: String(x?.count ?? ''),
+          })),
+        );
+      } else {
+        setAffSpeciesCounts([{species_id: null, count: ''}]);
+      }
     }
 
     setModalVisible(true);
@@ -884,38 +1143,47 @@ export default function RegistersScreen({navigation}) {
     return json;
   };
 
-  const resolveSpeciesIdsFromText = useCallback(
-    text => {
-      const tokens = String(text || '')
-        .split(',')
-        .map(s => String(s).trim())
-        .filter(Boolean);
+  // ---------- CREATE NEW SPECIES (Other) ----------
+  const createSpeciesAndAssign = useCallback(async () => {
+    const nm = String(newSpeciesName || '').trim();
+    if (!nm) return Alert.alert('Missing', 'Please enter new species name.');
 
-      if (!tokens.length) return [];
+    try {
+      setCreatingSpecies(true);
+      const token = await getAuthToken();
+      if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-      const byLowerName = new Map(
-        speciesRows
-          .filter(x => x?.name)
-          .map(x => [String(x.name).trim().toLowerCase(), x.id]),
-      );
-
-      const ids = [];
-      tokens.forEach(tok => {
-        // numeric id
-        const n = Number(tok);
-        if (Number.isFinite(n) && tok.replace(/[0-9]/g, '').length === 0) {
-          ids.push(Number(n));
-          return;
-        }
-        // name -> id
-        const id = byLowerName.get(tok.toLowerCase());
-        if (id != null) ids.push(Number(id));
+      const res = await fetch(SPECIES_CREATE_URL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+        body: JSON.stringify({name: nm}),
       });
 
-      return Array.from(new Set(ids.filter(x => Number.isFinite(x))));
-    },
-    [speciesRows],
-  );
+      const json = await safeJson(res);
+      if (!res.ok) throw new Error(json?.message || json?.error || `API Error (${res.status})`);
+
+      // refresh species list and auto-select the newly created species if possible
+      await fetchSpecies();
+
+      // try to find by name
+      const createdId = speciesIdByNameLower.get(nm.toLowerCase());
+      const {type, index} = newSpeciesTarget || {};
+
+      if (createdId != null && type && index != null) {
+        updateSpeciesCountRow(type, index, {species_id: createdId});
+      }
+
+      setShowNewSpeciesBox(false);
+      setNewSpeciesName('');
+      setNewSpeciesTarget({type: null, index: null});
+
+      Alert.alert('Success', 'Species added successfully.');
+    } catch (e) {
+      Alert.alert('Create Species Failed', e?.message || 'Failed to create species');
+    } finally {
+      setCreatingSpecies(false);
+    }
+  }, [newSpeciesName, newSpeciesTarget, fetchSpecies, speciesIdByNameLower]);
 
   const saveRecord = async () => {
     const {lat: autoLat, lng: autoLng} = parseLatLng(gpsAuto);
@@ -964,33 +1232,23 @@ export default function RegistersScreen({navigation}) {
 
       const rf = Number(String(rdsFrom || '').replace(/[^\d.]+/g, ''));
       const rt = Number(String(rdsTo || '').replace(/[^\d.]+/g, ''));
-      const cnt = Number(String(count || '').replace(/[^\d.]+/g, ''));
 
-      // allow ids OR names
-      const idsFromText = resolveSpeciesIdsFromText(speciesMultiText);
-      const fallbackIds = (Array.isArray(speciesMulti) ? speciesMulti : [])
-        .map(n => Number(n))
-        .filter(n => Number.isFinite(n));
-      const finalIds = idsFromText.length ? idsFromText : fallbackIds;
-
-      if (!finalIds.length) {
-        return Alert.alert(
-          'Missing',
-          'species_ids is required (enter IDs or Species Names, comma separated).',
-        );
+      const species_counts = cleanSpeciesCountsPayload(poleSpeciesCounts);
+      if (!species_counts.length) {
+        return Alert.alert('Missing', 'species_counts is required (add species + count).');
       }
 
       body = {
         nameOfSiteId: Number(nameOfSiteId),
         rds_from: Number.isFinite(rf) ? rf : 0,
         rds_to: Number.isFinite(rt) ? rt : 0,
-        count: Number.isFinite(cnt) ? cnt : 0,
         auto_lat: autoLat,
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
-        species_ids: finalIds,
         pictures,
+        // ✅ as per your working curl
+        species_counts,
       };
     }
 
@@ -999,35 +1257,27 @@ export default function RegistersScreen({navigation}) {
         return Alert.alert('Missing', 'nameOfSiteId is required');
 
       const av = Number(String(avMilesKm || '').replace(/[^\d.]+/g, ''));
-      const plants = Number(String(noOfPlants || '').replace(/[^\d.]+/g, ''));
 
-      const idsFromText = resolveSpeciesIdsFromText(speciesMultiText);
-      const fallbackIds = (Array.isArray(speciesMulti) ? speciesMulti : [])
-        .map(n => Number(n))
-        .filter(n => Number.isFinite(n));
-      const finalIds = idsFromText.length ? idsFromText : fallbackIds;
-
-      if (!finalIds.length) {
-        return Alert.alert(
-          'Missing',
-          'species_ids is required (enter IDs or Species Names, comma separated).',
-        );
+      const species_counts = cleanSpeciesCountsPayload(affSpeciesCounts);
+      if (!species_counts.length) {
+        return Alert.alert('Missing', 'species_counts is required (add species + count).');
       }
+
+      // keep no_of_plants consistent (sum if not provided)
+      const plants = Number(String(noOfPlants || '').replace(/[^\d.]+/g, ''));
+      const sumPlants = species_counts.reduce((acc, x) => acc + (Number(x.count) || 0), 0);
+      const finalPlants = Number.isFinite(plants) && plants > 0 ? plants : sumPlants;
 
       body = {
         nameOfSiteId: Number(nameOfSiteId),
         av_miles_km: Number.isFinite(av) ? av : 0,
-        success_percentage: successPercentage ? String(successPercentage) : '',
-        year: year ? String(year) : '',
-        scheme_type: schemeType ? String(schemeType) : '',
-        project_name: projectName ? String(projectName) : '',
-        no_of_plants: Number.isFinite(plants) ? plants : 0,
+        no_of_plants: Number.isFinite(finalPlants) ? finalPlants : 0,
         auto_lat: autoLat,
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
-        species_ids: finalIds,
         pictures,
+        species_counts,
       };
     }
 
@@ -1059,7 +1309,6 @@ export default function RegistersScreen({navigation}) {
 
   // ---------- TABLE COLUMNS ----------
   const tableColumns = useMemo(() => {
-    // Always show Species Name (not ids), Takki #, and Disputed
     if (activeType === 'enumeration') {
       return [
         {key: 'id', label: 'ID', width: 80},
@@ -1082,8 +1331,7 @@ export default function RegistersScreen({navigation}) {
         {key: 'site', label: 'Site', width: 90},
         {key: 'rds_from', label: 'RDS From', width: 110},
         {key: 'rds_to', label: 'RDS To', width: 110},
-        {key: 'count', label: 'Count', width: 100},
-        {key: 'species_multi', label: 'Species', width: 220},
+        {key: 'species_multi', label: 'Species : Count', width: 260},
         {key: 'takki', label: 'Takki #', width: 120},
         {key: 'disputed', label: 'Disputed', width: 110},
         {key: 'auto', label: 'Auto GPS', width: 180},
@@ -1093,14 +1341,13 @@ export default function RegistersScreen({navigation}) {
       ];
     }
 
-    // aff
+    // aff (✅ removed unused fields from view; keep essential)
     return [
       {key: 'id', label: 'ID', width: 80},
       {key: 'site', label: 'Site', width: 90},
       {key: 'avg', label: 'Avg KM', width: 110},
-      {key: 'success', label: 'Success %', width: 120},
-      {key: 'year', label: 'Year', width: 100},
-      {key: 'species_multi', label: 'Species', width: 220},
+      {key: 'plants', label: 'Plants', width: 110},
+      {key: 'species_multi', label: 'Species : Count', width: 260},
       {key: 'takki', label: 'Takki #', width: 120},
       {key: 'disputed', label: 'Disputed', width: 110},
       {key: 'auto', label: 'Auto GPS', width: 180},
@@ -1306,14 +1553,10 @@ export default function RegistersScreen({navigation}) {
                         return String(r?.rds_from ?? '—');
                       case 'rds_to':
                         return String(r?.rds_to ?? '—');
-                      case 'count':
-                        return String(r?.count ?? '—');
                       case 'avg':
                         return String(r?.av_miles_km ?? '—');
-                      case 'success':
-                        return String(r?.success_percentage ?? '—');
-                      case 'year':
-                        return String(r?.year ?? '—');
+                      case 'plants':
+                        return String(r?.no_of_plants ?? '—');
                       case 'species':
                         return String(r?._speciesSingleLabel ?? '—');
                       case 'species_multi':
@@ -1533,6 +1776,13 @@ export default function RegistersScreen({navigation}) {
                       label={speciesLoading ? 'Species (Loading...)' : 'Species'}
                       value={speciesSingle}
                       onChange={name => {
+                        if (name === 'Other (Add New)') {
+                          Alert.alert(
+                            'Not Available Here',
+                            'Other species creation is available in Pole/Afforestation multi-species rows.',
+                          );
+                          return;
+                        }
                         setSpeciesSingle(name);
                         const row = speciesRows.find(x => x.name === name);
                         setSpeciesSingleId(row?.id ?? null);
@@ -1563,32 +1813,87 @@ export default function RegistersScreen({navigation}) {
                       label="rds_from"
                       value={rdsFrom}
                       onChangeText={setRdsFrom}
-                      placeholder="e.g. 12.5"
+                      placeholder="e.g. 5.0"
                       keyboardType="numeric"
                     />
                     <FormRow
                       label="rds_to"
                       value={rdsTo}
                       onChangeText={setRdsTo}
-                      placeholder="e.g. 15.0"
+                      placeholder="e.g. 10.0"
                       keyboardType="numeric"
                     />
-                    <FormRow
-                      label="count"
-                      value={count}
-                      onChangeText={setCount}
-                      placeholder="e.g. 50"
-                      keyboardType="numeric"
-                    />
-                    <FormRow
-                      label="species_ids OR species names (comma separated)"
-                      value={speciesMultiText}
-                      onChangeText={setSpeciesMultiText}
-                      placeholder='e.g. 1,4  OR  "Sheesham, Eucalyptus"'
-                    />
-                    <Text style={styles.helperText}>
-                      Tip: You can enter IDs or Species Names. Table will always show Species Names.
-                    </Text>
+
+                    <Text style={styles.sectionLabel}>Species Counts</Text>
+
+                    {poleSpeciesCounts.map((row, idx) => {
+                      const selectedName =
+                        row?.species_id != null ? speciesById.get(String(row.species_id)) || '' : '';
+
+                      return (
+                        <View
+                          key={`pole_sc_${idx}`}
+                          style={{
+                            borderWidth: 1,
+                            borderColor: COLORS.border,
+                            borderRadius: 14,
+                            padding: 12,
+                            marginBottom: 12,
+                            backgroundColor: '#fff',
+                          }}>
+                          <DropdownRow
+                            label={speciesLoading ? 'Species (Loading...)' : 'Species'}
+                            value={selectedName}
+                            onChange={name => {
+                              if (name === 'Other (Add New)') {
+                                setShowNewSpeciesBox(true);
+                                setNewSpeciesTarget({type: 'pole', index: idx});
+                                return;
+                              }
+                              const id = speciesRows.find(x => x.name === name)?.id ?? null;
+                              updateSpeciesCountRow('pole', idx, {species_id: id});
+                            }}
+                            options={speciesOptions}
+                            disabled={speciesLoading}
+                            required
+                          />
+
+                          <FormRow
+                            label="Count"
+                            value={String(row?.count ?? '')}
+                            onChangeText={t => updateSpeciesCountRow('pole', idx, {count: t})}
+                            placeholder="e.g. 100"
+                            keyboardType="numeric"
+                          />
+
+                          <View style={{flexDirection: 'row', gap: 10}}>
+                            <TouchableOpacity
+                              style={{
+                                flex: 1,
+                                backgroundColor: 'rgba(31, 41, 55, 0.05)',
+                                paddingVertical: 12,
+                                borderRadius: 12,
+                                alignItems: 'center',
+                              }}
+                              onPress={() => addSpeciesCountRow('pole')}>
+                              <Text style={{fontWeight: '800', color: COLORS.text}}>+ Add Row</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={{
+                                flex: 1,
+                                backgroundColor: 'rgba(239,68,68,0.10)',
+                                paddingVertical: 12,
+                                borderRadius: 12,
+                                alignItems: 'center',
+                              }}
+                              onPress={() => removeSpeciesCountRow('pole', idx)}>
+                              <Text style={{fontWeight: '800', color: COLORS.danger}}>Remove</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
                   </>
                 )}
 
@@ -1601,45 +1906,142 @@ export default function RegistersScreen({navigation}) {
                       placeholder="e.g. 10.5"
                       keyboardType="numeric"
                     />
+
                     <FormRow
-                      label="success_percentage"
-                      value={successPercentage}
-                      onChangeText={setSuccessPercentage}
-                      placeholder='e.g. "80%"'
-                    />
-                    <FormRow
-                      label="year"
-                      value={year}
-                      onChangeText={setYear}
-                      placeholder="e.g. 2024"
-                      keyboardType="numeric"
-                    />
-                    <FormRow
-                      label="scheme_type"
-                      value={schemeType}
-                      onChangeText={setSchemeType}
-                      placeholder="e.g. Development"
-                    />
-                    <FormRow
-                      label="project_name"
-                      value={projectName}
-                      onChangeText={setProjectName}
-                      placeholder="e.g. Multi-Species Project"
-                    />
-                    <FormRow
-                      label="no_of_plants"
+                      label="no_of_plants (optional, auto-sum if empty)"
                       value={noOfPlants}
                       onChangeText={setNoOfPlants}
                       placeholder="e.g. 1000"
                       keyboardType="numeric"
                     />
-                    <FormRow
-                      label="species_ids OR species names (comma separated)"
-                      value={speciesMultiText}
-                      onChangeText={setSpeciesMultiText}
-                      placeholder='e.g. 3,4  OR  "Sheesham, Eucalyptus"'
-                    />
+
+                    <Text style={styles.sectionLabel}>Species Counts</Text>
+
+                    {affSpeciesCounts.map((row, idx) => {
+                      const selectedName =
+                        row?.species_id != null ? speciesById.get(String(row.species_id)) || '' : '';
+
+                      return (
+                        <View
+                          key={`aff_sc_${idx}`}
+                          style={{
+                            borderWidth: 1,
+                            borderColor: COLORS.border,
+                            borderRadius: 14,
+                            padding: 12,
+                            marginBottom: 12,
+                            backgroundColor: '#fff',
+                          }}>
+                          <DropdownRow
+                            label={speciesLoading ? 'Species (Loading...)' : 'Species'}
+                            value={selectedName}
+                            onChange={name => {
+                              if (name === 'Other (Add New)') {
+                                setShowNewSpeciesBox(true);
+                                setNewSpeciesTarget({type: 'aff', index: idx});
+                                return;
+                              }
+                              const id = speciesRows.find(x => x.name === name)?.id ?? null;
+                              updateSpeciesCountRow('aff', idx, {species_id: id});
+                            }}
+                            options={speciesOptions}
+                            disabled={speciesLoading}
+                            required
+                          />
+
+                          <FormRow
+                            label="Count"
+                            value={String(row?.count ?? '')}
+                            onChangeText={t => updateSpeciesCountRow('aff', idx, {count: t})}
+                            placeholder="e.g. 500"
+                            keyboardType="numeric"
+                          />
+
+                          <View style={{flexDirection: 'row', gap: 10}}>
+                            <TouchableOpacity
+                              style={{
+                                flex: 1,
+                                backgroundColor: 'rgba(31, 41, 55, 0.05)',
+                                paddingVertical: 12,
+                                borderRadius: 12,
+                                alignItems: 'center',
+                              }}
+                              onPress={() => addSpeciesCountRow('aff')}>
+                              <Text style={{fontWeight: '800', color: COLORS.text}}>+ Add Row</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={{
+                                flex: 1,
+                                backgroundColor: 'rgba(239,68,68,0.10)',
+                                paddingVertical: 12,
+                                borderRadius: 12,
+                                alignItems: 'center',
+                              }}
+                              onPress={() => removeSpeciesCountRow('aff', idx)}>
+                              <Text style={{fontWeight: '800', color: COLORS.danger}}>Remove</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
                   </>
+                )}
+
+                {/* Create new species box (Other) */}
+                {showNewSpeciesBox && (
+                  <View style={{marginTop: 10, marginBottom: 10}}>
+                    <Text style={styles.sectionLabel}>Add New Species</Text>
+                    <View
+                      style={{
+                        backgroundColor: 'rgba(124, 58, 237, 0.06)',
+                        borderWidth: 1,
+                        borderColor: 'rgba(124, 58, 237, 0.18)',
+                        borderRadius: 14,
+                        padding: 14,
+                      }}>
+                      <FormRow
+                        label="Species name"
+                        value={newSpeciesName}
+                        onChangeText={setNewSpeciesName}
+                        placeholder="e.g. Guavaaa"
+                      />
+                      <View style={{flexDirection: 'row', gap: 10}}>
+                        <TouchableOpacity
+                          style={{
+                            flex: 1,
+                            backgroundColor: COLORS.info,
+                            paddingVertical: 14,
+                            borderRadius: 12,
+                            alignItems: 'center',
+                            opacity: creatingSpecies ? 0.7 : 1,
+                          }}
+                          disabled={creatingSpecies}
+                          onPress={createSpeciesAndAssign}>
+                          {creatingSpecies ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Text style={{color: '#fff', fontWeight: '900'}}>Add & Select</Text>
+                          )}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={{
+                            flex: 1,
+                            backgroundColor: 'rgba(31, 41, 55, 0.05)',
+                            paddingVertical: 14,
+                            borderRadius: 12,
+                            alignItems: 'center',
+                          }}
+                          onPress={() => {
+                            setShowNewSpeciesBox(false);
+                            setNewSpeciesName('');
+                            setNewSpeciesTarget({type: null, index: null});
+                          }}>
+                          <Text style={{fontWeight: '900', color: COLORS.text}}>Cancel</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
                 )}
 
                 {/* GPS */}
@@ -2106,8 +2508,6 @@ const styles = StyleSheet.create({
   footerButtonPrimary: {flex: 2, borderRadius: 14, overflow: 'hidden'},
   footerButtonGradient: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8},
   footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
-
-  helperText: {marginTop: 8, fontSize: 12, color: COLORS.textLight, fontWeight: '600'},
 
   // GPS Section
   gpsSection: {marginTop: 20},

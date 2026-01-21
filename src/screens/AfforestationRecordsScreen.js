@@ -52,12 +52,12 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
-// ✅ FIXED: valid JS template strings
 const API_5000 = API_HOST;
 const SPECIES_URL = `${API_5000}/lpe3/species`;
 const AFFORESTATION_SUBMIT_URL = `${API_5000}/enum/afforestation`;
 const AFFORESTATION_EDIT_URL = id => `${API_5000}/enum/afforestation/${id}`;
 
+// Your list endpoint in your codebase (kept as-is)
 const API_3000 = API_HOST;
 const AFFORESTATION_LIST_URL = `${API_3000}/enum/afforestation/user-site-wise-afforestion`;
 
@@ -118,7 +118,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   const [projectName, setProjectName] = useState('');
   const [nonDevScheme, setNonDevScheme] = useState('');
 
-  // NEW: additional API field from curl
+  // additional API field
   const [replenishmentDetails, setReplenishmentDetails] = useState('');
 
   // species master + selection + per-species counts
@@ -139,7 +139,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   const [pictureUris, setPictureUris] = useState([]);
   const [uploading, setUploading] = useState(false);
 
-  // ✅ NEW: Image picker (camera/gallery) modal
+  // ✅ Image picker (camera/gallery) modal
   const [imagePickerModal, setImagePickerModal] = useState(false);
 
   const lastGpsRequestAtRef = useRef(0);
@@ -238,7 +238,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     };
   };
 
-  // ✅ Rejection popup open/close
+  // Rejection popup open/close
   const openRejectionPopup = row => {
     const ui = deriveRowUi(row);
     if (!ui.isRejected) return;
@@ -254,7 +254,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
   };
 
-  // ✅ Only show Edit if status is rejected
+  // Only show Edit if status is rejected
   const isRejectedStatus = record => {
     const ui = deriveRowUi(record);
     return ui.isRejected;
@@ -337,7 +337,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     return Number.isFinite(n) ? n : null;
   };
 
-  // ✅ Helper: fill auto GPS into the last manual coordinate
+  // Helper: fill auto GPS into the last manual coordinate
   const fillAutoIntoManual = useCallback(autoValue => {
     const v = String(autoValue || '').trim();
     if (!v) return;
@@ -352,11 +352,59 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     });
   }, []);
 
-  // ---------- SPECIES ----------
+  // ---------- AFFORESTATION SPECIES HELPERS ----------
+  const normalizeAuditNo = v => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  // Picks latest snapshot per species id based on max audit_no.
+  const pickLatestAfforestationSpeciesPerId = arr => {
+    if (!Array.isArray(arr)) return [];
+
+    const byId = new Map();
+
+    for (const row of arr) {
+      const sid = Number(row?.id ?? row?.species_id);
+      if (!Number.isFinite(sid)) continue;
+
+      const audit = normalizeAuditNo(row?.audit_no);
+      const prev = byId.get(sid);
+
+      if (!prev || audit > prev._audit) {
+        byId.set(sid, {
+          species_id: sid,
+          name: String(row?.name || '').trim(),
+          count: row?.count ?? 0,
+          _audit: audit,
+        });
+      }
+    }
+
+    return Array.from(byId.values())
+      .sort((a, b) => {
+        const an = (a.name || '').toLowerCase();
+        const bn = (b.name || '').toLowerCase();
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+        return a.species_id - b.species_id;
+      })
+      .map(x => ({
+        species_id: x.species_id,
+        name: x.name,
+        count: x.count,
+      }));
+  };
+
+  // ---------- SPECIES MASTER ----------
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
-      const res = await fetch(SPECIES_URL);
+
+      const token = await getAuthToken();
+      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+
+      const res = await fetch(SPECIES_URL, {headers});
       const json = await res.json().catch(() => null);
       const rows = normalizeList(json);
 
@@ -399,7 +447,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     return `${speciesIds.length} selected`;
   }, [speciesIds, speciesRows]);
 
-  // ✅ Updated: also keeps speciesCounts keys in sync
+  // Toggle species and keep counts in sync
   const toggleSpeciesId = id => {
     const num = Number(id);
     if (!Number.isFinite(num)) return;
@@ -411,16 +459,13 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       if (next.has(num)) next.delete(num);
       else next.add(num);
 
-      // keep counts aligned
       setSpeciesCounts(prevCounts => {
         const copy = {...(prevCounts || {})};
 
-        // add default when selected
         if (next.has(num) && (copy[String(num)] === undefined || copy[String(num)] === null)) {
           copy[String(num)] = '';
         }
 
-        // remove when unselected
         if (!next.has(num)) delete copy[String(num)];
 
         return copy;
@@ -443,49 +488,44 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     const manualLat = raw?.manual_lat ?? raw?.manualLat ?? null;
     const manualLng = raw?.manual_long ?? raw?.manualLong ?? null;
 
-    // ✅ NEW API: raw.species = [{ species_id, count }]
-    // ✅ fallback: raw.afforestationSpecies (old)
-    const speciesArr = Array.isArray(raw?.species)
-      ? raw.species
-      : Array.isArray(raw?.afforestationSpecies)
-      ? raw.afforestationSpecies.map(x => ({
-          species_id: x?.species_id ?? x?.species?.id,
-          count: x?.count ?? x?.plants ?? x?.no_of_plants,
-          name: x?.species?.name,
-          species: x?.species,
-        }))
-      : [];
+    // ✅ pictures can be null
+    const pictures = Array.isArray(raw?.pictures) ? raw.pictures : [];
 
-    const species_ids = speciesArr
-      .map(x => Number(x?.species_id ?? x?.species?.id))
+    const serverId = raw?.id ?? raw?._id ?? null;
+
+    // ✅ afforestationSpecies contains snapshots with audit_no
+    const affArr = Array.isArray(raw?.afforestationSpecies) ? raw.afforestationSpecies : [];
+    const latestSpecies = pickLatestAfforestationSpeciesPerId(affArr);
+
+    const species_ids = latestSpecies
+      .map(x => Number(x?.species_id))
       .filter(n => Number.isFinite(n));
 
     const species_counts = {};
-    speciesArr.forEach(x => {
-      const sid = Number(x?.species_id ?? x?.species?.id);
+    latestSpecies.forEach(x => {
+      const sid = Number(x?.species_id);
       if (!Number.isFinite(sid)) return;
-      const c = x?.count;
-      if (c !== null && c !== undefined) species_counts[String(sid)] = String(c);
+      species_counts[String(sid)] = String(x?.count ?? '');
     });
 
-    const species_names = speciesArr
-      .map(x => String(x?.name || x?.species?.name || '').trim())
-      .filter(Boolean);
+    // fallback names if master list not loaded yet
+    const species_names_map = {};
+    latestSpecies.forEach(x => {
+      const sid = Number(x?.species_id);
+      if (!Number.isFinite(sid)) return;
+      const nm = String(x?.name || '').trim();
+      if (nm) species_names_map[String(sid)] = nm;
+    });
 
     const autoGpsLatLong =
       Number.isFinite(Number(autoLat)) && Number.isFinite(Number(autoLng))
         ? `${Number(autoLat).toFixed(6)}, ${Number(autoLng).toFixed(6)}`
-        : raw?.autoGpsLatLong || '';
+        : '';
 
     const gpsBoundingBox =
       Number.isFinite(Number(manualLat)) && Number.isFinite(Number(manualLng))
         ? [`${Number(manualLat).toFixed(6)}, ${Number(manualLng).toFixed(6)}`]
-        : Array.isArray(raw?.gpsBoundingBox)
-        ? raw.gpsBoundingBox
         : [''];
-
-    const pictures = Array.isArray(raw?.pictures) ? raw.pictures : [];
-    const serverId = raw?.id ?? raw?._id ?? null;
 
     return {
       id: String(serverId ?? Date.now()),
@@ -499,7 +539,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       projectName: scheme === 'Development' ? String(project || '') : '',
       nonDevScheme: scheme === 'Non Development' ? String(project || '') : '',
 
-      // NEW fields
       replenishment_details: raw?.replenishment_details ?? raw?.replenishmentDetails ?? '',
       main_species: raw?.main_species ?? raw?.mainSpecies ?? '',
 
@@ -507,8 +546,8 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       gpsBoundingBox,
 
       species_ids,
-      species_names,
       species_counts,
+      species_names_map,
 
       verification: Array.isArray(raw?.verification) ? raw.verification : [],
       latestStatus: raw?.latestStatus || null,
@@ -522,7 +561,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     };
   };
 
-  // ✅ REALTIME ONLY: always fetch server
+  // REALTIME ONLY: always fetch server
   const fetchAfforestationList = useCallback(
     async ({refresh = false} = {}) => {
       if (!nameOfSiteId) {
@@ -590,7 +629,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     setPictureUris([]);
   };
 
-  // ✅ GPS fetch now also fills manual automatically
+  // GPS fetch now also fills manual automatically
   const fetchAutoGps = (silent = false) => {
     const now = Date.now();
     if (now - lastGpsRequestAtRef.current < 1200) return;
@@ -622,7 +661,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   };
 
   const openEditForm = record => {
-    // ✅ Guard: only allow edit when rejected
+    // Only allow edit when rejected
     if (!isRejectedStatus(record)) {
       Alert.alert('Not Allowed', 'You can edit only when status is Rejected.');
       return;
@@ -646,6 +685,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     setNonDevScheme(record.nonDevScheme || '');
     setReplenishmentDetails(record?.replenishment_details || '');
 
+    // ✅ preselect species + counts
     setSpeciesIds(Array.isArray(record.species_ids) ? record.species_ids : []);
     setSpeciesCounts(record?.species_counts || {});
 
@@ -657,6 +697,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         : [''];
     setGpsList(manual);
 
+    // images: keep empty local uris; existing are in record.pictures
     setPictureUris([]);
     setModalVisible(true);
 
@@ -667,7 +708,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     }
   };
 
-  // ---------- IMAGE PICKER (Gallery + Camera + Permission Handling) ----------
+  // ---------- IMAGE PICKER ----------
   const openAppSettings = () => {
     Alert.alert(
       'Permission Required',
@@ -720,8 +761,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     const assets = res.assets || [];
     const uris = assets.map(a => a?.uri).filter(Boolean);
 
-    // Replace behavior (same as your previous implementation)
-    // If you want append behavior, use: setPictureUris(prev => [...(prev||[]), ...uris]);
+    // Replace behavior
     if (uris.length) setPictureUris(uris);
   };
 
@@ -731,7 +771,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       {
         mediaType: 'photo',
         quality: 0.7,
-        selectionLimit: 0, // 0 = multiple
+        selectionLimit: 0,
       },
       onImagePickerResult,
     );
@@ -757,7 +797,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     );
   };
 
-  // Entry point from UI button
   const pickImage = () => {
     setImagePickerModal(true);
   };
@@ -895,7 +934,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       return;
     }
 
-    // ✅ Validate per-species counts
+    // Validate per-species counts
     for (const sid of speciesIds) {
       const v = speciesCounts[String(sid)];
       const n = Number(String(v || '').replace(/[^\d]/g, ''));
@@ -933,13 +972,16 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       setUploading(false);
     }
 
-    // ✅ species payload exactly like curl
+    // ✅ payload for add/edit
+    // Your response shows server returns afforestationSpecies array.
+    // For submit, the backend previously accepted "species: [{species_id,count}]" in your code.
+    // We keep that format unless your backend requires a different key.
     const speciesPayload = speciesIds.map(sid => ({
       species_id: Number(sid),
       count: Number(String(speciesCounts[String(sid)] || '').replace(/[^\d]/g, '')),
     }));
 
-    // ✅ main_species: using first selected species name (you can also add a dedicated input if your backend requires)
+    // main_species: keep first selected name if available
     const firstSpecies = speciesRows.find(x => Number(x.id) === Number(speciesIds[0]));
     const mainSpeciesName = firstSpecies?.name ? String(firstSpecies.name) : '';
 
@@ -959,7 +1001,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       manual_lat: manualLat,
       manual_long: manualLng,
 
-      pictures: uploadedUrls,
+      pictures: uploadedUrls, // if none selected, send []
       species: speciesPayload,
     };
 
@@ -1042,10 +1084,12 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       const speciesCountsText = (() => {
         const ids = Array.isArray(r.species_ids) ? r.species_ids : [];
         const counts = r?.species_counts || {};
+        const apiNames = r?.species_names_map || {};
+
         return ids
           .map(sid => {
-            const row = speciesRows.find(x => Number(x.id) === Number(sid));
-            const name = row?.name || `Species ${sid}`;
+            const master = speciesRows.find(x => Number(x.id) === Number(sid));
+            const name = master?.name || apiNames[String(sid)] || `Species ${sid}`;
             const c = counts[String(sid)] ?? '';
             return `${name}:${c}`;
           })
@@ -1073,7 +1117,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     });
   }, [records, search, filters, speciesRows]);
 
-  // ✅ Show Actions column ONLY if at least one rejected record in filtered list
+  // Show Actions column ONLY if at least one rejected record in filtered list
   const showActionsColumn = useMemo(() => {
     const hasRejected = filteredRecords.some(r => deriveRowUi(r).isRejected);
     return hasRejected;
@@ -1272,12 +1316,13 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   const speciesCountsText = (() => {
                     const ids = Array.isArray(r.species_ids) ? r.species_ids : [];
                     const counts = r?.species_counts || {};
+                    const apiNames = r?.species_names_map || {};
                     if (!ids.length) return '—';
 
                     return ids
                       .map(sid => {
-                        const row = speciesRows.find(x => Number(x.id) === Number(sid));
-                        const name = row?.name || `Species ${sid}`;
+                        const master = speciesRows.find(x => Number(x.id) === Number(sid));
+                        const name = master?.name || apiNames[String(sid)] || `Species ${sid}`;
                         const c = counts[String(sid)] ?? '0';
                         return `${name}: ${c}`;
                       })
@@ -1285,7 +1330,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   })();
 
                   return (
-                    <View key={r.id} style={rowStyle}>
+                    <View key={String(r.id)} style={rowStyle}>
                       <View style={[styles.tdCell, {width: 80}]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.serverId || '—')}
@@ -1349,7 +1394,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      {/* ✅ Status Cell with clickable rejection */}
+                      {/* Status Cell with clickable rejection */}
                       <View style={[styles.tdCell, {width: 220}]}>
                         {ui.isRejected ? (
                           <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
@@ -1370,7 +1415,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                         )}
                       </View>
 
-                      {/* ✅ Actions Column */}
+                      {/* Actions Column */}
                       {showActionsColumn && (
                         <View style={[styles.tdCell, styles.actionsCell, {width: 100}]}>
                           {allowActions ? (
@@ -1402,7 +1447,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         </View>
       </TouchableOpacity>
 
-      {/* ✅ Image Picker Modal (Camera / Gallery) */}
+      {/* Image Picker Modal */}
       <Modal
         transparent
         visible={imagePickerModal}
@@ -1481,7 +1526,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         </View>
       </Modal>
 
-      {/* ✅ Rejection Reason Modal */}
+      {/* Rejection Reason Modal */}
       <Modal
         transparent
         visible={rejectionModal.visible}
@@ -1781,12 +1826,12 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   <Text style={styles.formSectionTitle}>Basic Information</Text>
 
                   <FormRow
-                    label="Average Miles/KM"
+                    label="Avenue Miles/KM"
                     value={avgMilesKm}
                     onChangeText={setAvgMilesKm}
                     keyboardType="numeric"
                     required
-                    placeholder="Enter average miles or kilometers"
+                    placeholder="Enter Avenue miles or kilometers"
                   />
 
                   <View style={styles.fieldWithButton}>
@@ -1806,7 +1851,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     )}
                   </View>
 
-                  {/* ✅ Per-species counts */}
+                  {/* Per-species counts */}
                   {speciesIds.length > 0 && (
                     <View style={{marginTop: 6}}>
                       <Text
@@ -2049,7 +2094,7 @@ const styles = StyleSheet.create({
   // Header
   header: {
     backgroundColor: COLORS.primary,
-    paddingTop: Platform.OS === 'ios' ? 50 : StatusBar.currentHeight + 20,
+    paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 20,
     paddingBottom: 20,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
@@ -2152,12 +2197,24 @@ const styles = StyleSheet.create({
 
   // Section
   section: {marginHorizontal: 20, marginBottom: 20},
-  sectionHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
   sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
 
   // Loading State
-  loadingState: {backgroundColor: '#fff', borderRadius: 16, padding: 40, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border},
+  loadingState: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 40,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
   loadingText: {fontSize: 14, color: COLORS.textLight, marginTop: 12, fontWeight: '600'},
 
   // Empty State
@@ -2189,7 +2246,13 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  tableHeader: {flexDirection: 'row', backgroundColor: 'rgba(5, 150, 105, 0.05)', borderBottomWidth: 1, borderBottomColor: COLORS.border, minHeight: 56},
+  tableHeader: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    minHeight: 56,
+  },
   thCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
   thText: {fontSize: 12, fontWeight: '800', color: COLORS.text, textTransform: 'uppercase', letterSpacing: 0.5},
   tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
@@ -2199,7 +2262,12 @@ const styles = StyleSheet.create({
   tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
   tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
   multiLineCell: {fontSize: 12, fontWeight: '700', color: COLORS.text, lineHeight: 18},
-  gpsText: {fontSize: 11, fontWeight: '600', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+  gpsText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.text,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   schemeBadge: {paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, alignSelf: 'flex-start'},
   schemeText: {fontSize: 12, fontWeight: '800'},
 
@@ -2259,7 +2327,15 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 10,
   },
-  modalHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 20, borderBottomWidth: 1, borderBottomColor: COLORS.border},
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
   modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
   modalTitle: {fontSize: 20, fontWeight: '800', color: COLORS.text},
   modalClose: {width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(31, 41, 55, 0.05)', alignItems: 'center', justifyContent: 'center'},

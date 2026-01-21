@@ -61,6 +61,9 @@ const AFFORESTATION_EDIT_URL = id => `${API_5000}/enum/afforestation/${id}`;
 const API_3000 = API_HOST;
 const AFFORESTATION_LIST_URL = `${API_3000}/enum/afforestation/user-site-wise-afforestion`;
 
+// ✅ AUDIT ROUTE NAME (make sure you register this screen in navigator)
+const AUDIT_LIST_SCREEN = 'AfforestationAuditListScreen';
+
 const AWS_UPLOAD_URL = 'https://app.eco.gisforestry.com/aws-bucket/tree-enum';
 const AWS_UPLOAD_PATH = 'Afforestation';
 
@@ -91,6 +94,9 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
   // ✅ editingId stores SERVER ID for PATCH
   const [editingId, setEditingId] = useState(null);
+
+  // ✅ Keep server pictures when editing (so we don't overwrite with [])
+  const [existingPictures, setExistingPictures] = useState([]);
 
   // ✅ Rejection popup state
   const [rejectionModal, setRejectionModal] = useState({
@@ -285,6 +291,14 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     return null;
   };
 
+  const toIdArray = v => {
+    if (!v) return [];
+    const arr = Array.isArray(v) ? v : [v];
+    return arr
+      .map(x => Number(x))
+      .filter(n => Number.isFinite(n) && n > 0);
+  };
+
   const resolveNameOfSiteId = useCallback(() => {
     const p = route?.params || {};
     const e = enumeration || {};
@@ -433,8 +447,9 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   const speciesLabel = useMemo(() => {
     if (!speciesIds.length) return 'Select species';
 
+    const idsNum = speciesIds.map(Number).filter(n => Number.isFinite(n));
     const namesFromMaster = speciesRows
-      .filter(x => speciesIds.includes(Number(x.id)))
+      .filter(x => idsNum.includes(Number(x.id)))
       .map(x => x.name)
       .filter(Boolean);
 
@@ -453,7 +468,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     if (!Number.isFinite(num)) return;
 
     setSpeciesIds(prev => {
-      const set = new Set(prev.map(Number));
+      const set = new Set((prev || []).map(Number).filter(n => Number.isFinite(n)));
       const next = new Set(set);
 
       if (next.has(num)) next.delete(num);
@@ -499,12 +514,12 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
     const species_ids = latestSpecies
       .map(x => Number(x?.species_id))
-      .filter(n => Number.isFinite(n));
+      .filter(n => Number.isFinite(n) && n > 0);
 
     const species_counts = {};
     latestSpecies.forEach(x => {
       const sid = Number(x?.species_id);
-      if (!Number.isFinite(sid)) return;
+      if (!Number.isFinite(sid) || sid <= 0) return;
       species_counts[String(sid)] = String(x?.count ?? '');
     });
 
@@ -512,7 +527,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     const species_names_map = {};
     latestSpecies.forEach(x => {
       const sid = Number(x?.species_id);
-      if (!Number.isFinite(sid)) return;
+      if (!Number.isFinite(sid) || sid <= 0) return;
       const nm = String(x?.name || '').trim();
       if (nm) species_names_map[String(sid)] = nm;
     });
@@ -613,6 +628,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   const resetFormForAdd = () => {
     setIsEdit(false);
     setEditingId(null);
+    setExistingPictures([]);
 
     setAvgMilesKm('');
     setYear('');
@@ -685,9 +701,23 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     setNonDevScheme(record.nonDevScheme || '');
     setReplenishmentDetails(record?.replenishment_details || '');
 
-    // ✅ preselect species + counts
-    setSpeciesIds(Array.isArray(record.species_ids) ? record.species_ids : []);
-    setSpeciesCounts(record?.species_counts || {});
+    // ✅ keep existing server pictures so PATCH doesn't wipe them
+    const serverPics = Array.isArray(record?.pictures) ? record.pictures : [];
+    setExistingPictures(serverPics);
+
+    // ✅ HARD FIX: normalize IDs to numbers so auto-select works
+    const idsNum = toIdArray(record?.species_ids);
+    setSpeciesIds(idsNum);
+
+    // ✅ ensure counts exist for all selected species
+    const incomingCounts = record?.species_counts || {};
+    const normalizedCounts = {...incomingCounts};
+    idsNum.forEach(x => {
+      const k = String(x);
+      if (normalizedCounts[k] === undefined || normalizedCounts[k] === null) normalizedCounts[k] = '';
+      normalizedCounts[k] = String(normalizedCounts[k]);
+    });
+    setSpeciesCounts(normalizedCounts);
 
     setAutoGps(record.autoGpsLatLong || '');
 
@@ -697,7 +727,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         : [''];
     setGpsList(manual);
 
-    // images: keep empty local uris; existing are in record.pictures
+    // images: local selection resets
     setPictureUris([]);
     setModalVisible(true);
 
@@ -707,6 +737,38 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       setTimeout(() => fetchAutoGps(true), 300);
     }
   };
+
+  // ✅ OPEN AUDIT (for ALL records currently; later we can restrict to Final Approved)
+ const openAuditForRecord = (record) => {
+   const afforestationId = Number(record?.serverId ?? record?.id ?? record?.serverRaw?.id);
+
+   // speciesSnapshot build کریں (plantedCount لازمی > 0 ورنہ Audit screen filter کر کے ہٹا دے گی)
+   const speciesSnapshot = (Array.isArray(record?.species_ids) ? record.species_ids : [])
+     .map((sid) => {
+       const plantedCount = Number(
+         String(record?.species_counts?.[String(sid)] ?? '').replace(/[^\d]/g, '')
+       );
+
+       const name =
+         record?.species_names_map?.[String(sid)] ||
+         record?.speciesDetails?.find?.((x) => Number(x?.id) === Number(sid))?.name ||
+         `Species ${sid}`;
+
+       return {
+         species_id: Number(sid),
+         name,
+         plantedCount: Number.isFinite(plantedCount) ? plantedCount : 0,
+       };
+     })
+     .filter((x) => Number.isFinite(x.species_id) && x.species_id > 0 && x.plantedCount > 0);
+
+   navigation.navigate('AfforestationAuditListScreen', {
+     afforestationId,
+     record,          // ✅ یہی key چاہیے Audit screen کو
+     speciesSnapshot, // ✅ یہی key چاہیے Audit screen کو
+   });
+ };
+
 
   // ---------- IMAGE PICKER ----------
   const openAppSettings = () => {
@@ -972,10 +1034,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       setUploading(false);
     }
 
-    // ✅ payload for add/edit
-    // Your response shows server returns afforestationSpecies array.
-    // For submit, the backend previously accepted "species: [{species_id,count}]" in your code.
-    // We keep that format unless your backend requires a different key.
     const speciesPayload = speciesIds.map(sid => ({
       species_id: Number(sid),
       count: Number(String(speciesCounts[String(sid)] || '').replace(/[^\d]/g, '')),
@@ -984,6 +1042,12 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     // main_species: keep first selected name if available
     const firstSpecies = speciesRows.find(x => Number(x.id) === Number(speciesIds[0]));
     const mainSpeciesName = firstSpecies?.name ? String(firstSpecies.name) : '';
+
+    // ✅ Do not wipe existing pictures on edit if user didn't select new ones
+    const finalPictures =
+      isEdit && (!pictureUris || pictureUris.length === 0)
+        ? (Array.isArray(existingPictures) ? existingPictures : [])
+        : uploadedUrls;
 
     const apiBody = {
       nameOfSiteId: Number(nameOfSiteId),
@@ -1001,7 +1065,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       manual_lat: manualLat,
       manual_long: manualLng,
 
-      pictures: uploadedUrls, // if none selected, send []
+      pictures: finalPictures,
       species: speciesPayload,
     };
 
@@ -1117,11 +1181,14 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     });
   }, [records, search, filters, speciesRows]);
 
-  // Show Actions column ONLY if at least one rejected record in filtered list
+  // Show Actions column ONLY if at least one rejected record in filtered list (kept as-is)
   const showActionsColumn = useMemo(() => {
     const hasRejected = filteredRecords.some(r => deriveRowUi(r).isRejected);
     return hasRejected;
   }, [filteredRecords]);
+
+  // ✅ AUDIT COLUMN: for now ALWAYS show (no restriction)
+  const showAuditColumn = true;
 
   const tableColumns = useMemo(() => {
     const base = [
@@ -1134,8 +1201,10 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       {label: 'Auto GPS', width: 200},
       {label: 'GPS List', width: 250},
       {label: 'Status', width: 220},
+      // ✅ Audit column always
+      {label: 'Audit', width: 120},
     ];
-    if (showActionsColumn) base.push({label: 'Actions', width: 100});
+    if (showActionsColumn) base.push({label: 'Actions', width: 110});
     return base;
   }, [showActionsColumn]);
 
@@ -1415,9 +1484,24 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                         )}
                       </View>
 
+                      {/* ✅ Audit Column (shows for ALL records now) */}
+                      {showAuditColumn && (
+                        <View style={[styles.tdCell, styles.actionsCell, {width: 120}]}>
+                          <TouchableOpacity
+                            style={[styles.actionButton, {backgroundColor: 'rgba(22, 163, 74, 0.10)'}]}
+                            onPress={() => openAuditForRecord(r)}
+                            activeOpacity={0.7}>
+                            <Ionicons name="clipboard-outline" size={16} color={COLORS.success} />
+                            <Text style={[styles.actionButtonText, {color: COLORS.success}]}>
+                              Audit
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+
                       {/* Actions Column */}
                       {showActionsColumn && (
-                        <View style={[styles.tdCell, styles.actionsCell, {width: 100}]}>
+                        <View style={[styles.tdCell, styles.actionsCell, {width: 110}]}>
                           {allowActions ? (
                             <TouchableOpacity
                               style={styles.actionButton}
@@ -1735,7 +1819,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                 <>
                   <ScrollView style={styles.speciesList} showsVerticalScrollIndicator={false}>
                     {speciesRows.map(row => {
-                      const checked = speciesIds.includes(Number(row.id));
+                      const checked = (speciesIds || []).map(Number).includes(Number(row.id));
                       return (
                         <TouchableOpacity
                           key={String(row.id)}
@@ -1808,6 +1892,12 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   </Text>
                   {isEdit && editingId && (
                     <Text style={styles.editModalSubtitle}>Record ID: {editingId}</Text>
+                  )}
+                  {isEdit && Array.isArray(existingPictures) && existingPictures.length > 0 && (
+                    <Text style={[styles.editModalSubtitle, {marginTop: 4}]}>
+                      Existing Images: {existingPictures.length}
+                      {pictureUris?.length ? ` • New Selected: ${pictureUris.length}` : ''}
+                    </Text>
                   )}
                 </View>
                 <TouchableOpacity
@@ -2042,6 +2132,20 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                       </View>
                       <Text style={styles.imagePreviewText} numberOfLines={1}>
                         Ready for upload
+                      </Text>
+                    </View>
+                  )}
+
+                  {isEdit && pictureUris.length === 0 && existingPictures.length > 0 && (
+                    <View style={[styles.imagePreview, {marginTop: 10, backgroundColor: 'rgba(14,165,233,0.08)', borderColor: 'rgba(14,165,233,0.20)'}]}>
+                      <View style={styles.imagePreviewHeader}>
+                        <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
+                        <Text style={[styles.imagePreviewTitle, {color: COLORS.secondary}]}>
+                          Keeping existing images ({existingPictures.length})
+                        </Text>
+                      </View>
+                      <Text style={styles.imagePreviewText} numberOfLines={1}>
+                        Select new images only if you want to replace them
                       </Text>
                     </View>
                   )}

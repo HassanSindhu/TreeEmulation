@@ -1409,7 +1409,17 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 160}]}>
+                      <View style={[styles.tdCell, styles.actionsCell, {width: 420}]}>
+
+                      <TouchableOpacity
+                        style={[styles.actionButton, {backgroundColor: 'rgba(5,150,105,0.10)'}]}
+                        onPress={() => navigation.navigate('PoleCropAuditScreen', {poleCrop: r})}
+                        activeOpacity={0.7}>
+                        <Ionicons name="clipboard-outline" size={16} color={COLORS.primary} />
+                        <Text style={[styles.actionButtonText, {color: COLORS.primary}]}>Audit</Text>
+                      </TouchableOpacity>
+
+
                         {canEdit ? (
                           <TouchableOpacity
                             style={styles.actionButton}

@@ -53,6 +53,8 @@ const TREE_ENUM_FILE_NAME = 'chan';
 // Navigator names
 const SUPERDARI_ROUTE = 'Superdari';
 const DISPOSAL_ROUTE = 'Disposal';
+const AUDIT_ROUTE = 'EnumerationAudit';
+
 
 // Image rules
 const MIN_IMAGES = 1;
@@ -1440,7 +1442,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     {label: 'Auto GPS', width: 180},
                     {label: 'Manual GPS', width: 180},
                     {label: 'Status', width: 220},
-                    {label: 'Actions', width: 320},
+                    {label: 'Actions', width: 420},
                   ].map((col, idx) => (
                     <View key={idx} style={[styles.thCell, {width: col.width}]}>
                       <Text style={styles.thText}>{col.label}</Text>
@@ -1532,13 +1534,23 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
                       <View style={[styles.tdCell, styles.actionsCell, {width: 320}]}>
                         {ui.showEdit && (
-                          <TouchableOpacity
-                            style={styles.actionButton}
-                            onPress={() => openEditFormServer(r)}>
+                          <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
                             <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.actionButtonText}>Edit</Text>
                           </TouchableOpacity>
                         )}
+
+                        {/* ✅ NEW: Audit */}
+                            <TouchableOpacity
+                              style={[styles.actionPill, {backgroundColor: COLORS.secondary}]}
+                              onPress={() =>
+                                navigateSafe(AUDIT_ROUTE, {
+                                  enumerationId: r.id,      // <-- used by audit api payload
+                                  enumeration: r,           // <-- for auto takki + defaults
+                                })
+                              }>
+                              <Text style={styles.actionPillText}>Audit</Text>
+                            </TouchableOpacity>
 
                         {ui.showPills && (
                           <>
@@ -1560,6 +1572,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                           </>
                         )}
                       </View>
+
                     </View>
                   );
                 })}

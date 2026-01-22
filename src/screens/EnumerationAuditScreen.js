@@ -1,5 +1,5 @@
 // /screens/EnumerationAuditScreen.js
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
   View,
   Text,
@@ -35,18 +35,17 @@ const API_BASE = 'http://be.lte.gisforestry.com';
 // ---- CONDITIONS (adjust if your project has a different endpoint) ----
 const CONDITIONS_URL = `${API_BASE}/forest-tree-conditions`;
 
-// ---- AUDIT ENDPOINTS (from your cURL) ----
+// ---- AUDIT ENDPOINTS ----
 const AUDIT_CREATE_URL = `${API_BASE}/enum/enumeration-audit`; // POST
-const AUDIT_GET_ONE_URL = id => `${API_BASE}/enum/enumeration-audit/${id}`; // GET single (you shared)
-const AUDIT_PATCH_URL = id => `${API_BASE}/enum/enumeration-audit/${id}`; // PATCH single (you shared)
+const AUDIT_GET_ONE_URL = id => `${API_BASE}/enum/enumeration-audit/${id}`; // GET single (kept for fallback)
 
-// ---- OPTIONAL HISTORY ENDPOINTS (if present in backend) ----
-// If your backend supports history, one of these usually exists.
-// We try them and fallback to single record.
-const AUDIT_HISTORY_BY_ENUM_URL = enumerationId =>
-  `${API_BASE}/enum/enumeration-audit/by-enumeration/${enumerationId}`;
-const AUDIT_HISTORY_QUERY_URL = enumerationId =>
-  `${API_BASE}/enum/enumeration-audit?enumerationId=${encodeURIComponent(enumerationId)}`;
+// ✅ NEW: HISTORY ENDPOINT (as per your cURL)
+// last number is enumeration/tree id coming from previous page
+const AUDIT_HISTORY_BY_ENUMERATION_ID_URL = enumerationId =>
+  `${API_BASE}/enum/enumeration-audit/get-all-audits-of-enumeration/${enumerationId}`;
+
+// ---- PATCH ENDPOINT (if your backend supports PATCH by audit id) ----
+const AUDIT_PATCH_URL = id => `${API_BASE}/enum/enumeration-audit/${id}`; // PATCH single
 
 // ---- UPLOAD (same infra you used previously) ----
 const BUCKET_UPLOAD_URL = 'https://app.eco.gisforestry.com/aws-bucket/tree-enum';
@@ -152,6 +151,7 @@ const ensureCameraOnlyPermission = async () => {
 };
 
 export default function EnumerationAuditScreen({navigation, route}) {
+  // ✅ enumerationId/treeId from previous page (this is the “44” in your cURL)
   const enumerationId = route?.params?.enumerationId ?? route?.params?.treeId ?? null;
   const enumeration = route?.params?.enumeration ?? null;
 
@@ -280,46 +280,49 @@ export default function EnumerationAuditScreen({navigation, route}) {
   };
 
   // Upload
-  const uploadImages = useCallback(async assets => {
-    if (!assets?.length) return [];
+  const uploadImages = useCallback(
+    async assets => {
+      if (!assets?.length) return [];
 
-    const net = await NetInfo.fetch();
-    const online = !!net.isConnected && (net.isInternetReachable ?? true);
-    if (!online) throw new Error('No internet connection. Please connect and try again.');
+      const net = await NetInfo.fetch();
+      const online = !!net.isConnected && (net.isInternetReachable ?? true);
+      if (!online) throw new Error('No internet connection. Please connect and try again.');
 
-    const fd = new FormData();
-    const fileName = `audit_${enumerationId}_${Date.now()}`;
+      const fd = new FormData();
+      const fileName = `audit_${enumerationId}_${Date.now()}`;
 
-    assets.slice(0, MAX_IMAGES).forEach((a, idx) => {
-      if (!a?.uri) return;
-      fd.append('files', {
-        uri: a.uri,
-        type: a.type || 'image/jpeg',
-        name: a.fileName || `${fileName}_${idx}.jpg`,
+      assets.slice(0, MAX_IMAGES).forEach((a, idx) => {
+        if (!a?.uri) return;
+        fd.append('files', {
+          uri: a.uri,
+          type: a.type || 'image/jpeg',
+          name: a.fileName || `${fileName}_${idx}.jpg`,
+        });
       });
-    });
 
-    fd.append('uploadPath', BUCKET_UPLOAD_PATH);
-    fd.append('isMulti', BUCKET_IS_MULTI);
-    fd.append('fileName', fileName);
+      fd.append('uploadPath', BUCKET_UPLOAD_PATH);
+      fd.append('isMulti', BUCKET_IS_MULTI);
+      fd.append('fileName', fileName);
 
-    const token = await getAuthToken();
-    const res = await fetch(BUCKET_UPLOAD_URL, {
-      method: 'POST',
-      headers: token ? {Authorization: `Bearer ${token}`} : undefined,
-      body: fd,
-    });
+      const token = await getAuthToken();
+      const res = await fetch(BUCKET_UPLOAD_URL, {
+        method: 'POST',
+        headers: token ? {Authorization: `Bearer ${token}`} : undefined,
+        body: fd,
+      });
 
-    const json = await safeJson(res);
-    if (!res.ok) {
-      throw new Error(json?.message || json?.error || `Upload failed (${res.status})`);
-    }
+      const json = await safeJson(res);
+      if (!res.ok) {
+        throw new Error(json?.message || json?.error || `Upload failed (${res.status})`);
+      }
 
-    const urls = extractUploadUrls(json);
-    return urls.slice(0, MAX_IMAGES);
-  }, [enumerationId]);
+      const urls = extractUploadUrls(json);
+      return urls.slice(0, MAX_IMAGES);
+    },
+    [enumerationId],
+  );
 
-  // History fetch (tries list endpoints first, fallback to single)
+  // ✅ UPDATED: History fetch uses your new cURL endpoint
   const fetchAuditHistory = useCallback(async () => {
     if (!enumerationId) return;
 
@@ -330,53 +333,26 @@ export default function EnumerationAuditScreen({navigation, route}) {
 
       const headers = {Authorization: `Bearer ${token}`};
 
-      // Try list endpoints (if backend supports)
-      const tryUrls = [
-        AUDIT_HISTORY_BY_ENUM_URL(enumerationId),
-        AUDIT_HISTORY_QUERY_URL(enumerationId),
-      ];
+      // This matches: /enum/enumeration-audit/get-all-audits-of-enumeration/44
+      const url = AUDIT_HISTORY_BY_ENUMERATION_ID_URL(enumerationId);
+      const res = await fetch(url, {method: 'GET', headers});
 
-      let list = null;
-      for (const u of tryUrls) {
-        try {
-          const res = await fetch(u, {method: 'GET', headers});
-          if (!res.ok) continue;
-          const json = await safeJson(res);
-          const arr = normalizeList(json);
-          if (Array.isArray(arr) && arr.length) {
-            list = arr;
-            break;
-          }
-          // If backend returns empty array, we still accept it
-          if (Array.isArray(arr)) {
-            list = arr;
-            break;
-          }
-        } catch {
-          // ignore and continue
-        }
+      if (res.status === 404) {
+        setAuditHistory([]);
+        return;
       }
 
-      // Fallback: treat enumerationId as the audit id (single record)
-      if (list === null) {
-        const res = await fetch(AUDIT_GET_ONE_URL(enumerationId), {method: 'GET', headers});
-
-        if (res.status === 404) {
-          setAuditHistory([]);
-          return;
-        }
-        const json = await safeJson(res);
-        if (!res.ok) {
-          throw new Error(json?.message || `Audit load failed (${res.status})`);
-        }
-        const one = json?.data ?? json;
-        list = one ? [one] : [];
+      const json = await safeJson(res);
+      if (!res.ok) {
+        throw new Error(json?.message || `Audit history load failed (${res.status})`);
       }
 
-      // Normalize minimal fields
+      // backend may return {data:[...]} or directly [...]
+      const list = normalizeList(json);
+
       const normalized = (list || []).map(a => ({
         id: a?.id ?? a?._id ?? null,
-        enumerationId: a?.enumerationId ?? a?.enumeration_id ?? null,
+        enumerationId: a?.enumerationId ?? a?.enumeration_id ?? enumerationId,
         year: a?.year ?? '',
         actual_girth: a?.actual_girth ?? a?.actualGirth ?? '',
         condition_id: a?.condition_id ?? a?.conditionId ?? a?.condition?.id ?? null,
@@ -390,30 +366,64 @@ export default function EnumerationAuditScreen({navigation, route}) {
       normalized.sort((x, y) => new Date(y.dateOfAudit || 0) - new Date(x.dateOfAudit || 0));
       setAuditHistory(normalized);
     } catch (e) {
-      Alert.alert('Error', e?.message || 'Failed to load audit history.');
-      setAuditHistory([]);
+      // Fallback (optional): if your new endpoint fails, you can still attempt single GET
+      try {
+        const token = await getAuthToken();
+        if (!token) throw new Error('Missing AUTH_TOKEN');
+
+        const headers = {Authorization: `Bearer ${token}`};
+        const res = await fetch(AUDIT_GET_ONE_URL(enumerationId), {method: 'GET', headers});
+        if (res.status === 404) {
+          setAuditHistory([]);
+          return;
+        }
+        const json = await safeJson(res);
+        if (!res.ok) throw new Error(json?.message || `Audit load failed (${res.status})`);
+        const one = json?.data ?? json;
+        const list = one ? [one] : [];
+
+        const normalized = (list || []).map(a => ({
+          id: a?.id ?? a?._id ?? null,
+          enumerationId: a?.enumerationId ?? a?.enumeration_id ?? enumerationId,
+          year: a?.year ?? '',
+          actual_girth: a?.actual_girth ?? a?.actualGirth ?? '',
+          condition_id: a?.condition_id ?? a?.conditionId ?? a?.condition?.id ?? null,
+          pictures: Array.isArray(a?.pictures) ? a.pictures : [],
+          additionalRemarks: a?.additionalRemarks ?? a?.additional_remarks ?? '',
+          isDisputed: !!(a?.isDisputed ?? a?.is_disputed),
+          dateOfAudit: a?.dateOfAudit ?? a?.date_of_audit ?? a?.updated_at ?? a?.created_at ?? null,
+          raw: a,
+        }));
+        setAuditHistory(normalized);
+      } catch (fallbackErr) {
+        Alert.alert('Error', fallbackErr?.message || e?.message || 'Failed to load audit history.');
+        setAuditHistory([]);
+      }
     } finally {
       setHistoryLoading(false);
     }
   }, [enumerationId]);
 
-  const loadAuditIntoForm = useCallback(audit => {
-    if (!audit) return;
+  const loadAuditIntoForm = useCallback(
+    audit => {
+      if (!audit) return;
 
-    setEditingAuditId(audit.id || null);
-    setYear(String(audit.year || yearOptions[0] || ''));
-    setActualGirth(String(audit.actual_girth || ''));
-    setAdditionalRemarks(String(audit.additionalRemarks || ''));
-    setIsDisputed(!!audit.isDisputed);
-    setDateOfAudit(String(audit.dateOfAudit || new Date().toISOString()));
+      setEditingAuditId(audit.id || null);
+      setYear(String(audit.year || yearOptions[0] || ''));
+      setActualGirth(String(audit.actual_girth || ''));
+      setAdditionalRemarks(String(audit.additionalRemarks || ''));
+      setIsDisputed(!!audit.isDisputed);
+      setDateOfAudit(String(audit.dateOfAudit || new Date().toISOString()));
 
-    if (audit.condition_id != null) setConditionId(audit.condition_id);
+      if (audit.condition_id != null) setConditionId(audit.condition_id);
 
-    // images: treat as already uploaded URLs
-    const pics = (audit.pictures || []).slice(0, MAX_IMAGES);
-    setUploadedUrls(pics);
-    setLocalAssets([]);
-  }, [yearOptions]);
+      // images: treat as already uploaded URLs
+      const pics = (audit.pictures || []).slice(0, MAX_IMAGES);
+      setUploadedUrls(pics);
+      setLocalAssets([]);
+    },
+    [yearOptions],
+  );
 
   // Image pickers
   const totalSelected = useMemo(() => {
@@ -557,7 +567,6 @@ export default function EnumerationAuditScreen({navigation, route}) {
     if (!token) throw new Error('Missing AUTH_TOKEN');
     if (!id) throw new Error('Missing audit id for update.');
 
-    // PATCH should accept partial, but we send full for consistency
     const res = await fetch(AUDIT_PATCH_URL(id), {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
@@ -583,10 +592,10 @@ export default function EnumerationAuditScreen({navigation, route}) {
         Alert.alert('Success', 'Audit created successfully.');
       }
 
-      // Refresh list
+      // Refresh list (uses new endpoint)
       await fetchAuditHistory();
 
-      // Reset to New mode (optional UX). If you want to keep editing record, remove this line.
+      // Reset to New mode
       resetToNew();
     } catch (e) {
       Alert.alert('Save Failed', e?.message || 'Failed to save audit.');
@@ -602,7 +611,6 @@ export default function EnumerationAuditScreen({navigation, route}) {
   }, [fetchConditions]);
 
   useEffect(() => {
-    // initial defaults for new audit
     resetToNew();
   }, [resetToNew]);
 
@@ -661,7 +669,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
           </View>
         </View>
 
-        {/* HISTORY LIST (like follow-ups) */}
+        {/* HISTORY LIST */}
         <View style={styles.card}>
           <View style={styles.rowBetween}>
             <Text style={styles.sectionTitle}>Audit History</Text>
@@ -712,13 +720,12 @@ export default function EnumerationAuditScreen({navigation, route}) {
                   </View>
 
                   {!!a.pictures?.length && (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 10}}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={{marginTop: 10}}>
                       {a.pictures.slice(0, 4).map((uri, i) => (
-                        <Image
-                          key={`${uri}_${i}`}
-                          source={{uri}}
-                          style={styles.thumb}
-                        />
+                        <Image key={`${uri}_${i}`} source={{uri}} style={styles.thumb} />
                       ))}
                     </ScrollView>
                   )}
@@ -794,7 +801,10 @@ export default function EnumerationAuditScreen({navigation, route}) {
 
           {/* IMAGES */}
           <View style={{marginTop: 14}}>
-            <TouchableOpacity style={styles.imgBtn} onPress={showImageMenu} disabled={loading || uploading}>
+            <TouchableOpacity
+              style={styles.imgBtn}
+              onPress={showImageMenu}
+              disabled={loading || uploading}>
               <Ionicons name="camera-outline" size={22} color={COLORS.primary} />
               <View style={{flex: 1}}>
                 <Text style={styles.imgBtnTitle}>Add / Change Images</Text>
@@ -849,7 +859,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
         </View>
       </ScrollView>
 
-      {/* VIEW MODAL (like details modal) */}
+      {/* VIEW MODAL */}
       <Modal
         visible={detailsModal}
         transparent
@@ -871,11 +881,18 @@ export default function EnumerationAuditScreen({navigation, route}) {
 
               <ScrollView style={{padding: 16}} showsVerticalScrollIndicator={false}>
                 <Text style={styles.mRow}>Year: {selectedAuditForView?.year || '—'}</Text>
-                <Text style={styles.mRow}>Actual Girth: {selectedAuditForView?.actual_girth || '—'}</Text>
-                <Text style={styles.mRow}>Is Disputed: {selectedAuditForView?.isDisputed ? 'Yes' : 'No'}</Text>
+                <Text style={styles.mRow}>
+                  Actual Girth: {selectedAuditForView?.actual_girth || '—'}
+                </Text>
+                <Text style={styles.mRow}>
+                  Is Disputed: {selectedAuditForView?.isDisputed ? 'Yes' : 'No'}
+                </Text>
                 <Text style={styles.mRow}>Date: {fmtDateTime(selectedAuditForView?.dateOfAudit)}</Text>
                 <Text style={styles.mRow}>
-                  Remarks: {selectedAuditForView?.additionalRemarks ? selectedAuditForView.additionalRemarks : '—'}
+                  Remarks:{' '}
+                  {selectedAuditForView?.additionalRemarks
+                    ? selectedAuditForView.additionalRemarks
+                    : '—'}
                 </Text>
 
                 {!!selectedAuditForView?.pictures?.length && (
@@ -1030,7 +1047,13 @@ const styles = StyleSheet.create({
   removeX: {position: 'absolute', top: 2, right: 2, backgroundColor: '#fff', borderRadius: 12},
 
   saveBtn: {marginTop: 16, borderRadius: 16, overflow: 'hidden'},
-  saveGrad: {flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, paddingVertical: 14},
+  saveGrad: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 14,
+  },
   saveText: {color: '#fff', fontWeight: '900', fontSize: 15},
 
   // modal

@@ -29,8 +29,11 @@ const API_HOST = 'http://be.lte.gisforestry.com';
 
 // Endpoints
 const AFF_AUDIT_CREATE_URL = `${API_HOST}/enum/afforestation-audit`;
-const AFF_AUDIT_BY_AFF_URL = afforestationId =>
-  `${API_HOST}/enum/afforestation-audit/by-afforestation/${afforestationId}`;
+
+// ✅ UPDATED GET API (as per your curl)
+// curl: /enum/afforestation-audit/get-all-audits-of-afforestation/13
+const AFF_AUDIT_LIST_URL = afforestationId =>
+  `${API_HOST}/enum/afforestation-audit/get-all-audits-of-afforestation/${afforestationId}`;
 
 // AWS Upload
 const AWS_UPLOAD_URL = 'https://app.eco.gisforestry.com/aws-bucket/tree-enum';
@@ -54,10 +57,16 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
+// ✅ more robust normalize
 const normalizeList = json => {
   if (!json) return [];
   if (Array.isArray(json)) return json;
-  if (typeof json === 'object' && Array.isArray(json.data)) return json.data;
+
+  if (typeof json === 'object') {
+    if (Array.isArray(json.data)) return json.data;
+    if (json.data && Array.isArray(json.data.data)) return json.data.data;
+  }
+
   return [];
 };
 
@@ -181,6 +190,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
     const uris = assets.map(a => a?.uri).filter(Boolean);
     if (!uris.length) return;
 
+    // NOTE: overwrite (same as your original). If you want append, tell me.
     if (imageTarget === 'pictures') setPicturesUris(uris);
     if (imageTarget === 'drEvidence') setDrEvidenceUris(uris);
     if (imageTarget === 'firEvidence') setFirEvidenceUris(uris);
@@ -302,7 +312,9 @@ export default function AfforestationAuditScreen({navigation, route}) {
         const token = await getAuthToken();
         if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-        const res = await fetch(AFF_AUDIT_BY_AFF_URL(afforestationId), {
+        // ✅ UPDATED GET URL
+        const res = await fetch(AFF_AUDIT_LIST_URL(afforestationId), {
+          method: 'GET',
           headers: {Authorization: `Bearer ${token}`},
         });
 
@@ -732,7 +744,6 @@ export default function AfforestationAuditScreen({navigation, route}) {
                     placeholder="2025-01-13T10:00:00Z"
                   />
 
-                  {/* OPTIONAL */}
                   <FormRowLite
                     label="Not Success Reason (Optional)"
                     value={notSuccessReason}

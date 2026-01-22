@@ -33,11 +33,6 @@ import {DropdownRow} from '../components/SelectRows';
 
 const {height} = Dimensions.get('window');
 
-/**
- * IMPORTANT
- * - For production you are using: http://be.lte.gisforestry.com
- * - For local testing like your curl: http://localhost:3000 (or 5000)
- */
 const API_BASE = 'http://be.lte.gisforestry.com';
 
 // Lists / enums
@@ -58,12 +53,14 @@ const TREE_ENUM_FILE_NAME = 'chan';
 // Navigator names
 const SUPERDARI_ROUTE = 'Superdari';
 const DISPOSAL_ROUTE = 'Disposal';
+const AUDIT_ROUTE = 'EnumerationAudit';
 
-// Image rules you requested
+
+// Image rules
 const MIN_IMAGES = 1;
 const MAX_IMAGES = 4;
 
-// ✅ Species "Other" behavior
+// Species "Other"
 const SPECIES_OTHER = 'Other';
 
 // Theme Colors
@@ -106,8 +103,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     dateTo: '',
     kmFrom: '',
     kmTo: '',
-    takkiFrom: '', // ✅ added
-    takkiTo: '', // ✅ added
+    takkiFrom: '',
+    takkiTo: '',
   });
 
   const [speciesRows, setSpeciesRows] = useState([]);
@@ -124,11 +121,11 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const [condition, setCondition] = useState('');
   const [conditionId, setConditionId] = useState(null);
 
-  // ✅ NEW: when user selects Other
+  // Other species create
   const [customSpeciesName, setCustomSpeciesName] = useState('');
   const [creatingSpecies, setCreatingSpecies] = useState(false);
 
-  // ✅ NEW FIELDS
+  // Extra fields (snake_case align)
   const [takkiNumber, setTakkiNumber] = useState('');
   const [additionalRemarks, setAdditionalRemarks] = useState('');
   const [isDisputed, setIsDisputed] = useState(false);
@@ -139,12 +136,10 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const [gpsSource, setGpsSource] = useState('');
   const [gpsFetching, setGpsFetching] = useState(false);
 
-  // Multi Image + upload state
-  const [pictureAssets, setPictureAssets] = useState([]); // local selected assets (not uploaded yet)
+  const [pictureAssets, setPictureAssets] = useState([]);
   const [uploadingImages, setUploadingImages] = useState(false);
-  const [uploadedImageUrls, setUploadedImageUrls] = useState([]); // existing/after-upload URLs
+  const [uploadedImageUrls, setUploadedImageUrls] = useState([]);
 
-  // ✅ Rejection popup state
   const [rejectionModal, setRejectionModal] = useState({
     visible: false,
     rejectedBy: '',
@@ -169,7 +164,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     return opts;
   }, [enumeration?.rdFrom, enumeration?.rdTo, enumeration?.rd_from, enumeration?.rd_to]);
 
-  // ---------- SIDE RULE (show dropdown only if BOTH) ----------
+  // ---------- SIDE RULE ----------
   const siteSideRaw = useMemo(() => {
     return (
       enumeration?.side ||
@@ -198,7 +193,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     return t || '';
   };
 
-  const getNameOfSiteId = () => enumeration?.name_of_site_id ?? enumeration?.id ?? null;
+  // NOTE: enumeration can be "site object"; safest mapping:
+  const getNameOfSiteId = () =>
+    enumeration?.name_of_site_id ?? enumeration?.nameOfSiteId ?? enumeration?.id ?? null;
 
   const formatLatLng = (latitude, longitude) =>
     `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`;
@@ -225,7 +222,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   };
 
-  // ✅ SAFER NAVIGATION
   const navigateSafe = useCallback(
     (screenName, params) => {
       if (!screenName) return;
@@ -245,7 +241,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
       Alert.alert(
         'Navigation Error',
-        `Screen "${screenName}" is not registered in the current navigator.\n\nFix:\n• Ensure you added "${screenName}" in your Stack/Drawer navigator.\n• Or update SUPERDARI_ROUTE/DISPOSAL_ROUTE constants to match your navigator screen name.`,
+        `Screen "${screenName}" is not registered.\n\nFix:\n• Add "${screenName}" in navigator\n• Or update constants SUPERDARI_ROUTE/DISPOSAL_ROUTE.`,
       );
     },
     [navigation],
@@ -441,7 +437,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
   };
 
-  // ---------- CAMERA PERMISSION + PICKER MENU ----------
+  // ---------- CAMERA PERMISSION ----------
   const openAppSettings = async () => {
     try {
       await Linking.openSettings();
@@ -617,14 +613,17 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         refresh ? setServerRefreshing(false) : setServerLoading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [enumeration],
   );
 
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
-      const res = await fetch(SPECIES_URL);
+
+      const token = await getAuthToken();
+      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+
+      const res = await fetch(SPECIES_URL, {headers});
       const json = await safeJson(res);
       const rows = normalizeList(json);
 
@@ -714,7 +713,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   }, []);
 
-  // ✅ Create new species when user selects Other
+  // Create new species
   const createSpecies = useCallback(async () => {
     const name = String(customSpeciesName || '').trim();
     if (!name) {
@@ -748,8 +747,11 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
       const json = await safeJson(res);
 
-      if (res.status === 201 && json?.data?.id) {
-        const created = {id: json.data.id, name: json.data.name || name};
+      if ((res.status === 201 || res.ok) && (json?.data?.id || json?.id)) {
+        const createdId = json?.data?.id ?? json?.id;
+        const createdName = json?.data?.name ?? json?.name ?? name;
+
+        const created = {id: createdId, name: createdName};
 
         setSpeciesRows(prev => {
           const base = Array.isArray(prev) ? prev : [];
@@ -781,19 +783,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         const msg =
           json?.message || 'The entered specie is already present in dropdown please select it';
         Alert.alert('Already exists', msg);
-
         await fetchSpecies();
-
-        const refreshedMatch = speciesRows.find(
-          s => String(s?.name || '').trim().toLowerCase() === name.toLowerCase(),
-        );
-        if (refreshedMatch?.id) {
-          setSpecies(refreshedMatch.name);
-          setSpeciesId(refreshedMatch.id);
-          setCustomSpeciesName('');
-          return refreshedMatch.id;
-        }
-
         return null;
       }
 
@@ -934,13 +924,20 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setCondition('');
     setConditionId(row?.condition_id ?? null);
 
-    // ✅ takki number can be in different key names; normalize best-effort
+    // takki_number normalize
     const t =
-      row?.takkiNumber ?? row?.takki_number ?? row?.takki_no ?? row?.takki ?? row?.takkiNum ?? '';
+      row?.takki_number ??
+      row?.takkiNumber ??
+      row?.takki_no ??
+      row?.takki ??
+      row?.takkiNum ??
+      '';
     setTakkiNumber(t != null ? String(t) : '');
 
-    setAdditionalRemarks(String(row?.additionalRemarks ?? row?.additional_remarks ?? ''));
-    setIsDisputed(!!row?.isDisputed);
+    setAdditionalRemarks(
+      String(row?.additional_remarks ?? row?.additionalRemarks ?? '').trim(),
+    );
+    setIsDisputed(!!(row?.is_disputed ?? row?.isDisputed));
 
     const rowSide = String(row?.side || '').trim();
     if (rowSide) setSide(rowSide);
@@ -960,7 +957,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     setGpsSource(manual ? 'MANUAL' : auto ? 'GPS' : '');
 
     setPictureAssets([]);
-    setUploadedImageUrls(Array.isArray(row?.pictures) ? row.pictures.slice(0, MAX_IMAGES) : []);
+    const pics = Array.isArray(row?.pictures) ? row.pictures : [];
+    setUploadedImageUrls(pics.slice(0, MAX_IMAGES));
 
     setModalVisible(true);
   };
@@ -1022,7 +1020,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       return Alert.alert('Missing', 'Please select RD/KM from dropdown');
     }
 
-    // ✅ side validation (only if BOTH)
+    // side validation (only if BOTH)
     let finalSide = side;
     if (showSideDropdown) {
       if (!finalSide || (finalSide !== 'Left' && finalSide !== 'Right')) {
@@ -1033,17 +1031,15 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       else if (sideMode === 'right') finalSide = 'Right';
     }
 
-    // ✅ takkiNumber validation (numeric if filled)
+    // takki_number validation (numeric if filled)
     const tn = String(takkiNumber || '').trim();
     const takkiNumberValue = tn ? Number(tn) : null;
     if (tn && !Number.isFinite(takkiNumberValue)) {
       return Alert.alert('Invalid', 'Takki Number must be numeric');
     }
 
-    // ✅ Resolve species id
-    let finalSpeciesId = speciesId ?? (speciesRows.find(x => x.namesameName === species)?.id ?? null);
-    // Fix: speciesRows uses {id, name}. Above line should be:
-    finalSpeciesId = speciesId ?? (speciesRows.find(x => x.name === species)?.id ?? null);
+    // Resolve species id
+    let finalSpeciesId = speciesId ?? (speciesRows.find(x => x.name === species)?.id ?? null);
 
     if (species === SPECIES_OTHER) {
       const newId = await createSpecies();
@@ -1053,7 +1049,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
     if (!finalSpeciesId) return Alert.alert('Missing', 'Species is required');
 
-    // ✅ Resolve condition id
+    // Resolve condition id
     const finalConditionId =
       conditionId ?? (conditionRows.find(x => x.name === condition)?.id ?? null);
     if (!finalConditionId) return Alert.alert('Missing', 'Condition is required');
@@ -1109,17 +1105,18 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       return Alert.alert('Images Required', 'Image upload did not return URLs. Please try again.');
     }
 
-    // ✅ build body per your curl schema
+    // Build body aligned to latest API style (snake_case)
     const apiBody = {
       name_of_site_id: Number(siteId),
+      rd_km: rdKmNumber,
       species_id: Number(finalSpeciesId),
       girth: girth ? String(girth) : '',
       condition_id: Number(finalConditionId),
-      rd_km: rdKmNumber,
 
-      isDisputed: !!isDisputed,
-      additionalRemarks: String(additionalRemarks || '').trim(),
-      ...(takkiNumberValue != null ? {takkiNumber: takkiNumberValue} : {}),
+      // extras (snake_case)
+      is_disputed: !!isDisputed,
+      additional_remarks: String(additionalRemarks || '').trim(),
+      ...(takkiNumberValue != null ? {takki_number: takkiNumberValue} : {}),
       ...(finalSide ? {side: finalSide} : {}),
 
       pictures,
@@ -1178,13 +1175,15 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         (r?.condition_id != null ? conditionById.get(String(r.condition_id)) : null) ||
         (r?.condition_id != null ? `#${r.condition_id}` : '—');
 
-      // ✅ normalize takkiNumber to always exist as r.takkiNumber for UI + filters
       const t =
-        r?.takkiNumber ?? r?.takki_number ?? r?.takki_no ?? r?.takki ?? r?.takkiNum ?? null;
+        r?.takki_number ?? r?.takkiNumber ?? r?.takki_no ?? r?.takki ?? r?.takkiNum ?? null;
+
+      const pics = Array.isArray(r?.pictures) ? r.pictures : [];
 
       return {
         ...r,
-        takkiNumber: t, // ✅ normalized
+        pictures: pics, // normalize
+        takkiNumber: t, // normalized for UI/search/filter
         _speciesLabel: sp,
         _conditionLabel: cond,
         _autoGps:
@@ -1227,7 +1226,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     const kmF = filters.kmFrom !== '' ? Number(filters.kmFrom) : null;
     const kmT = filters.kmTo !== '' ? Number(filters.kmTo) : null;
 
-    // ✅ Takki range
     const tkF = filters.takkiFrom !== '' ? Number(filters.takkiFrom) : null;
     const tkT = filters.takkiTo !== '' ? Number(filters.takkiTo) : null;
 
@@ -1256,7 +1254,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         if (kmT !== null && num > kmT) return false;
       }
 
-      // ✅ Takki filter (From/To)
       if (tkF !== null || tkT !== null) {
         const num = Number(r?.takkiNumber);
         if (!Number.isFinite(num)) return false;
@@ -1270,7 +1267,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       const blob = [
         r?.id,
         r?.rd_km,
-        r?.takkiNumber, // ✅ searchable
+        r?.takkiNumber,
         r?._speciesLabel,
         r?._conditionLabel,
         r?._autoGps,
@@ -1279,9 +1276,10 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         r?.created_at,
         ui?.statusText,
         r?.nameOfSite?.site_name,
+        r?.additional_remarks,
         r?.additionalRemarks,
         r?.side,
-        String(r?.isDisputed),
+        String(r?.is_disputed ?? r?.isDisputed),
       ]
         .filter(v => v !== null && v !== undefined)
         .join(' ')
@@ -1437,14 +1435,14 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   {[
                     {label: 'ID', width: 80},
                     {label: 'RD/KM', width: 90},
-                    {label: 'Takki #', width: 100}, // ✅ added
+                    {label: 'Takki #', width: 100},
                     {label: 'Species', width: 140},
                     {label: 'Condition', width: 140},
                     {label: 'Girth', width: 100},
                     {label: 'Auto GPS', width: 180},
                     {label: 'Manual GPS', width: 180},
                     {label: 'Status', width: 220},
-                    {label: 'Actions', width: 320},
+                    {label: 'Actions', width: 420},
                   ].map((col, idx) => (
                     <View key={idx} style={[styles.thCell, {width: col.width}]}>
                       <Text style={styles.thText}>{col.label}</Text>
@@ -1476,7 +1474,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      {/* ✅ Takki Number cell */}
                       <View style={[styles.tdCell, {width: 100}]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {r?.takkiNumber != null && String(r.takkiNumber).trim() !== ''
@@ -1515,7 +1512,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      {/* Clickable status only if rejected */}
                       <View style={[styles.tdCell, {width: 220}]}>
                         {ui.isRejected ? (
                           <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
@@ -1538,13 +1534,23 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
                       <View style={[styles.tdCell, styles.actionsCell, {width: 320}]}>
                         {ui.showEdit && (
-                          <TouchableOpacity
-                            style={styles.actionButton}
-                            onPress={() => openEditFormServer(r)}>
+                          <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
                             <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.actionButtonText}>Edit</Text>
                           </TouchableOpacity>
                         )}
+
+                        {/* ✅ NEW: Audit */}
+                            <TouchableOpacity
+                              style={[styles.actionPill, {backgroundColor: COLORS.secondary}]}
+                              onPress={() =>
+                                navigateSafe(AUDIT_ROUTE, {
+                                  enumerationId: r.id,      // <-- used by audit api payload
+                                  enumeration: r,           // <-- for auto takki + defaults
+                                })
+                              }>
+                              <Text style={styles.actionPillText}>Audit</Text>
+                            </TouchableOpacity>
 
                         {ui.showPills && (
                           <>
@@ -1566,6 +1572,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                           </>
                         )}
                       </View>
+
                     </View>
                   );
                 })}
@@ -1668,7 +1675,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   </View>
                 </View>
 
-                {/* ✅ Takki Number filter row */}
                 <View style={styles.filterRow}>
                   <View style={styles.filterColumn}>
                     <FormRow
@@ -1817,7 +1823,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled">
 
-                {/* ✅ Takki Number on TOP */}
                 <FormRow
                   label="Takki Number"
                   value={takkiNumber}
@@ -1826,7 +1831,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   keyboardType="numeric"
                 />
 
-                {/* ✅ Side dropdown only if BOTH */}
                 {showSideDropdown && (
                   <DropdownRow
                     label="Side"
@@ -1838,7 +1842,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   />
                 )}
 
-                {/* RD/KM */}
                 <DropdownRow
                   label="RD/KM"
                   value={rdKm}
@@ -1850,7 +1853,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   searchPlaceholder="Search RD/KM..."
                 />
 
-                {/* ✅ Species (searchable + Other) */}
                 <DropdownRow
                   label={speciesLoading ? 'Species (Loading...)' : 'Species'}
                   value={species}
@@ -1874,7 +1876,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   searchPlaceholder="Search species..."
                 />
 
-                {/* ✅ Show input when Other */}
                 {species === SPECIES_OTHER && (
                   <View style={{marginHorizontal: 4, marginBottom: 12}}>
                     <Text style={{fontSize: 14, color: '#374151', marginBottom: 6, fontWeight: '600'}}>
@@ -1933,7 +1934,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   searchPlaceholder="Search condition..."
                 />
 
-                {/* ✅ Additional Remarks */}
                 <FormRow
                   label="Additional Remarks"
                   value={additionalRemarks}
@@ -1941,7 +1941,6 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                   placeholder="e.g. Located near the river bank"
                 />
 
-                {/* ✅ Is Disputed BELOW Additional Remarks */}
                 <View style={styles.switchRow}>
                   <View style={{flex: 1}}>
                     <Text style={styles.switchLabel}>Is Disputed</Text>

@@ -21,6 +21,11 @@ import AfforestationRecordsScreen from '../screens/AfforestationRecordsScreen';
 
 import DisposalScreen from '../screens/DisposalScreen';
 import SuperdariScreen from '../screens/SuperdariScreen';
+import EnumerationAuditScreen from '../screens/EnumerationAuditScreen';
+import PoleCropAuditScreen from '../screens/PoleCropAuditScreen';
+
+import AfforestationAuditListScreen from '../screens/AfforestationAuditListScreen';
+
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -80,9 +85,18 @@ function MainStack({role}) {
 
       <Stack.Screen name="Disposal" component={DisposalScreen} />
       <Stack.Screen name="Superdari" component={SuperdariScreen} />
+
+      <Stack.Screen name="EnumerationAudit" component={EnumerationAuditScreen} />
+      <Stack.Screen name="PoleCropAuditScreen" component={PoleCropAuditScreen} />
+      <Stack.Screen
+              name="AfforestationAuditListScreen"
+              component={AfforestationAuditListScreen}
+            />
+
     </Stack.Navigator>
   );
 }
+
 
 function AuthStack() {
   return (

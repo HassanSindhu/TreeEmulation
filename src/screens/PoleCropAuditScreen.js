@@ -43,6 +43,7 @@ import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 
 import FormRow from '../components/FormRow';
 import DateField from '../components/DateField';
+import { DropdownRow } from '../components/SelectRows';
 
 const { width, height } = Dimensions.get('window');
 
@@ -1000,11 +1001,12 @@ export default function PoleCropAuditScreen({ navigation, route }) {
                     placeholder="Select Date"
                   />
 
-                  <FormRow
+                  <DropdownRow
                     label="Not Success Reason"
                     value={notSuccessReason}
-                    onChangeText={setNotSuccessReason}
-                    placeholder="e.g. Failure"
+                    options={['Failure', 'Damage']}
+                    onChange={setNotSuccessReason}
+                    placeholder="Select Reason"
                   />
 
                   <FormRow

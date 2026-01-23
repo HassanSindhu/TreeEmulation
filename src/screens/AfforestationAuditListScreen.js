@@ -29,9 +29,6 @@ const API_HOST = 'http://be.lte.gisforestry.com';
 
 // Endpoints
 const AFF_AUDIT_CREATE_URL = `${API_HOST}/enum/afforestation-audit`;
-
-// ✅ UPDATED GET API (as per your curl)
-// curl: /enum/afforestation-audit/get-all-audits-of-afforestation/13
 const AFF_AUDIT_LIST_URL = afforestationId =>
   `${API_HOST}/enum/afforestation-audit/get-all-audits-of-afforestation/${afforestationId}`;
 
@@ -57,7 +54,7 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
-// ✅ more robust normalize
+// ✅ robust list normalize
 const normalizeList = json => {
   if (!json) return [];
   if (Array.isArray(json)) return json;
@@ -82,9 +79,39 @@ const safeNumber = v => {
 
 const isoNow = () => new Date().toISOString();
 
+// ✅ remove empty keys (omit fields like Postman)
+const cleanPayload = obj =>
+  Object.fromEntries(
+    Object.entries(obj).filter(([_, v]) => {
+      if (v === undefined) return false;
+      if (v === '') return false;
+      if (Array.isArray(v) && v.length === 0) return false;
+      return true;
+    }),
+  );
+
+// ✅ if backend expects file names (like curl: ["audit_pic1.jpg"])
+const toBasename = u => {
+  const s = String(u || '');
+  const noQuery = s.split('?')[0];
+  const lastSlash = noQuery.lastIndexOf('/');
+  return lastSlash >= 0 ? noQuery.substring(lastSlash + 1) : noQuery;
+};
+
+// ✅ better error visibility (text + json)
+const fetchJsonOrText = async res => {
+  const text = await res.text().catch(() => '');
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch (_) {
+    json = null;
+  }
+  return {text, json};
+};
+
 export default function AfforestationAuditScreen({navigation, route}) {
   /**
-   * ✅ IMPORTANT:
    * This screen MUST be opened from previous screen using:
    * navigation.navigate('AfforestationAudit', { afforestationId, record, speciesSnapshot })
    *
@@ -190,7 +217,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
     const uris = assets.map(a => a?.uri).filter(Boolean);
     if (!uris.length) return;
 
-    // NOTE: overwrite (same as your original). If you want append, tell me.
+    // NOTE: overwrite
     if (imageTarget === 'pictures') setPicturesUris(uris);
     if (imageTarget === 'drEvidence') setDrEvidenceUris(uris);
     if (imageTarget === 'firEvidence') setFirEvidenceUris(uris);
@@ -312,15 +339,14 @@ export default function AfforestationAuditScreen({navigation, route}) {
         const token = await getAuthToken();
         if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-        // ✅ UPDATED GET URL
         const res = await fetch(AFF_AUDIT_LIST_URL(afforestationId), {
           method: 'GET',
           headers: {Authorization: `Bearer ${token}`},
         });
 
-        const json = await res.json().catch(() => null);
+        const {json, text} = await fetchJsonOrText(res);
         if (!res.ok) {
-          const msg = json?.message || json?.error || `API Error (${res.status})`;
+          const msg = json?.message || json?.error || text || `API Error (${res.status})`;
           throw new Error(msg);
         }
 
@@ -413,11 +439,11 @@ export default function AfforestationAuditScreen({navigation, route}) {
       }
     }
 
+    // Keep these checks (your UX choice), but payload will still be consistent.
     if (fineImposed && safeNumber(fineAmount) <= 0) {
       Alert.alert('Missing', 'Fine Amount is required because Fine Imposed is true.');
       return;
     }
-
     if (firRegistered && !String(firNumber || '').trim()) {
       Alert.alert('Missing', 'FIR Number is required because FIR Registered is true.');
       return;
@@ -454,26 +480,46 @@ export default function AfforestationAuditScreen({navigation, route}) {
         });
       }
 
-      // ✅ Payload exactly matching your curl keys
-      const payload = {
+      // ✅ IMPORTANT FIX:
+      // Backend appears to accept filenames in arrays (like your curl).
+      // Convert returned URLs to basenames to match backend expectation.
+      const picturesFinal = picturesUrls.map(toBasename).filter(Boolean);
+      const drEvidenceFinal = drEvidenceUrls.map(toBasename).filter(Boolean);
+      const firEvidenceFinal = firEvidenceUrls.map(toBasename).filter(Boolean);
+
+      // ✅ Payload: omit empty optional fields (match Postman behavior)
+      const payload = cleanPayload({
         afforestationId: Number(afforestationId),
         dateOfAudit: String(dateOfAudit || isoNow()),
         speciesSuccessCounts: speciesSnapshot.map(s => ({
           species_id: Number(s.species_id),
           successCount: safeNumber(successCounts[String(s.species_id)]),
         })),
-        notSuccessReason: String(notSuccessReason || ''), // OPTIONAL
-        additionalRemarks: String(additionalRemarks || ''),
-        drNo: String(drNo || ''),
-        drDate: drDate ? String(drDate) : null,
-        drEvidence: drEvidenceUrls,
+
+        // Optional strings: omit if empty
+        notSuccessReason: notSuccessReason?.trim() ? notSuccessReason.trim() : undefined,
+        additionalRemarks: additionalRemarks?.trim() ? additionalRemarks.trim() : undefined,
+        drNo: drNo?.trim() ? drNo.trim() : undefined,
+
+        // Dates: omit if empty (or backend may prefer null; omit is safest)
+        drDate: drDate?.trim() ? drDate.trim() : undefined,
+
+        // Evidence arrays: omit if empty
+        drEvidence: drEvidenceFinal.length ? drEvidenceFinal : undefined,
+        firEvidence: firEvidenceFinal.length ? firEvidenceFinal : undefined,
+        pictures: picturesFinal.length ? picturesFinal : undefined,
+
+        // Booleans can remain (safe)
         fineImposed: !!fineImposed,
-        fineAmount: fineImposed ? safeNumber(fineAmount) : 0,
         firRegistered: !!firRegistered,
-        firNumber: firRegistered ? String(firNumber || '') : null,
-        firEvidence: firEvidenceUrls,
-        pictures: picturesUrls,
-      };
+
+        // Conditional: ONLY include when true (avoid sending 0 / null noise)
+        fineAmount: fineImposed ? safeNumber(fineAmount) : undefined,
+        firNumber: firRegistered ? (firNumber?.trim() ? firNumber.trim() : undefined) : undefined,
+      });
+
+      // ✅ Debug: see exact payload going to backend
+      console.log('AFF AUDIT payload:', JSON.stringify(payload, null, 2));
 
       const res = await fetch(AFF_AUDIT_CREATE_URL, {
         method: 'POST',
@@ -484,9 +530,10 @@ export default function AfforestationAuditScreen({navigation, route}) {
         body: JSON.stringify(payload),
       });
 
-      const json = await res.json().catch(() => null);
+      const {json, text} = await fetchJsonOrText(res);
       if (!res.ok) {
-        const msg = json?.message || json?.error || `API Error (${res.status})`;
+        console.log('AFF AUDIT HTTP', res.status, text);
+        const msg = json?.message || json?.error || text || `API Error (${res.status})`;
         throw new Error(msg);
       }
 
@@ -548,7 +595,6 @@ export default function AfforestationAuditScreen({navigation, route}) {
             tintColor={COLORS.primary}
           />
         }>
-
         {!speciesSnapshot.length ? (
           <View style={styles.emptyBox}>
             <Ionicons name="alert-circle-outline" size={56} color={COLORS.warning} />
@@ -733,7 +779,6 @@ export default function AfforestationAuditScreen({navigation, route}) {
                 style={styles.editModalBody}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled">
-
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Audit Details</Text>
 

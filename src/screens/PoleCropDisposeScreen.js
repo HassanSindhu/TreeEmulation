@@ -5,7 +5,7 @@
 // ✅ Supports pictures upload to AWS bucket (same service as your other screens)
 // ✅ Conditional fields for Auction (only when auction=true)
 
-import React, {useCallback, useMemo, useRef, useState} from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -26,9 +26,10 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import DateField from '../components/DateField';
 
-const {height} = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 const COLORS = {
   primary: '#059669',
@@ -63,12 +64,12 @@ const toFormFile = asset => {
     asset?.fileName ||
     `polecrop_disposal_${Date.now()}${asset?.type?.includes('png') ? '.png' : '.jpg'}`;
   const type = asset?.type || 'image/jpeg';
-  return {uri, name, type};
+  return { uri, name, type };
 };
 
 const isISODate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim());
 
-export default function PoleCropDisposeScreen({navigation, route}) {
+export default function PoleCropDisposeScreen({ navigation, route }) {
   const poleCrop = route?.params?.poleCrop;
 
   const poleCropId = useMemo(() => poleCrop?.id ?? null, [poleCrop]);
@@ -127,7 +128,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
     lastPickAtRef.current = now;
 
     launchImageLibrary(
-      {mediaType: 'photo', quality: 0.85, selectionLimit: 0},
+      { mediaType: 'photo', quality: 0.85, selectionLimit: 0 },
       res => {
         if (res?.didCancel) return;
         if (res?.errorCode) {
@@ -162,7 +163,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
     }
 
     launchCamera(
-      {mediaType: 'photo', quality: 0.85, saveToPhotos: false, cameraType: 'back'},
+      { mediaType: 'photo', quality: 0.85, saveToPhotos: false, cameraType: 'back' },
       res => {
         if (res?.didCancel) return;
         if (res?.errorCode) {
@@ -191,7 +192,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
       form.append('isMulti', BUCKET_IS_MULTI);
       form.append('fileName', BUCKET_FILE_NAME);
 
-      const res = await fetch(BUCKET_UPLOAD_URL, {method: 'POST', body: form});
+      const res = await fetch(BUCKET_UPLOAD_URL, { method: 'POST', body: form });
       const json = await res.json().catch(() => null);
 
       if (!res.ok || !json?.status) {
@@ -227,11 +228,11 @@ export default function PoleCropDisposeScreen({navigation, route}) {
 
     // If provided, enforce ISO format (avoid backend rejects)
     const datePairs = [
-      {label: 'DR Date', value: drDate},
-      {label: 'DPC Date', value: dpcDate},
-      {label: 'FIR Date', value: firDate},
-      {label: 'Act Date', value: actDate},
-      {label: 'Auction Date', value: auctionDate},
+      { label: 'DR Date', value: drDate },
+      { label: 'DPC Date', value: dpcDate },
+      { label: 'FIR Date', value: firDate },
+      { label: 'Act Date', value: actDate },
+      { label: 'Auction Date', value: auctionDate },
     ];
 
     for (const d of datePairs) {
@@ -300,7 +301,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
 
       const res = await fetch(DISPOSAL_URL, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
       });
 
@@ -312,7 +313,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
       }
 
       Alert.alert('Success', 'Pole crop disposal submitted successfully.', [
-        {text: 'OK', onPress: () => navigation.goBack()},
+        { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (e) {
       Alert.alert('Error', e?.message || 'Failed to submit disposal');
@@ -330,7 +331,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
-        <View style={{flex: 1}}>
+        <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Pole Crop Disposal</Text>
           <Text style={styles.headerSub}>
             PoleCrop ID: {String(poleCropId ?? '—')} | RDS: {String(poleCrop?.rds_from ?? '—')} -{' '}
@@ -340,18 +341,18 @@ export default function PoleCropDisposeScreen({navigation, route}) {
       </View>
 
       <KeyboardAvoidingView
-        style={{flex: 1}}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
           {/* Document Numbers */}
           <Card title="Disposal References">
             <Row>
               <Field label="DR No" value={drNo} onChangeText={setDrNo} placeholder="PC-DR-999" />
-              <Field
-                label="DR Date (YYYY-MM-DD)"
+              <DateField
+                label="DR Date"
                 value={drDate}
-                onChangeText={setDrDate}
-                placeholder="2024-02-01"
+                onChange={(d) => setDrDate(d.toISOString().split('T')[0])}
+                placeholder="Select Date"
               />
             </Row>
 
@@ -361,23 +362,23 @@ export default function PoleCropDisposeScreen({navigation, route}) {
             </Row>
 
             <Row>
-              <Field
-                label="DPC Date (YYYY-MM-DD)"
+              <DateField
+                label="DPC Date"
                 value={dpcDate}
-                onChangeText={setDpcDate}
-                placeholder="2024-01-31"
+                onChange={(d) => setDpcDate(d.toISOString().split('T')[0])}
+                placeholder="Select Date"
               />
               <Field label="FIR No" value={firNo} onChangeText={setFirNo} placeholder="PC-FIR-666" />
             </Row>
 
             <Row>
-              <Field
-                label="FIR Date (YYYY-MM-DD)"
+              <DateField
+                label="FIR Date"
                 value={firDate}
-                onChangeText={setFirDate}
-                placeholder="2024-01-30"
+                onChange={(d) => setFirDate(d.toISOString().split('T')[0])}
+                placeholder="Select Date"
               />
-              <View style={{flex: 1}} />
+              <View style={{ flex: 1 }} />
             </Row>
 
             <Field
@@ -415,13 +416,13 @@ export default function PoleCropDisposeScreen({navigation, route}) {
             </Row>
 
             <Row>
-              <Field
-                label="Act Date (YYYY-MM-DD)"
+              <DateField
+                label="Act Date"
                 value={actDate}
-                onChangeText={setActDate}
-                placeholder="2024-01-29"
+                onChange={(d) => setActDate(d.toISOString().split('T')[0])}
+                placeholder="Select Date"
               />
-              <View style={{flex: 1}} />
+              <View style={{ flex: 1 }} />
             </Row>
 
             <Field
@@ -447,13 +448,13 @@ export default function PoleCropDisposeScreen({navigation, route}) {
                   multiline
                 />
                 <Row>
-                  <Field
-                    label="Auction Date (YYYY-MM-DD)"
+                  <DateField
+                    label="Auction Date"
                     value={auctionDate}
-                    onChangeText={setAuctionDate}
-                    placeholder="2024-02-10"
+                    onChange={(d) => setAuctionDate(d.toISOString().split('T')[0])}
+                    placeholder="Select Date"
                   />
-                  <View style={{flex: 1}} />
+                  <View style={{ flex: 1 }} />
                 </Row>
 
                 <Row>
@@ -513,10 +514,10 @@ export default function PoleCropDisposeScreen({navigation, route}) {
                   {pickedAssets.length} image(s) selected. Upload Path: {BUCKET_UPLOAD_PATH}
                 </Text>
 
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 12}}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
                   {pickedAssets.map((a, i) => (
                     <View key={a?.uri || i} style={styles.thumbWrap}>
-                      <Image source={{uri: a?.uri}} style={styles.thumb} />
+                      <Image source={{ uri: a?.uri }} style={styles.thumb} />
                     </View>
                   ))}
                 </ScrollView>
@@ -527,7 +528,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
           </Card>
 
           {/* Submit */}
-          <View style={{height: 14}} />
+          <View style={{ height: 14 }} />
 
           <TouchableOpacity
             style={[styles.submitBtn, (saving || uploading) && styles.submitBtnDisabled]}
@@ -549,7 +550,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
             )}
           </TouchableOpacity>
 
-          <View style={{height: 26}} />
+          <View style={{ height: 26 }} />
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -558,7 +559,7 @@ export default function PoleCropDisposeScreen({navigation, route}) {
 
 /* ===================== SMALL UI COMPONENTS ===================== */
 
-function Card({title, children}) {
+function Card({ title, children }) {
   return (
     <View style={styles.card}>
       <View style={styles.cardHead}>
@@ -569,7 +570,7 @@ function Card({title, children}) {
   );
 }
 
-function Row({children}) {
+function Row({ children }) {
   return <View style={styles.row}>{children}</View>;
 }
 
@@ -597,7 +598,7 @@ function Field({
   );
 }
 
-function SwitchRow({label, value, onValueChange}) {
+function SwitchRow({ label, value, onValueChange }) {
   return (
     <View style={styles.switchRow}>
       <Text style={styles.switchLabel}>{label}</Text>
@@ -609,7 +610,7 @@ function SwitchRow({label, value, onValueChange}) {
 /* ===================== STYLES ===================== */
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.bg},
+  screen: { flex: 1, backgroundColor: COLORS.bg },
 
   header: {
     backgroundColor: COLORS.primary,
@@ -623,7 +624,7 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 22,
     elevation: 8,
     shadowColor: COLORS.primaryDark,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
     shadowRadius: 10,
   },
@@ -635,10 +636,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {color: '#fff', fontSize: 20, fontWeight: '900'},
-  headerSub: {color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700', marginTop: 4},
+  headerTitle: { color: '#fff', fontSize: 20, fontWeight: '900' },
+  headerSub: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700', marginTop: 4 },
 
-  body: {padding: 16, paddingBottom: 28},
+  body: { padding: 16, paddingBottom: 28 },
 
   card: {
     backgroundColor: COLORS.card,
@@ -655,12 +656,12 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     backgroundColor: 'rgba(5,150,105,0.06)',
   },
-  cardTitle: {fontSize: 13, fontWeight: '900', color: COLORS.text},
-  cardBody: {padding: 14},
+  cardTitle: { fontSize: 13, fontWeight: '900', color: COLORS.text },
+  cardBody: { padding: 14 },
 
-  row: {flexDirection: 'row', gap: 12},
-  field: {flex: 1, marginBottom: 12},
-  label: {fontSize: 12, fontWeight: '800', color: COLORS.text, marginBottom: 6},
+  row: { flexDirection: 'row', gap: 12 },
+  field: { flex: 1, marginBottom: 12 },
+  label: { fontSize: 12, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
   input: {
     height: 46,
     borderWidth: 1,
@@ -672,7 +673,7 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     backgroundColor: '#fff',
   },
-  inputMulti: {height: 88, paddingTop: 12, textAlignVertical: 'top'},
+  inputMulti: { height: 88, paddingTop: 12, textAlignVertical: 'top' },
 
   switchRow: {
     flexDirection: 'row',
@@ -681,11 +682,11 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     marginBottom: 10,
   },
-  switchLabel: {fontSize: 13, fontWeight: '900', color: COLORS.text},
+  switchLabel: { fontSize: 13, fontWeight: '900', color: COLORS.text },
 
-  muted: {fontSize: 12, fontWeight: '700', color: COLORS.textLight, marginTop: 6},
+  muted: { fontSize: 12, fontWeight: '700', color: COLORS.textLight, marginTop: 6 },
 
-  picActions: {flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap'},
+  picActions: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   picBtn: {
     backgroundColor: COLORS.secondary,
     borderRadius: 12,
@@ -704,7 +705,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  picBtnText: {color: '#fff', fontSize: 12, fontWeight: '900'},
+  picBtnText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   picClear: {
     backgroundColor: 'rgba(220,38,38,0.06)',
     borderWidth: 1,
@@ -716,8 +717,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  picClearText: {color: COLORS.danger, fontSize: 12, fontWeight: '900'},
-  picHint: {marginTop: 10, fontSize: 12, fontWeight: '800', color: COLORS.textLight},
+  picClearText: { color: COLORS.danger, fontSize: 12, fontWeight: '900' },
+  picHint: { marginTop: 10, fontSize: 12, fontWeight: '800', color: COLORS.textLight },
 
   thumbWrap: {
     width: 92,
@@ -729,7 +730,7 @@ const styles = StyleSheet.create({
     marginRight: 10,
     backgroundColor: '#fff',
   },
-  thumb: {width: '100%', height: '100%'},
+  thumb: { width: '100%', height: '100%' },
 
   submitBtn: {
     backgroundColor: COLORS.primary,
@@ -738,7 +739,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submitBtnDisabled: {opacity: 0.7},
-  submitRow: {flexDirection: 'row', alignItems: 'center', gap: 10},
-  submitText: {color: '#fff', fontSize: 14, fontWeight: '900'},
+  submitBtnDisabled: { opacity: 0.7 },
+  submitRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  submitText: { color: '#fff', fontSize: 14, fontWeight: '900' },
 });

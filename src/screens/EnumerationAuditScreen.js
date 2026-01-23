@@ -1,5 +1,5 @@
 // /screens/EnumerationAuditScreen.js
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -23,12 +23,13 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
-import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 
 import FormRow from '../components/FormRow';
-import {DropdownRow} from '../components/SelectRows';
+import DateField from '../components/DateField';
+import { DropdownRow } from '../components/SelectRows';
 
-const {height} = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 const API_BASE = 'http://be.lte.gisforestry.com';
 
@@ -87,7 +88,7 @@ const fmtDateTime = iso => {
   if (!iso) return '-';
   const d = new Date(iso);
   if (Number.isNaN(+d)) return '-';
-  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`;
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 };
 
 const uniq = arr => Array.from(new Set((arr || []).filter(Boolean)));
@@ -120,8 +121,8 @@ const extractUploadUrls = json => {
 
 const showSettingsAlert = (title, msg) =>
   Alert.alert(title, msg, [
-    {text: 'Cancel', style: 'cancel'},
-    {text: 'Open Settings', onPress: () => Linking.openSettings?.()},
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Open Settings', onPress: () => Linking.openSettings?.() },
   ]);
 
 const ensureCameraOnlyPermission = async () => {
@@ -150,7 +151,7 @@ const ensureCameraOnlyPermission = async () => {
   return false;
 };
 
-export default function EnumerationAuditScreen({navigation, route}) {
+export default function EnumerationAuditScreen({ navigation, route }) {
   // ✅ enumerationId/treeId from previous page (this is the “44” in your cURL)
   const enumerationId = route?.params?.enumerationId ?? route?.params?.treeId ?? null;
   const enumeration = route?.params?.enumeration ?? null;
@@ -245,7 +246,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
     try {
       const token = await getAuthToken();
       const res = await fetch(CONDITIONS_URL, {
-        headers: token ? {Authorization: `Bearer ${token}`} : undefined,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
       const json = await safeJson(res);
       const rows = normalizeList(json)
@@ -307,7 +308,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
       const token = await getAuthToken();
       const res = await fetch(BUCKET_UPLOAD_URL, {
         method: 'POST',
-        headers: token ? {Authorization: `Bearer ${token}`} : undefined,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         body: fd,
       });
 
@@ -331,11 +332,11 @@ export default function EnumerationAuditScreen({navigation, route}) {
       const token = await getAuthToken();
       if (!token) throw new Error('Missing AUTH_TOKEN');
 
-      const headers = {Authorization: `Bearer ${token}`};
+      const headers = { Authorization: `Bearer ${token}` };
 
       // This matches: /enum/enumeration-audit/get-all-audits-of-enumeration/44
       const url = AUDIT_HISTORY_BY_ENUMERATION_ID_URL(enumerationId);
-      const res = await fetch(url, {method: 'GET', headers});
+      const res = await fetch(url, { method: 'GET', headers });
 
       if (res.status === 404) {
         setAuditHistory([]);
@@ -371,8 +372,8 @@ export default function EnumerationAuditScreen({navigation, route}) {
         const token = await getAuthToken();
         if (!token) throw new Error('Missing AUTH_TOKEN');
 
-        const headers = {Authorization: `Bearer ${token}`};
-        const res = await fetch(AUDIT_GET_ONE_URL(enumerationId), {method: 'GET', headers});
+        const headers = { Authorization: `Bearer ${token}` };
+        const res = await fetch(AUDIT_GET_ONE_URL(enumerationId), { method: 'GET', headers });
         if (res.status === 404) {
           setAuditHistory([]);
           return;
@@ -493,9 +494,9 @@ export default function EnumerationAuditScreen({navigation, route}) {
 
   const showImageMenu = () => {
     Alert.alert('Add Images', 'Choose source', [
-      {text: 'Cancel', style: 'cancel'},
-      {text: 'Camera', onPress: addFromCamera},
-      {text: 'Gallery', onPress: addFromGallery},
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Camera', onPress: addFromCamera },
+      { text: 'Gallery', onPress: addFromGallery },
     ]);
   };
 
@@ -553,7 +554,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
 
     const res = await fetch(AUDIT_CREATE_URL, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
 
@@ -569,7 +570,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
 
     const res = await fetch(AUDIT_PATCH_URL(id), {
       method: 'PATCH',
-      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
 
@@ -641,30 +642,30 @@ export default function EnumerationAuditScreen({navigation, route}) {
             <Ionicons name="arrow-back" size={22} color="#fff" />
           </TouchableOpacity>
 
-          <View style={{flex: 1}}>
+          <View style={{ flex: 1 }}>
             <Text style={styles.headerTitle}>{headerTitle}</Text>
             <Text style={styles.headerSub}>Enumeration ID: {String(enumerationId ?? '—')}</Text>
           </View>
 
           <TouchableOpacity
-            style={[styles.headerBtn, {backgroundColor: 'rgba(255,255,255,0.18)'}]}
+            style={[styles.headerBtn, { backgroundColor: 'rgba(255,255,255,0.18)' }]}
             onPress={resetToNew}>
             <Ionicons name="add" size={22} color="#fff" />
           </TouchableOpacity>
         </View>
       </LinearGradient>
 
-      <ScrollView contentContainerStyle={{padding: 16, paddingBottom: 30}}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 30 }}>
         {/* TAKKI (read-only) */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Tree (Read Only)</Text>
-          <View style={{position: 'relative'}}>
+          <View style={{ position: 'relative' }}>
             <FormRow label="Takki Number" value={takkiNumber || '—'} editable={false} />
             <Ionicons
               name="lock-closed"
               size={16}
               color="#9ca3af"
-              style={{position: 'absolute', right: 12, top: 42}}
+              style={{ position: 'absolute', right: 12, top: 42 }}
             />
           </View>
         </View>
@@ -684,7 +685,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
           </View>
 
           {!historyLoading && auditHistory.length === 0 ? (
-            <Text style={{color: COLORS.textLight}}>No audits found yet.</Text>
+            <Text style={{ color: COLORS.textLight }}>No audits found yet.</Text>
           ) : (
             auditHistory.map((a, idx) => {
               const when = fmtDateTime(a.dateOfAudit);
@@ -693,7 +694,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
               return (
                 <View key={`${a.id || idx}`} style={styles.historyCard}>
                   <View style={styles.rowBetween}>
-                    <View style={{flex: 1}}>
+                    <View style={{ flex: 1 }}>
                       <Text style={styles.hTitle}>
                         {a.year || '—'} • {disputed}
                       </Text>
@@ -702,16 +703,16 @@ export default function EnumerationAuditScreen({navigation, route}) {
                       </Text>
                     </View>
 
-                    <View style={{flexDirection: 'row', gap: 10}}>
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
                       <TouchableOpacity
-                        style={[styles.pill, {backgroundColor: COLORS.info}]}
+                        style={[styles.pill, { backgroundColor: COLORS.info }]}
                         onPress={() => openAuditView(a)}>
                         <Ionicons name="eye" size={14} color="#fff" />
                         <Text style={styles.pillText}>View</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
-                        style={[styles.pill, {backgroundColor: COLORS.primary}]}
+                        style={[styles.pill, { backgroundColor: COLORS.primary }]}
                         onPress={() => onEditAudit(a)}>
                         <Ionicons name="create" size={14} color="#fff" />
                         <Text style={styles.pillText}>Edit</Text>
@@ -723,9 +724,9 @@ export default function EnumerationAuditScreen({navigation, route}) {
                     <ScrollView
                       horizontal
                       showsHorizontalScrollIndicator={false}
-                      style={{marginTop: 10}}>
+                      style={{ marginTop: 10 }}>
                       {a.pictures.slice(0, 4).map((uri, i) => (
-                        <Image key={`${uri}_${i}`} source={{uri}} style={styles.thumb} />
+                        <Image key={`${uri}_${i}`} source={{ uri }} style={styles.thumb} />
                       ))}
                     </ScrollView>
                   )}
@@ -774,7 +775,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
           />
 
           <View style={styles.switchRow}>
-            <View style={{flex: 1}}>
+            <View style={{ flex: 1 }}>
               <Text style={styles.switchLabel}>Is Disputed</Text>
               <Text style={styles.switchHint}>Auto-filled from previous audit/tree record.</Text>
             </View>
@@ -792,21 +793,21 @@ export default function EnumerationAuditScreen({navigation, route}) {
             numberOfLines={4}
           />
 
-          <FormRow
-            label="Date Of Audit (ISO)"
+          <DateField
+            label="Date Of Audit"
             value={dateOfAudit}
-            onChangeText={setDateOfAudit}
-            placeholder="2026-01-10T10:00:00Z"
+            onChange={(d) => setDateOfAudit(d.toISOString())}
+            placeholder="Select Date"
           />
 
           {/* IMAGES */}
-          <View style={{marginTop: 14}}>
+          <View style={{ marginTop: 14 }}>
             <TouchableOpacity
               style={styles.imgBtn}
               onPress={showImageMenu}
               disabled={loading || uploading}>
               <Ionicons name="camera-outline" size={22} color={COLORS.primary} />
-              <View style={{flex: 1}}>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.imgBtnTitle}>Add / Change Images</Text>
                 <Text style={styles.imgBtnSub}>
                   Min {MIN_IMAGES}, Max {MAX_IMAGES}. Selected: {totalSelected}
@@ -818,11 +819,11 @@ export default function EnumerationAuditScreen({navigation, route}) {
             {!!localAssets?.length && (
               <>
                 <Text style={styles.note}>Selected (Local): {localAssets.length}</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 8}}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
                   {localAssets.map((a, idx) => (
                     <View key={`${a?.uri}_${idx}`} style={styles.localWrap}>
                       <View style={styles.localBox}>
-                        <Text style={{fontWeight: '800'}}>Img {idx + 1}</Text>
+                        <Text style={{ fontWeight: '800' }}>Img {idx + 1}</Text>
                       </View>
                       <TouchableOpacity style={styles.removeX} onPress={() => removeLocalAt(idx)}>
                         <Ionicons name="close-circle" size={18} color={COLORS.danger} />
@@ -839,7 +840,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
           </View>
 
           <TouchableOpacity
-            style={[styles.saveBtn, (loading || uploading) && {opacity: 0.75}]}
+            style={[styles.saveBtn, (loading || uploading) && { opacity: 0.75 }]}
             disabled={loading || uploading}
             onPress={onSave}>
             <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.saveGrad}>
@@ -879,7 +880,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
                 </TouchableOpacity>
               </View>
 
-              <ScrollView style={{padding: 16}} showsVerticalScrollIndicator={false}>
+              <ScrollView style={{ padding: 16 }} showsVerticalScrollIndicator={false}>
                 <Text style={styles.mRow}>Year: {selectedAuditForView?.year || '—'}</Text>
                 <Text style={styles.mRow}>
                   Actual Girth: {selectedAuditForView?.actual_girth || '—'}
@@ -896,9 +897,9 @@ export default function EnumerationAuditScreen({navigation, route}) {
                 </Text>
 
                 {!!selectedAuditForView?.pictures?.length && (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 12}}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
                     {selectedAuditForView.pictures.slice(0, 6).map((uri, i) => (
-                      <Image key={`${uri}_${i}`} source={{uri}} style={styles.thumbBig} />
+                      <Image key={`${uri}_${i}`} source={{ uri }} style={styles.thumbBig} />
                     ))}
                   </ScrollView>
                 )}
@@ -912,7 +913,7 @@ export default function EnumerationAuditScreen({navigation, route}) {
 }
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
+  screen: { flex: 1, backgroundColor: COLORS.background },
 
   headerGrad: {
     paddingTop: Platform.OS === 'ios' ? 52 : (StatusBar.currentHeight || 0) + 16,
@@ -920,7 +921,7 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 22,
     borderBottomRightRadius: 22,
   },
-  headerRow: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 10},
+  headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 10 },
   headerBtn: {
     width: 44,
     height: 44,
@@ -929,8 +930,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {color: '#fff', fontSize: 18, fontWeight: '900'},
-  headerSub: {color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700', marginTop: 2},
+  headerTitle: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  headerSub: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700', marginTop: 2 },
 
   card: {
     backgroundColor: COLORS.card,
@@ -940,9 +941,9 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
   },
-  sectionTitle: {fontSize: 14, fontWeight: '900', color: COLORS.text, marginBottom: 10},
+  sectionTitle: { fontSize: 14, fontWeight: '900', color: COLORS.text, marginBottom: 10 },
 
-  rowBetween: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   smallBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -954,7 +955,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#fff',
   },
-  smallBtnText: {fontWeight: '800', color: COLORS.text},
+  smallBtnText: { fontWeight: '800', color: COLORS.text },
 
   historyCard: {
     marginTop: 10,
@@ -964,8 +965,8 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#fff',
   },
-  hTitle: {fontWeight: '900', color: COLORS.text},
-  hSub: {marginTop: 2, color: COLORS.textLight, fontWeight: '700', fontSize: 12},
+  hTitle: { fontWeight: '900', color: COLORS.text },
+  hSub: { marginTop: 2, color: COLORS.textLight, fontWeight: '700', fontSize: 12 },
 
   pill: {
     flexDirection: 'row',
@@ -975,10 +976,10 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
   },
-  pillText: {color: '#fff', fontWeight: '900', fontSize: 12},
+  pillText: { color: '#fff', fontWeight: '900', fontSize: 12 },
 
-  thumb: {width: 72, height: 56, borderRadius: 10, marginRight: 8, backgroundColor: '#eee'},
-  thumbBig: {width: 120, height: 90, borderRadius: 12, marginRight: 10, backgroundColor: '#eee'},
+  thumb: { width: 72, height: 56, borderRadius: 10, marginRight: 8, backgroundColor: '#eee' },
+  thumbBig: { width: 120, height: 90, borderRadius: 12, marginRight: 10, backgroundColor: '#eee' },
 
   modeBar: {
     flexDirection: 'row',
@@ -991,7 +992,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     marginBottom: 12,
   },
-  modeText: {fontWeight: '800', color: COLORS.text},
+  modeText: { fontWeight: '800', color: COLORS.text },
 
   switchRow: {
     flexDirection: 'row',
@@ -1004,10 +1005,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     marginTop: 10,
   },
-  switchLabel: {fontSize: 14, fontWeight: '900', color: COLORS.text},
-  switchHint: {fontSize: 12, fontWeight: '700', color: COLORS.textLight, marginTop: 2},
+  switchLabel: { fontSize: 14, fontWeight: '900', color: COLORS.text },
+  switchHint: { fontSize: 12, fontWeight: '700', color: COLORS.textLight, marginTop: 2 },
 
-  label: {marginTop: 12, marginBottom: 6, fontWeight: '900', color: COLORS.text},
+  label: { marginTop: 12, marginBottom: 6, fontWeight: '900', color: COLORS.text },
   textArea: {
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1029,12 +1030,12 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#fff',
   },
-  imgBtnTitle: {fontWeight: '900', color: COLORS.text},
-  imgBtnSub: {marginTop: 2, fontWeight: '700', color: COLORS.textLight, fontSize: 12},
+  imgBtnTitle: { fontWeight: '900', color: COLORS.text },
+  imgBtnSub: { marginTop: 2, fontWeight: '700', color: COLORS.textLight, fontSize: 12 },
 
-  note: {marginTop: 8, color: COLORS.textLight, fontWeight: '700'},
+  note: { marginTop: 8, color: COLORS.textLight, fontWeight: '700' },
 
-  localWrap: {width: 76, height: 76, marginRight: 10, borderRadius: 14, overflow: 'hidden'},
+  localWrap: { width: 76, height: 76, marginRight: 10, borderRadius: 14, overflow: 'hidden' },
   localBox: {
     flex: 1,
     borderWidth: 1,
@@ -1044,9 +1045,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  removeX: {position: 'absolute', top: 2, right: 2, backgroundColor: '#fff', borderRadius: 12},
+  removeX: { position: 'absolute', top: 2, right: 2, backgroundColor: '#fff', borderRadius: 12 },
 
-  saveBtn: {marginTop: 16, borderRadius: 16, overflow: 'hidden'},
+  saveBtn: { marginTop: 16, borderRadius: 16, overflow: 'hidden' },
   saveGrad: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -1054,12 +1055,12 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 14,
   },
-  saveText: {color: '#fff', fontWeight: '900', fontSize: 15},
+  saveText: { color: '#fff', fontWeight: '900', fontSize: 15 },
 
   // modal
-  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  modalBackdrop: {...StyleSheet.absoluteFillObject},
-  modalWrap: {flex: 1, justifyContent: 'center', padding: 18},
+  modalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalWrap: { flex: 1, justifyContent: 'center', padding: 18 },
   modalCard: {
     maxHeight: height * 0.75,
     backgroundColor: '#fff',
@@ -1076,7 +1077,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  modalTitle: {fontWeight: '900', fontSize: 16, color: COLORS.text},
+  modalTitle: { fontWeight: '900', fontSize: 16, color: COLORS.text },
   modalClose: {
     width: 38,
     height: 38,
@@ -1085,5 +1086,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  mRow: {color: COLORS.text, fontWeight: '800', marginBottom: 10, lineHeight: 20},
+  mRow: { color: COLORS.text, fontWeight: '800', marginBottom: 10, lineHeight: 20 },
 });

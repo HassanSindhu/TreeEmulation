@@ -1,15 +1,4 @@
-// PoleCropRecordsScreen.js
-// ✅ COMPLETE UPDATED FILE
-// ✅ FIXED: Status override Disposed > Superdari > Workflow status (same pattern as Afforestation file)
-// ✅ FIXED: Species auto-select works for ALL shapes: id, name string, object, poleCropSpecies[] latest by audit_no
-// ✅ FIXED: Species master fetch uses Authorization + reads json.data
-// ✅ ADDED: "Other" species flow -> input + POST /lpe3/species, then refresh + auto-select
-// ✅ Edit uses PATCH /enum/pole-crop/{id}
-// ✅ Supports latest GET /enum/pole-crop response where record may include: poleCropSpecies: [{id,name,count,audit_no}]
-// ✅ Total count derived from poleCropSpecies when present; fallback to record.count
-// ✅ ADDED: Superdari + Dispose buttons (safeNavigate)
-
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -33,13 +22,13 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
-import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
-import {useFocusEffect} from '@react-navigation/native';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
 
 import FormRow from '../components/FormRow';
-import {DropdownRow} from '../components/SelectRows';
+import { DropdownRow } from '../components/SelectRows';
 
-const {height} = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
@@ -78,10 +67,11 @@ const AWS_UPLOAD_URL = 'https://app.eco.gisforestry.com/aws-bucket/tree-enum';
 const AWS_UPLOAD_PATH = 'PoleCrop';
 
 // Navigator routes (MUST match your RootNavigator Stack.Screen names)
-const POLECROP_SUPERDARI_SCREEN = 'PoleCropSuperdari';
-const POLECROP_DISPOSAL_SCREEN = 'PoleCropDisposal';
+const POLECROP_SUPERDARI_SCREEN = 'PoleCropSuperdariScreen';
+const POLECROP_DISPOSAL_SCREEN = 'PoleCropDisposeScreen';
+const POLECROP_AUDIT_SCREEN = 'PoleCropAuditScreen';
 
-export default function PoleCropRecordsScreen({navigation, route}) {
+export default function PoleCropRecordsScreen({ navigation, route }) {
   const enumeration = route?.params?.enumeration;
 
   // ---------- STATE ----------
@@ -113,7 +103,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   // counts map: { "12": "30", "14": "20" }
   const [speciesCounts, setSpeciesCounts] = useState({});
 
-  // “Other species” flow
+  // "Other species" flow
   const [otherSpeciesModal, setOtherSpeciesModal] = useState(false);
   const [otherSpeciesName, setOtherSpeciesName] = useState('');
   const [addingOtherSpecies, setAddingOtherSpecies] = useState(false);
@@ -128,6 +118,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const [pictureUris, setPictureUris] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [imagePickerModal, setImagePickerModal] = useState(false);
+
+  // Keep last record opened for edit (for late species master resolution)
+  const editRecordRef = useRef(null);
 
   // ---------- HELPERS ----------
   const normalizeList = json => {
@@ -153,6 +146,63 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     }
     return null;
   };
+
+  // ✅ IMPROVED POLECROP ID RESOLVER
+  const resolvePoleCropId = useCallback((record, fallbackParams = {}) => {
+    console.log('🔍 RESOLVING POLE CROP ID FROM:', { record, fallbackParams });
+
+    // First check direct record properties
+    const directCandidates = [
+      record?.id,
+      record?.serverId,
+      record?._id,
+    ];
+
+    for (const c of directCandidates) {
+      const n = asValidId(c);
+      if (n) {
+        console.log('✅ Found direct ID:', n, 'from:', c);
+        return n;
+      }
+    }
+
+    // Check serverRaw (from API response)
+    if (record?.serverRaw) {
+      const serverCandidates = [
+        record.serverRaw.id,
+        record.serverRaw._id,
+        record.serverRaw.serverId,
+      ];
+
+      for (const c of serverCandidates) {
+        const n = asValidId(c);
+        if (n) {
+          console.log('✅ Found serverRaw ID:', n, 'from:', c);
+          return n;
+        }
+      }
+    }
+
+    // Check fallback params
+    const paramCandidates = [
+      fallbackParams?.poleCropId,
+      fallbackParams?.polecropId,
+      fallbackParams?.id,
+      fallbackParams?.record?.id,
+      fallbackParams?.record?.serverId,
+    ];
+
+    for (const c of paramCandidates) {
+      const n = asValidId(c);
+      if (n) {
+        console.log('✅ Found param ID:', n, 'from:', c);
+        return n;
+      }
+    }
+
+    console.log('❌ No valid Pole Crop ID found');
+    return null;
+  }, []);
 
   const resolveNameOfSiteId = useCallback(() => {
     const p = route?.params || {};
@@ -183,16 +233,16 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
   const parseLatLng = str => {
     const s = String(str || '').trim();
-    if (!s) return {lat: null, lng: null};
+    if (!s) return { lat: null, lng: null };
     const parts = s
       .split(/,|\s+/)
       .map(p => p.trim())
       .filter(Boolean);
-    if (parts.length < 2) return {lat: null, lng: null};
+    if (parts.length < 2) return { lat: null, lng: null };
     const lat = Number(parts[0]);
     const lng = Number(parts[1]);
-    if (Number.isNaN(lat) || Number.isNaN(lng)) return {lat: null, lng: null};
-    return {lat, lng};
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return { lat: null, lng: null };
+    return { lat, lng };
   };
 
   // ---------- SAFE NAVIGATION ----------
@@ -215,6 +265,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         );
         return;
       }
+      console.log('🚀 NAVIGATING TO:', screenName, 'WITH PARAMS:', params);
       navigation.navigate(screenName, params);
     },
     [navigation, canNavigateTo],
@@ -241,7 +292,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const deriveRowUi = r => {
     const latestStatus = r?.latestStatus || null;
 
-    // ✅ OVERRIDE
+    // OVERRIDE
     if (r?.isDisposed) {
       return {
         statusText: 'Disposed',
@@ -334,7 +385,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     const withTime = arr
       .map(x => {
         const t = Date.parse(x?.created_at || x?.createdAt || '');
-        return {x, t: Number.isFinite(t) ? t : -1};
+        return { x, t: Number.isFinite(t) ? t : -1 };
       })
       .sort((a, b) => b.t - a.t);
     return withTime[0]?.x || arr[arr.length - 1] || null;
@@ -378,7 +429,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     };
   };
 
-  // ---------- POLECROP SPECIES SNAPSHOT (latest by audit_no) ----------
+  // ---------- POLECROP SPECIES SNAPSHOT HELPERS ----------
   const normalizeAuditNo = v => {
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
@@ -391,12 +442,13 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     for (const row of arr) {
       const sid = Number(row?.id ?? row?.species_id ?? row?.speciesId);
       if (!Number.isFinite(sid) || sid <= 0) continue;
-      const audit = normalizeAuditNo(row?.audit_no);
+
+      const audit = normalizeAuditNo(row?.audit_no ?? row?.auditNo);
       const prev = byId.get(sid);
       if (!prev || audit > prev._audit) {
         byId.set(sid, {
           species_id: sid,
-          name: String(row?.name || row?.species_name || '').trim(),
+          name: String(row?.name || row?.species_name || row?.speciesName || '').trim(),
           count: row?.count ?? 0,
           _audit: audit,
         });
@@ -418,20 +470,44 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       }));
   };
 
+  const normalizeSpeciesArrayPayload = arr => {
+    if (!Array.isArray(arr)) return { ids: [], counts: {}, namesMap: {} };
+
+    const counts = {};
+    const namesMap = {};
+    const idsSet = new Set();
+
+    for (const it of arr) {
+      const sid = Number(it?.species_id ?? it?.speciesId ?? it?.id);
+      if (!Number.isFinite(sid) || sid <= 0) continue;
+
+      idsSet.add(sid);
+
+      const cNum = Number(String(it?.count ?? '').replace(/[^\d]/g, ''));
+      counts[String(sid)] = Number.isFinite(cNum) ? String(cNum) : '';
+
+      const nm = String(it?.name || it?.species_name || it?.speciesName || '').trim();
+      if (nm) namesMap[String(sid)] = nm;
+    }
+
+    const ids = Array.from(idsSet);
+    return { ids, counts, namesMap };
+  };
+
   // ---------- SPECIES MASTER ----------
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
       const token = await getAuthToken();
-      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
-      const res = await fetch(SPECIES_URL, {headers});
+      const res = await fetch(SPECIES_URL, { headers });
       const json = await res.json().catch(() => null);
       const rows = normalizeList(json);
 
       const normalized = rows
         .map(x => {
-          if (typeof x === 'string') return {id: null, name: x};
+          if (typeof x === 'string') return { id: null, name: x };
           return {
             id: x?.id ?? x?.species_id ?? null,
             name: x?.name ?? x?.species_name ?? '',
@@ -486,7 +562,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       else next.add(num);
 
       setSpeciesCounts(prevCounts => {
-        const copy = {...(prevCounts || {})};
+        const copy = { ...(prevCounts || {}) };
         if (next.has(num) && (copy[String(num)] === undefined || copy[String(num)] === null)) {
           copy[String(num)] = '';
         }
@@ -517,7 +593,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({name}),
+        body: JSON.stringify({ name }),
       });
 
       const json = await res.json().catch(() => null);
@@ -526,11 +602,8 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         throw new Error(msg);
       }
 
-      // refresh species + auto-select newly created by name match
       await fetchSpecies();
 
-      // best-effort select: find by exact name (case-insensitive)
-      const rows = speciesRows; // may be stale; so search again after small delay
       setTimeout(() => {
         setSpeciesRows(prev => {
           const found = (prev || []).find(
@@ -543,7 +616,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
               set.add(sid);
               return Array.from(set);
             });
-            setSpeciesCounts(pc => ({...(pc || {}), [String(sid)]: pc?.[String(sid)] ?? ''}));
+            setSpeciesCounts(pc => ({ ...(pc || {}), [String(sid)]: pc?.[String(sid)] ?? '' }));
           }
           return prev;
         });
@@ -578,11 +651,11 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       'Permission Required',
       'Please allow camera permission from Settings to take photos.',
       [
-        {text: 'Cancel', style: 'cancel'},
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Open Settings',
           onPress: () => {
-            Linking.openSettings().catch(() => {});
+            Linking.openSettings().catch(() => { });
           },
         },
       ],
@@ -615,7 +688,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const {latitude, longitude} = pos.coords;
+        const { latitude, longitude } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
         fillAutoIntoManual(value);
@@ -625,7 +698,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         setGpsLoading(false);
         if (!silent) Alert.alert('Location Error', err.message);
       },
-      {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
     );
   };
 
@@ -651,7 +724,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const pickFromGallery = () => {
     setImagePickerModal(false);
     launchImageLibrary(
-      {mediaType: 'photo', quality: 0.7, selectionLimit: 0},
+      { mediaType: 'photo', quality: 0.7, selectionLimit: 0 },
       onImagePickerResult,
     );
   };
@@ -664,7 +737,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       return;
     }
     launchCamera(
-      {mediaType: 'photo', quality: 0.7, saveToPhotos: true, cameraType: 'back'},
+      { mediaType: 'photo', quality: 0.7, saveToPhotos: true, cameraType: 'back' },
       onImagePickerResult,
     );
   };
@@ -672,7 +745,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   const pickImage = () => setImagePickerModal(true);
 
   // ---------- AWS UPLOAD ----------
-  const uploadImagesToS3 = async (localUris, {uploadPath = AWS_UPLOAD_PATH, fileName = 'pole'} = {}) => {
+  const uploadImagesToS3 = async (
+    localUris,
+    { uploadPath = AWS_UPLOAD_PATH, fileName = 'pole' } = {},
+  ) => {
     if (!Array.isArray(localUris) || localUris.length === 0) return [];
 
     const form = new FormData();
@@ -693,7 +769,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       });
     });
 
-    const res = await fetch(AWS_UPLOAD_URL, {method: 'POST', body: form});
+    const res = await fetch(AWS_UPLOAD_URL, { method: 'POST', body: form });
     const json = await res.json().catch(() => null);
 
     if (!res.ok || !json?.status) {
@@ -719,7 +795,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     return finalUrls.filter(Boolean);
   };
 
-  // ---------- NORMALIZE RECORD + SPECIES AUTO-SELECT (CRITICAL FIX) ----------
+  // ---------- NORMALIZE RECORD + SPECIES AUTO-SELECT ----------
   const normalizeApiRecord = raw => {
     const serverId = raw?.id ?? raw?._id ?? null;
 
@@ -738,29 +814,31 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         ? [`${Number(manualLat).toFixed(6)}, ${Number(manualLng).toFixed(6)}`]
         : [''];
 
-    // pictures can be null
     const pictures = Array.isArray(raw?.pictures) ? raw.pictures : [];
 
-    // ✅ NEW: poleCropSpecies snapshot array
+    // 1) poleCropSpecies snapshot array (latest by audit_no)
     const pcsArr = Array.isArray(raw?.poleCropSpecies) ? raw.poleCropSpecies : [];
-    const latestSpecies = pickLatestPoleCropSpeciesPerId(pcsArr);
+    const latestSpeciesFromPCS = pickLatestPoleCropSpeciesPerId(pcsArr);
 
-    const derivedSpeciesIds = latestSpecies
+    const derivedSpeciesIdsPCS = latestSpeciesFromPCS
       .map(x => Number(x?.species_id))
       .filter(n => Number.isFinite(n) && n > 0);
 
-    const derivedCounts = {};
-    const derivedNamesMap = {};
-    latestSpecies.forEach(x => {
+    const derivedCountsPCS = {};
+    const derivedNamesMapPCS = {};
+    latestSpeciesFromPCS.forEach(x => {
       const sid = Number(x?.species_id);
       if (!Number.isFinite(sid) || sid <= 0) return;
-      derivedCounts[String(sid)] = String(x?.count ?? '');
+      derivedCountsPCS[String(sid)] = String(x?.count ?? '');
       const nm = String(x?.name || '').trim();
-      if (nm) derivedNamesMap[String(sid)] = nm;
+      if (nm) derivedNamesMapPCS[String(sid)] = nm;
     });
 
-    // ✅ Fallback: legacy single species field
-    // supports: number id, string name, object {id,name}, or raw.species_id/speciesId
+    // 2) species array payload (common)
+    const speciesArray = Array.isArray(raw?.species) ? raw.species : null;
+    const fromSpeciesArray = normalizeSpeciesArrayPayload(speciesArray);
+
+    // 3) legacy single species field (string/number/object)
     const legacySpeciesValue = raw?.species ?? raw?.species_id ?? raw?.speciesId ?? null;
     const legacySpeciesId = asValidId(
       typeof legacySpeciesValue === 'object' ? legacySpeciesValue?.id : legacySpeciesValue,
@@ -769,48 +847,60 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       typeof legacySpeciesValue === 'string'
         ? legacySpeciesValue
         : typeof legacySpeciesValue === 'object'
-        ? legacySpeciesValue?.name
-        : raw?.species_name ?? '';
+          ? legacySpeciesValue?.name
+          : raw?.species_name ?? '';
 
-    let species_ids = derivedSpeciesIds;
-    let species_counts = derivedCounts;
-    let species_names_map = derivedNamesMap;
+    // Choose best available species source
+    let species_ids = derivedSpeciesIdsPCS;
+    let species_counts = derivedCountsPCS;
+    let species_names_map = derivedNamesMapPCS;
 
-    // If new array not present, use legacy as single selection with total count
+    if (!species_ids.length && fromSpeciesArray.ids.length) {
+      species_ids = fromSpeciesArray.ids;
+      species_counts = fromSpeciesArray.counts;
+      species_names_map = fromSpeciesArray.namesMap;
+    }
+
     if (!species_ids.length) {
       if (legacySpeciesId) {
         species_ids = [Number(legacySpeciesId)];
-        species_counts = {[String(legacySpeciesId)]: String(raw?.count ?? '')};
+        species_counts = { [String(legacySpeciesId)]: String(raw?.count ?? '') };
       } else if (String(legacySpeciesName || '').trim()) {
-        // keep name map; we will match to master by name at edit time
-        species_ids = []; // will resolve later
-        species_counts = {}; // resolve later
-        species_names_map = {'__legacy_name__': String(legacySpeciesName || '').trim()};
+        species_ids = [];
+        species_counts = {};
+        species_names_map = { '__legacy_name__': String(legacySpeciesName || '').trim() };
       }
     }
 
-    // Total count derived from poleCropSpecies if present
+    // Total count: prefer PCS, then species array, then raw.count
     const totalCount =
-      latestSpecies.length > 0
-        ? latestSpecies.reduce((sum, x) => {
-            const n = Number(String(x?.count ?? '').replace(/[^\d]/g, ''));
+      latestSpeciesFromPCS.length > 0
+        ? latestSpeciesFromPCS.reduce((sum, x) => {
+          const n = Number(String(x?.count ?? '').replace(/[^\d]/g, ''));
+          return sum + (Number.isFinite(n) ? n : 0);
+        }, 0)
+        : fromSpeciesArray.ids.length > 0
+          ? fromSpeciesArray.ids.reduce((sum, sid) => {
+            const n = Number(String(fromSpeciesArray.counts[String(sid)] ?? '').replace(/[^\d]/g, ''));
             return sum + (Number.isFinite(n) ? n : 0);
           }, 0)
-        : Number(String(raw?.count ?? '').replace(/[^\d]/g, '') || 0);
+          : Number(String(raw?.count ?? '').replace(/[^\d]/g, '') || 0);
 
     const superdari = extractSuperdariInfo(raw);
     const disposal = extractDisposalInfo(raw);
 
+    const numericServerId = Number(serverId);
+    const stableId = Number.isFinite(numericServerId) && numericServerId > 0 ? numericServerId : serverId;
+
     return {
-      id: String(serverId ?? Date.now()),
-      serverId,
+      id: stableId,
+      serverId: stableId,
 
       nameOfSiteId: raw?.nameOfSiteId ?? raw?.name_of_site_id ?? raw?.nameOfSite?.id ?? null,
 
       rds_from: raw?.rds_from ?? raw?.rdsFrom ?? '',
       rds_to: raw?.rds_to ?? raw?.rdsTo ?? '',
 
-      // Total count (view)
       count: totalCount,
 
       autoGpsLatLong,
@@ -820,19 +910,16 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       picturePreview: pictures?.[0] || null,
       pictureUris: [],
 
-      // species selection snapshot
       species_ids,
       species_counts,
       species_names_map,
 
-      // workflow status
       verification: Array.isArray(raw?.verification) ? raw.verification : [],
       latestStatus: raw?.latestStatus || null,
 
       createdAt: raw?.created_at || raw?.createdAt || new Date().toISOString(),
       serverRaw: raw,
 
-      // override flags
       hasSuperdari: superdari.hasSuperdari,
       superdariId: superdari.superdariId,
       superdarName: superdari.superdarName,
@@ -845,7 +932,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
   // ---------- FETCH LIST ----------
   const fetchPoleCropList = useCallback(
-    async ({refresh = false} = {}) => {
+    async ({ refresh = false } = {}) => {
       try {
         refresh ? setServerRefreshing(true) : setListLoading(true);
 
@@ -854,7 +941,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
         const res = await fetch(POLECROP_LIST_URL, {
           method: 'GET',
-          headers: {Authorization: `Bearer ${token}`},
+          headers: { Authorization: `Bearer ${token}` },
         });
 
         const json = await res.json().catch(() => null);
@@ -866,12 +953,12 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         const rows = normalizeList(json);
         const normalized = rows.map(normalizeApiRecord);
 
-        // optional filter by site if you passed nameOfSiteId
         const filtered = nameOfSiteId
           ? normalized.filter(x => Number(x?.nameOfSiteId) === Number(nameOfSiteId))
           : normalized;
 
         setRecords(filtered);
+        console.log('📥 Loaded records:', normalized.length, 'Filtered:', filtered.length);
       } catch (e) {
         setRecords([]);
         Alert.alert('Load Failed', e?.message || 'Failed to load records from server.');
@@ -884,7 +971,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchPoleCropList({refresh: true});
+      fetchPoleCropList({ refresh: true });
     }, [fetchPoleCropList]),
   );
 
@@ -893,6 +980,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     setIsEdit(false);
     setEditingId(null);
     setExistingPictures([]);
+    editRecordRef.current = null;
 
     setRdsFrom('');
     setRdsTo('');
@@ -911,26 +999,24 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     setTimeout(() => fetchAutoGps(true), 300);
   };
 
-  // ✅ KEY: resolve species selection reliably when editing
+  // resolve species selection reliably when editing
   const resolveSpeciesSelectionForEdit = useCallback(
     record => {
       const ids = Array.isArray(record?.species_ids) ? record.species_ids.map(Number) : [];
       const counts = record?.species_counts || {};
       const namesMap = record?.species_names_map || {};
 
-      // Case 1: ids already present (best)
       if (ids.length) {
         const cleanIds = ids.filter(n => Number.isFinite(n) && n > 0);
-        const normCounts = {...counts};
+        const normCounts = { ...counts };
         cleanIds.forEach(sid => {
           const k = String(sid);
           if (normCounts[k] === undefined || normCounts[k] === null) normCounts[k] = '';
           normCounts[k] = String(normCounts[k]);
         });
-        return {ids: cleanIds, counts: normCounts};
+        return { ids: cleanIds, counts: normCounts };
       }
 
-      // Case 2: legacy name string, try match from master list by name
       const legacyName = String(namesMap?.['__legacy_name__'] || '').trim();
       if (legacyName) {
         const found = (speciesRows || []).find(
@@ -939,43 +1025,63 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         if (found?.id) {
           const sid = Number(found.id);
           const c = String(record?.count ?? '');
-          return {ids: [sid], counts: {[String(sid)]: c}};
+          return { ids: [sid], counts: { [String(sid)]: c } };
         }
       }
 
-      // fallback: no selection
-      return {ids: [], counts: {}};
+      return { ids: [], counts: {} };
     },
     [speciesRows],
   );
 
+  useEffect(() => {
+    if (!modalVisible || !isEdit) return;
+    const rec = editRecordRef.current;
+    if (!rec) return;
+
+    const namesMap = rec?.species_names_map || {};
+    const hasLegacyName = Boolean(String(namesMap?.['__legacy_name__'] || '').trim());
+
+    if (speciesRows?.length > 0 && (speciesIds.length === 0 || hasLegacyName)) {
+      const resolved = resolveSpeciesSelectionForEdit(rec);
+      if (resolved?.ids?.length) {
+        setSpeciesIds(resolved.ids);
+        setSpeciesCounts(resolved.counts || {});
+      }
+    }
+  }, [speciesRows, modalVisible, isEdit]);
+
   const openEditForm = record => {
-    // Only allow edit when rejected
     if (!isRejectedStatus(record)) {
       Alert.alert('Not Allowed', 'You can edit only when status is Rejected.');
       return;
     }
 
+    editRecordRef.current = record;
+
     setIsEdit(true);
 
-    const sid = record?.serverId ?? record?.serverRaw?.id ?? record?.serverRaw?._id ?? record?.id ?? null;
-    setEditingId(sid ? String(sid) : null);
+    const editPoleId = resolvePoleCropId(record, route?.params);
+    setEditingId(editPoleId ? String(editPoleId) : null);
+    console.log('📝 Editing Pole Crop ID:', editPoleId);
 
-    setRdsFrom(record?.rds_from !== null && record?.rds_from !== undefined ? String(record.rds_from) : '');
+    setRdsFrom(
+      record?.rds_from !== null && record?.rds_from !== undefined ? String(record.rds_from) : '',
+    );
     setRdsTo(record?.rds_to !== null && record?.rds_to !== undefined ? String(record.rds_to) : '');
 
-    // pictures
     const serverPics = Array.isArray(record?.pictures) ? record.pictures : [];
     setExistingPictures(serverPics);
 
-    // ✅ species auto-select (critical)
     const resolved = resolveSpeciesSelectionForEdit(record);
     setSpeciesIds(resolved.ids);
     setSpeciesCounts(resolved.counts);
 
     setAutoGps(record.autoGpsLatLong || '');
     const manual =
-      Array.isArray(record.gpsBoundingBox) && record.gpsBoundingBox.length ? record.gpsBoundingBox : [''];
+      Array.isArray(record.gpsBoundingBox) && record.gpsBoundingBox.length
+        ? record.gpsBoundingBox
+        : [''];
     setGpsList(manual);
 
     setPictureUris([]);
@@ -990,39 +1096,84 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
   // ---------- ACTION NAV ----------
   const openSuperdariForRecord = record => {
-    const poleCropId = Number(record?.serverId ?? record?.serverRaw?.id ?? record?.id);
-    if (!Number.isFinite(poleCropId)) {
+    const poleCropId = resolvePoleCropId(record, route?.params);
+    console.log('🔵 OPEN SUPERDARI:', {
+      recordId: poleCropId,
+      screenName: POLECROP_SUPERDARI_SCREEN,
+      recordData: record,
+      fromParams: route?.params
+    });
+
+    if (!poleCropId) {
       Alert.alert('Error', 'PoleCrop ID is missing/invalid.');
       return;
     }
 
     safeNavigate(POLECROP_SUPERDARI_SCREEN, {
       poleCropId,
+      polecropId: poleCropId,
+      id: poleCropId,
       nameOfSiteId: Number(nameOfSiteId || record?.nameOfSiteId || 0),
       enumeration,
       record,
+      poleCrop: record, // ✅ Fix: Pass as poleCrop for receiving screen
       superdariId: record?.superdariId ?? null,
     });
   };
 
   const openDisposalForRecord = record => {
-    const poleCropId = Number(record?.serverId ?? record?.serverRaw?.id ?? record?.id);
-    if (!Number.isFinite(poleCropId)) {
+    const poleCropId = resolvePoleCropId(record, route?.params);
+    console.log('🔵 OPEN DISPOSAL:', {
+      recordId: poleCropId,
+      screenName: POLECROP_DISPOSAL_SCREEN,
+      recordData: record,
+      fromParams: route?.params
+    });
+
+    if (!poleCropId) {
       Alert.alert('Error', 'PoleCrop ID is missing/invalid.');
       return;
     }
 
     safeNavigate(POLECROP_DISPOSAL_SCREEN, {
       poleCropId,
+      polecropId: poleCropId,
+      id: poleCropId,
       nameOfSiteId: Number(nameOfSiteId || record?.nameOfSiteId || 0),
       enumeration,
       record,
+      poleCrop: record, // ✅ Fix: Pass as poleCrop for receiving screen
       disposalId: record?.disposalId ?? null,
     });
   };
 
+  const openAuditForRecord = record => {
+    const poleCropId = resolvePoleCropId(record, route?.params);
+    console.log('🔵 OPEN AUDIT:', {
+      recordId: poleCropId,
+      screenName: POLECROP_AUDIT_SCREEN,
+      recordData: record,
+      fromParams: route?.params
+    });
+
+    if (!poleCropId) {
+      Alert.alert('Error', 'PoleCrop ID is missing/invalid.');
+      return;
+    }
+
+    safeNavigate(POLECROP_AUDIT_SCREEN, {
+      poleCropId,
+      polecropId: poleCropId,
+      id: poleCropId,
+      nameOfSiteId: Number(nameOfSiteId || record?.nameOfSiteId || 0),
+      enumeration,
+      record,
+      poleCrop: record, // ✅ Fix: Pass as poleCrop for receiving screen
+    });
+  };
+
   // ---------- SUBMIT / EDIT ----------
-  const submitPoleCropToApi = async (body, {isEditMode = false, editId = null} = {}) => {
+  const submitPoleCropToApi = async (body, { isEditMode = false, editId = null } = {}) => {
     const token = await getAuthToken();
     if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
@@ -1031,7 +1182,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
     const res = await fetch(url, {
       method,
-      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     });
 
@@ -1059,7 +1210,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       return;
     }
 
-    // Validate counts
     for (const sid of speciesIds) {
       const v = speciesCounts[String(sid)];
       const n = Number(String(v || '').replace(/[^\d]/g, ''));
@@ -1071,10 +1221,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     }
 
     const cleanGps = gpsList.map(x => (x || '').trim()).filter(x => x.length > 0);
-    const {lat: autoLat, lng: autoLng} = parseLatLng(autoGps);
+    const { lat: autoLat, lng: autoLng } = parseLatLng(autoGps);
 
     const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : autoGps;
-    const {lat: manualLat, lng: manualLng} = parseLatLng(lastManual || autoGps);
+    const { lat: manualLat, lng: manualLng } = parseLatLng(lastManual || autoGps);
 
     let uploadedUrls = [];
     try {
@@ -1094,16 +1244,16 @@ export default function PoleCropRecordsScreen({navigation, route}) {
       setUploading(false);
     }
 
-    // payload species array (most consistent with your other modules)
     const speciesPayload = speciesIds.map(sid => ({
       species_id: Number(sid),
       count: Number(String(speciesCounts[String(sid)] || '').replace(/[^\d]/g, '')),
     }));
 
-    // ✅ Do not wipe existing pictures on edit if user didn't select new ones
     const finalPictures =
       isEdit && (!pictureUris || pictureUris.length === 0)
-        ? (Array.isArray(existingPictures) ? existingPictures : [])
+        ? Array.isArray(existingPictures)
+          ? existingPictures
+          : []
         : uploadedUrls;
 
     const body = {
@@ -1119,22 +1269,21 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
       pictures: finalPictures,
 
-      // IMPORTANT: if your backend expects different key, change here
-      species: speciesPayload,
+      species_counts: speciesPayload,
     };
 
     try {
       if (isEdit) {
         if (!editingId) throw new Error('Edit ID missing. Cannot PATCH without record id.');
-        await submitPoleCropToApi(body, {isEditMode: true, editId: editingId});
+        await submitPoleCropToApi(body, { isEditMode: true, editId: editingId });
         Alert.alert('Success', 'Record updated and resubmitted successfully.');
       } else {
-        await submitPoleCropToApi(body, {isEditMode: false});
+        await submitPoleCropToApi(body, { isEditMode: false });
         Alert.alert('Success', 'Saved to server.');
       }
 
       setModalVisible(false);
-      fetchPoleCropList({refresh: true});
+      fetchPoleCropList({ refresh: true });
     } catch (e) {
       Alert.alert('Submit Failed', e?.message || 'Server submit failed.');
     }
@@ -1148,7 +1297,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     return records.filter(r => {
       const ui = deriveRowUi(r);
 
-      // species counts text
       const ids = Array.isArray(r.species_ids) ? r.species_ids : [];
       const counts = r?.species_counts || {};
       const apiNames = r?.species_names_map || {};
@@ -1167,11 +1315,12 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         r.rds_to,
         r.count,
         r.autoGpsLatLong,
-        (Array.isArray(r.gpsBoundingBox) ? r.gpsBoundingBox.join(' | ') : ''),
+        Array.isArray(r.gpsBoundingBox) ? r.gpsBoundingBox.join(' | ') : '',
         ui.statusText,
         speciesCountsText,
         r?.hasSuperdari ? `superdari ${r?.superdarName || ''}` : 'no superdari',
         r?.isDisposed ? 'disposed' : 'not disposed',
+        'audit',
       ]
         .filter(Boolean)
         .join(' ')
@@ -1184,27 +1333,24 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   // ---------- RENDER ----------
   const tableColumns = useMemo(
     () => [
-      {label: 'ID', width: 80},
-      {label: 'RDS From', width: 110},
-      {label: 'RDS To', width: 110},
-      {label: 'Total Count', width: 120},
-      {label: 'Species Counts', width: 260},
-      {label: 'Auto GPS', width: 200},
-      {label: 'Manual GPS', width: 250},
-      {label: 'Status', width: 220},
-      {label: 'Superdari', width: 150},
-      {label: 'Disposal', width: 150},
-      {label: 'Actions', width: 110},
+      { label: 'ID', width: 80 },
+      { label: 'RDS From', width: 110 },
+      { label: 'RDS To', width: 110 },
+      { label: 'Total Count', width: 120 },
+      { label: 'Species Counts', width: 260 },
+      { label: 'Auto GPS', width: 200 },
+      { label: 'Manual GPS', width: 250 },
+      { label: 'Status', width: 220 },
+      { label: 'Superdari', width: 150 },
+      { label: 'Disposal', width: 150 },
+      { label: 'Audit', width: 140 },
+      { label: 'Actions', width: 110 },
     ],
     [],
   );
 
   const speciesRowsWithOther = useMemo(() => {
-    // append "Other" option at bottom
-    return [
-      ...(speciesRows || []),
-      {id: '__other__', name: 'Other (Add new species)'},
-    ];
+    return [...(speciesRows || []), { id: '__other__', name: 'Other (Add new species)' }];
   }, [speciesRows]);
 
   return (
@@ -1228,7 +1374,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
           <TouchableOpacity
             style={styles.headerAction}
-            onPress={() => fetchPoleCropList({refresh: true})}
+            onPress={() => fetchPoleCropList({ refresh: true })}
             activeOpacity={0.7}>
             <Ionicons name="refresh" size={22} color="#fff" />
           </TouchableOpacity>
@@ -1242,12 +1388,11 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         refreshControl={
           <RefreshControl
             refreshing={serverRefreshing}
-            onRefresh={() => fetchPoleCropList({refresh: true})}
+            onRefresh={() => fetchPoleCropList({ refresh: true })}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
         }>
-
         {/* Search */}
         <View style={styles.searchSection}>
           <View style={styles.searchContainer}>
@@ -1298,7 +1443,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
               <View style={styles.table}>
                 <View style={styles.tableHeader}>
                   {tableColumns.map((col, idx) => (
-                    <View key={idx} style={[styles.thCell, {width: col.width}]}>
+                    <View key={idx} style={[styles.thCell, { width: col.width }]}>
                       <Text style={styles.thText}>{col.label}</Text>
                     </View>
                   ))}
@@ -1335,70 +1480,76 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   ];
 
                   return (
-                    <View key={String(r.id)} style={rowStyle}>
-                      <View style={[styles.tdCell, {width: 80}]}>
+                    <View key={String(r.serverId || r.id || idx)} style={rowStyle}>
+                      <View style={[styles.tdCell, { width: 80 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r.serverId || '—')}
+                          {String(r.serverId || r.id || '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 110}]}>
+                      <View style={[styles.tdCell, { width: 110 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.rds_from ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 110}]}>
+                      <View style={[styles.tdCell, { width: 110 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.rds_to ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 120}]}>
+                      <View style={[styles.tdCell, { width: 120 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.count ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 260}]}>
+                      <View style={[styles.tdCell, { width: 260 }]}>
                         <Text style={styles.multiLineCell} numberOfLines={5}>
                           {speciesCountsText}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 200}]}>
+                      <View style={[styles.tdCell, { width: 200 }]}>
                         <Text style={styles.gpsText} numberOfLines={1}>
                           {r.autoGpsLatLong || '—'}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 250}]}>
+                      <View style={[styles.tdCell, { width: 250 }]}>
                         <Text style={styles.tdText} numberOfLines={2}>
                           {gpsText || '—'}
                         </Text>
                       </View>
 
                       {/* Status */}
-                      <View style={[styles.tdCell, {width: 220}]}>
-                        <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                          <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                          <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                      <View style={[styles.tdCell, { width: 220 }]}>
+                        <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+                          <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+                          <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
                             {ui.statusText}
                           </Text>
                         </View>
                       </View>
 
                       {/* Superdari */}
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 150}]}>
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 150 }]}>
                         {r?.hasSuperdari ? (
                           <Text style={styles.tdText}>—</Text>
                         ) : (
                           <TouchableOpacity
-                            style={[styles.actionButton, {backgroundColor: 'rgba(14, 165, 233, 0.10)'}]}
-                            onPress={() => openSuperdariForRecord(r)}
+                            style={[
+                              styles.actionButton,
+                              { backgroundColor: 'rgba(14, 165, 233, 0.10)' },
+                            ]}
+                            onPress={() => {
+                              console.log('📱 Clicked Superdari for record:', r);
+                              openSuperdariForRecord(r);
+                            }}
                             activeOpacity={0.7}>
                             <Ionicons name="person-circle-outline" size={16} color={COLORS.secondary} />
-                            <Text style={[styles.actionButtonText, {color: COLORS.secondary}]}>
+                            <Text style={[styles.actionButtonText, { color: COLORS.secondary }]}>
                               Add Superdari
                             </Text>
                           </TouchableOpacity>
@@ -1406,28 +1557,54 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                       </View>
 
                       {/* Disposal */}
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 150}]}>
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 150 }]}>
                         {r?.isDisposed ? (
                           <Text style={styles.tdText}>—</Text>
                         ) : (
                           <TouchableOpacity
-                            style={[styles.actionButton, {backgroundColor: 'rgba(249, 115, 22, 0.10)'}]}
-                            onPress={() => openDisposalForRecord(r)}
+                            style={[
+                              styles.actionButton,
+                              { backgroundColor: 'rgba(249, 115, 22, 0.10)' },
+                            ]}
+                            onPress={() => {
+                              console.log('📱 Clicked Disposal for record:', r);
+                              openDisposalForRecord(r);
+                            }}
                             activeOpacity={0.7}>
                             <Ionicons name="trash-outline" size={16} color={COLORS.warning} />
-                            <Text style={[styles.actionButtonText, {color: COLORS.warning}]}>
+                            <Text style={[styles.actionButtonText, { color: COLORS.warning }]}>
                               Dispose
                             </Text>
                           </TouchableOpacity>
                         )}
                       </View>
 
+                      {/* Audit */}
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 140 }]}>
+                        <TouchableOpacity
+                          style={[
+                            styles.actionButton,
+                            { backgroundColor: 'rgba(124, 58, 237, 0.10)' },
+                          ]}
+                          onPress={() => {
+                            console.log('📱 Clicked Audit for record:', r);
+                            openAuditForRecord(r);
+                          }}
+                          activeOpacity={0.7}>
+                          <Ionicons name="clipboard-outline" size={16} color={COLORS.info} />
+                          <Text style={[styles.actionButtonText, { color: COLORS.info }]}>Audit</Text>
+                        </TouchableOpacity>
+                      </View>
+
                       {/* Actions (Edit only when rejected) */}
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 110}]}>
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 110 }]}>
                         {ui.showEdit ? (
                           <TouchableOpacity
                             style={styles.actionButton}
-                            onPress={() => openEditForm(r)}
+                            onPress={() => {
+                              console.log('📱 Clicked Edit for record:', r);
+                              openEditForm(r);
+                            }}
                             activeOpacity={0.7}>
                             <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.actionButtonText}>Edit</Text>
@@ -1464,7 +1641,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           </TouchableWithoutFeedback>
 
           <View style={styles.modalContainer}>
-            <View style={[styles.modalContent, {maxHeight: height * 0.35}]}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.35 }]}>
               <View style={styles.modalHeader}>
                 <View style={styles.modalTitleRow}>
                   <Ionicons name="image-outline" size={24} color={COLORS.primary} />
@@ -1478,7 +1655,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{padding: 20, gap: 12}}>
+              <View style={{ padding: 20, gap: 12 }}>
                 <TouchableOpacity
                   style={{
                     backgroundColor: COLORS.primary,
@@ -1492,7 +1669,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   onPress={takePhotoFromCamera}
                   activeOpacity={0.8}>
                   <Ionicons name="camera-outline" size={20} color="#fff" />
-                  <Text style={{color: '#fff', fontWeight: '800', fontSize: 15}}>Take Photo</Text>
+                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>Take Photo</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -1510,16 +1687,16 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   onPress={pickFromGallery}
                   activeOpacity={0.8}>
                   <Ionicons name="images-outline" size={20} color={COLORS.primary} />
-                  <Text style={{color: COLORS.primary, fontWeight: '800', fontSize: 15}}>
+                  <Text style={{ color: COLORS.primary, fontWeight: '800', fontSize: 15 }}>
                     Choose from Gallery
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={{paddingVertical: 12, borderRadius: 14, alignItems: 'center'}}
+                  style={{ paddingVertical: 12, borderRadius: 14, alignItems: 'center' }}
                   onPress={() => setImagePickerModal(false)}
                   activeOpacity={0.8}>
-                  <Text style={{color: COLORS.textLight, fontWeight: '800'}}>Cancel</Text>
+                  <Text style={{ color: COLORS.textLight, fontWeight: '800' }}>Cancel</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1539,7 +1716,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           </TouchableWithoutFeedback>
 
           <View style={styles.modalContainer}>
-            <View style={[styles.modalContent, {maxHeight: height * 0.45}]}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.45 }]}>
               <View style={styles.modalHeader}>
                 <View style={styles.modalTitleRow}>
                   <Ionicons name="leaf" size={24} color={COLORS.primary} />
@@ -1550,7 +1727,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{padding: 20}}>
+              <View style={{ padding: 20 }}>
                 <FormRow
                   label="Species Name"
                   value={otherSpeciesName}
@@ -1559,16 +1736,19 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   required
                 />
 
-                <View style={{flexDirection: 'row', gap: 12, marginTop: 8}}>
+                <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
                   <TouchableOpacity
-                    style={[styles.modalButtonSecondary, {flex: 1}]}
+                    style={[styles.modalButtonSecondary, { flex: 1 }]}
                     onPress={() => setOtherSpeciesModal(false)}
                     activeOpacity={0.7}>
                     <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={[styles.modalButtonPrimary, {flex: 2, opacity: addingOtherSpecies ? 0.7 : 1}]}
+                    style={[
+                      styles.modalButtonPrimary,
+                      { flex: 2, opacity: addingOtherSpecies ? 0.7 : 1 },
+                    ]}
                     onPress={addOtherSpecies}
                     disabled={addingOtherSpecies}
                     activeOpacity={0.7}>
@@ -1621,7 +1801,8 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   <ScrollView style={styles.speciesList} showsVerticalScrollIndicator={false}>
                     {speciesRowsWithOther.map(row => {
                       const isOther = row.id === '__other__';
-                      const checked = !isOther && (speciesIds || []).map(Number).includes(Number(row.id));
+                      const checked =
+                        !isOther && (speciesIds || []).map(Number).includes(Number(row.id));
                       return (
                         <TouchableOpacity
                           key={String(row.id ?? row.name)}
@@ -1697,7 +1878,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                     <Text style={styles.editModalSubtitle}>Record ID: {editingId}</Text>
                   )}
                   {isEdit && Array.isArray(existingPictures) && existingPictures.length > 0 && (
-                    <Text style={[styles.editModalSubtitle, {marginTop: 4}]}>
+                    <Text style={[styles.editModalSubtitle, { marginTop: 4 }]}>
                       Existing Images: {existingPictures.length}
                       {pictureUris?.length ? ` • New Selected: ${pictureUris.length}` : ''}
                     </Text>
@@ -1715,7 +1896,6 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                 style={styles.editModalBody}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled">
-
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Basic Information</Text>
 
@@ -1756,7 +1936,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
                   {/* Per-species counts */}
                   {speciesIds.length > 0 && (
-                    <View style={{marginTop: 6}}>
+                    <View style={{ marginTop: 6 }}>
                       <Text
                         style={{
                           fontSize: 13,
@@ -1842,7 +2022,10 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Images</Text>
 
-                  <TouchableOpacity style={styles.imageUploadButton} onPress={pickImage} activeOpacity={0.7}>
+                  <TouchableOpacity
+                    style={styles.imageUploadButton}
+                    onPress={pickImage}
+                    activeOpacity={0.7}>
                     <View style={styles.imageUploadContent}>
                       <Ionicons name="cloud-upload-outline" size={24} color={COLORS.primary} />
                       <View style={styles.imageUploadText}>
@@ -1878,7 +2061,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                       ]}>
                       <View style={styles.imagePreviewHeader}>
                         <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
-                        <Text style={[styles.imagePreviewTitle, {color: COLORS.secondary}]}>
+                        <Text style={[styles.imagePreviewTitle, { color: COLORS.secondary }]}>
                           Keeping existing images ({existingPictures.length})
                         </Text>
                       </View>
@@ -1907,7 +2090,11 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                     <ActivityIndicator color="#fff" size="small" />
                   ) : (
                     <>
-                      <Ionicons name={isEdit ? 'save-outline' : 'add-circle-outline'} size={20} color="#fff" />
+                      <Ionicons
+                        name={isEdit ? 'save-outline' : 'add-circle-outline'}
+                        size={20}
+                        color="#fff"
+                      />
                       <Text style={styles.footerButtonPrimaryText}>
                         {isEdit ? 'Update Record' : 'Save Record'}
                       </Text>
@@ -1925,9 +2112,9 @@ export default function PoleCropRecordsScreen({navigation, route}) {
 
 // Styles (kept aligned to your Afforestation style to avoid UI regressions)
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
-  contentContainer: {paddingBottom: 100},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
+  contentContainer: { paddingBottom: 100 },
 
   header: {
     backgroundColor: COLORS.primary,
@@ -1937,11 +2124,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  headerContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   backButton: {
     width: 44,
     height: 44,
@@ -1951,9 +2138,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 6},
-  siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)'},
+  headerContent: { flex: 1 },
+  headerTitle: { fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 6 },
+  siteId: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)' },
   headerAction: {
     width: 44,
     height: 44,
@@ -1963,7 +2150,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  searchSection: {paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16},
+  searchSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1974,19 +2161,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  searchIcon: {marginRight: 12},
-  searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
-  searchClear: {padding: 4},
+  searchIcon: { marginRight: 12 },
+  searchInput: { flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text },
+  searchClear: { padding: 4 },
 
-  section: {marginHorizontal: 20, marginBottom: 20},
-  sectionHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
-  sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
-  sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  section: { marginHorizontal: 20, marginBottom: 20 },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text },
+  sectionSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
 
   loadingState: {
     backgroundColor: '#fff',
@@ -1996,7 +2188,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  loadingText: {fontSize: 14, color: COLORS.textLight, marginTop: 12, fontWeight: '600'},
+  loadingText: { fontSize: 14, color: COLORS.textLight, marginTop: 12, fontWeight: '600' },
 
   emptyState: {
     backgroundColor: '#fff',
@@ -2007,10 +2199,16 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     borderStyle: 'dashed',
   },
-  emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
-  emptyText: {fontSize: 14, color: COLORS.textLight, textAlign: 'center', marginBottom: 20, lineHeight: 20},
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8 },
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.textLight,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
 
-  tableContainer: {borderRadius: 16, overflow: 'hidden'},
+  tableContainer: { borderRadius: 16, overflow: 'hidden' },
   table: {
     borderRadius: 16,
     overflow: 'hidden',
@@ -2018,7 +2216,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -2030,15 +2228,31 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     minHeight: 56,
   },
-  thCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  thText: {fontSize: 12, fontWeight: '800', color: COLORS.text, textTransform: 'uppercase', letterSpacing: 0.5},
-  tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
-  rowEven: {backgroundColor: '#fff'},
-  rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
-  rowRejected: {backgroundColor: 'rgba(239, 68, 68, 0.06)'},
-  tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
-  multiLineCell: {fontSize: 12, fontWeight: '700', color: COLORS.text, lineHeight: 18},
+  thCell: {
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: COLORS.border,
+  },
+  thText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.text,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  tableRow: { flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  rowEven: { backgroundColor: '#fff' },
+  rowOdd: { backgroundColor: 'rgba(5, 150, 105, 0.02)' },
+  rowRejected: { backgroundColor: 'rgba(239, 68, 68, 0.06)' },
+  tdCell: {
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: COLORS.border,
+  },
+  tdText: { fontSize: 13, fontWeight: '600', color: COLORS.text },
+  multiLineCell: { fontSize: 12, fontWeight: '700', color: COLORS.text, lineHeight: 18 },
   gpsText: {
     fontSize: 11,
     fontWeight: '600',
@@ -2056,10 +2270,16 @@ const styles = StyleSheet.create({
     gap: 6,
     maxWidth: 210,
   },
-  statusDot: {width: 8, height: 8, borderRadius: 4},
-  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1},
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    flexShrink: 1,
+  },
 
-  actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
+  actionsCell: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2069,14 +2289,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 4,
   },
-  actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
+  actionButtonText: { fontSize: 12, fontWeight: '700', color: COLORS.secondary },
 
   fab: {
     position: 'absolute',
     right: 20,
     bottom: 30,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
@@ -2090,9 +2310,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  modalBackdrop: {...StyleSheet.absoluteFillObject},
-  modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
+  modalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalContainer: { flex: 1, justifyContent: 'center', padding: 20 },
   modalContent: {
     backgroundColor: '#fff',
     borderRadius: 24,
@@ -2101,7 +2321,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 10},
+    shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.15,
     shadowRadius: 20,
     elevation: 10,
@@ -2115,8 +2335,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  modalTitle: {fontSize: 20, fontWeight: '800', color: COLORS.text},
+  modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
   modalClose: {
     width: 40,
     height: 40,
@@ -2131,16 +2351,16 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  modalButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  modalButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
   modalButtonPrimary: {
     backgroundColor: COLORS.primary,
     paddingVertical: 16,
     borderRadius: 14,
     alignItems: 'center',
   },
-  modalButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  modalButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
-  speciesList: {maxHeight: 400},
+  speciesList: { maxHeight: 400 },
   speciesItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2159,12 +2379,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  checkboxChecked: {backgroundColor: COLORS.primary, borderColor: COLORS.primary},
-  speciesInfo: {flex: 1},
-  speciesName: {fontSize: 16, fontWeight: '600', color: COLORS.text, marginBottom: 2},
-  speciesId: {fontSize: 12, color: COLORS.textLight, fontWeight: '500'},
-  selectedIndicator: {marginLeft: 8},
-  speciesFooter: {padding: 20, borderTopWidth: 1, borderTopColor: COLORS.border},
+  checkboxChecked: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  speciesInfo: { flex: 1 },
+  speciesName: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginBottom: 2 },
+  speciesId: { fontSize: 12, color: COLORS.textLight, fontWeight: '500' },
+  selectedIndicator: { marginLeft: 8 },
+  speciesFooter: { padding: 20, borderTopWidth: 1, borderTopColor: COLORS.border },
   speciesCountBadge: {
     backgroundColor: 'rgba(5, 150, 105, 0.1)',
     paddingHorizontal: 16,
@@ -2173,8 +2393,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  speciesCountText: {fontSize: 14, fontWeight: '700', color: COLORS.primary},
-  speciesActions: {flexDirection: 'row', gap: 12},
+  speciesCountText: { fontSize: 14, fontWeight: '700', color: COLORS.primary },
+  speciesActions: { flexDirection: 'row', gap: 12 },
   speciesActionButton: {
     flex: 1,
     backgroundColor: 'rgba(31, 41, 55, 0.05)',
@@ -2182,12 +2402,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
   },
-  speciesActionButtonText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
-  speciesActionButtonPrimary: {backgroundColor: COLORS.primary},
-  speciesActionButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  speciesActionButtonText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  speciesActionButtonPrimary: { backgroundColor: COLORS.primary },
+  speciesActionButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
-  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
+  editModalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  editModalContainer: { flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20 },
   editModalContent: {
     flex: 1,
     backgroundColor: '#fff',
@@ -2207,8 +2427,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  editModalTitle: {fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4},
-  editModalSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  editModalTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  editModalSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
   editModalClose: {
     width: 40,
     height: 40,
@@ -2217,7 +2437,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
+  editModalBody: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20 },
   editModalFooter: {
     flexDirection: 'row',
     gap: 12,
@@ -2227,10 +2447,10 @@ const styles = StyleSheet.create({
     borderTopColor: COLORS.border,
   },
 
-  formSection: {marginBottom: 24},
-  formSectionTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16},
-  fieldWithButton: {marginBottom: 16},
-  fieldLabel: {fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8},
+  formSection: { marginBottom: 24 },
+  formSectionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16 },
+  fieldWithButton: { marginBottom: 16 },
+  fieldLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
   multiSelectButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2240,8 +2460,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 12,
   },
-  multiSelectButtonText: {flex: 1, fontSize: 16, fontWeight: '700', color: '#fff'},
-  speciesHint: {fontSize: 12, color: COLORS.textLight, marginTop: 4, fontStyle: 'italic'},
+  multiSelectButtonText: { flex: 1, fontSize: 16, fontWeight: '700', color: '#fff' },
+  speciesHint: { fontSize: 12, color: COLORS.textLight, marginTop: 4, fontStyle: 'italic' },
 
   gpsCard: {
     backgroundColor: 'rgba(5, 150, 105, 0.03)',
@@ -2260,7 +2480,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(5, 150, 105, 0.1)',
   },
-  gpsCardTitle: {fontSize: 14, fontWeight: '700', color: COLORS.text},
+  gpsCardTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text },
   gpsFetchButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2270,8 +2490,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 6,
   },
-  gpsFetchButtonText: {fontSize: 12, fontWeight: '700', color: '#fff'},
-  gpsCardBody: {padding: 16},
+  gpsFetchButtonText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+  gpsCardBody: { padding: 16 },
   gpsValue: {
     fontSize: 14,
     fontWeight: '700',
@@ -2279,11 +2499,11 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     marginBottom: 8,
   },
-  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  gpsLoadingText: {fontSize: 12, color: COLORS.textLight, fontWeight: '600'},
-  gpsNote: {fontSize: 12, color: COLORS.textLight, marginBottom: 16, fontStyle: 'italic'},
-  coordinateRow: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12},
-  coordinateInputContainer: {flex: 1},
+  gpsLoading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  gpsLoadingText: { fontSize: 12, color: COLORS.textLight, fontWeight: '600' },
+  gpsNote: { fontSize: 12, color: COLORS.textLight, marginBottom: 16, fontStyle: 'italic' },
+  coordinateRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  coordinateInputContainer: { flex: 1 },
 
   imageUploadButton: {
     backgroundColor: 'rgba(5, 150, 105, 0.05)',
@@ -2293,10 +2513,10 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
   },
-  imageUploadContent: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  imageUploadText: {flex: 1},
-  imageUploadTitle: {fontSize: 16, fontWeight: '700', color: COLORS.primary, marginBottom: 4},
-  imageUploadSubtitle: {fontSize: 12, color: COLORS.textLight},
+  imageUploadContent: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  imageUploadText: { flex: 1 },
+  imageUploadTitle: { fontSize: 16, fontWeight: '700', color: COLORS.primary, marginBottom: 4 },
+  imageUploadSubtitle: { fontSize: 12, color: COLORS.textLight },
   imagePreview: {
     backgroundColor: 'rgba(22, 163, 74, 0.1)',
     borderWidth: 1,
@@ -2304,8 +2524,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
   },
-  imagePreviewHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4},
-  imagePreviewTitle: {fontSize: 14, fontWeight: '700', color: COLORS.success},
+  imagePreviewHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  imagePreviewTitle: { fontSize: 14, fontWeight: '700', color: COLORS.success },
   imagePreviewText: {
     fontSize: 12,
     color: COLORS.textLight,
@@ -2319,7 +2539,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  footerButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
   footerButtonPrimary: {
     flex: 2,
     backgroundColor: COLORS.primary,
@@ -2330,5 +2550,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
   },
-  footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  footerButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 });

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "786947902595",
+    "project_id": "treeenum",
+    "storage_bucket": "treeenum.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:786947902595:android:16eceaf575a9c4c5a21fb6",
+        "android_client_info": {
+          "package_name": "com.treeenum"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQIBLnZFGOHHipctmZmzMzkUOov3I_-SU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

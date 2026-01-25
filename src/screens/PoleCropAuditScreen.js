@@ -1,14 +1,20 @@
 // PoleCropAuditScreen.js
 // ✅ COMPLETE AUDIT SCREEN FOR POLE CROP
 // ✅ Uses:
-//    - GET  /enum/pole-crop-audit/get-all-audits-of-pole-crop/:poleCropId   (UPDATED as per your cURL)
+//    - GET  /enum/pole-crop-audit/get-all-audits-of-pole-crop/:poleCropId
 //    - POST /enum/pole-crop-audit
 // ✅ Auto-fills planted/expected counts from the Pole Crop record you clicked
 // ✅ Live success % = (successCount / plantedCount) * 100
 // ✅ Fixes duplicate key issues by de-duplicating + stable unique keys
-// ✅ Optional image upload to bucket (same pattern as your pole crop screen)
+// ✅ OPTIONAL FIELDS FIXED (Postman-like):
+//    - Omit optional empty fields instead of sending null/0
+//    - Send fineAmount only when fineImposed=true
+//    - Send firNumber only when firRegistered=true
+// ✅ IMAGES FIXED (cURL-like):
+//    - Upload to bucket and then send ONLY file names (basenames) in arrays: pictures[], drEvidence[], firEvidence[]
+// ✅ Better error logging: reads text + json for HTTP 500 debugging
 
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -32,12 +38,14 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {useFocusEffect} from '@react-navigation/native';
-import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 
 import FormRow from '../components/FormRow';
+import DateField from '../components/DateField';
+import { DropdownRow } from '../components/SelectRows';
 
-const {width, height} = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 // Theme Colors (matching your style)
 const COLORS = {
@@ -62,9 +70,6 @@ const API_BASE = 'http://be.lte.gisforestry.com';
 const AWS_Base = 'https://app.eco.gisforestry.com';
 
 const POLE_CROP_AUDIT_CREATE_URL = `${API_BASE}/enum/pole-crop-audit`;
-
-// ✅ UPDATED GET URL to match your cURL:
-// GET http://be.lte.gisforestry.com/enum/pole-crop-audit/get-all-audits-of-pole-crop/11
 const POLE_CROP_AUDIT_LIST_URL = poleCropId =>
   `${API_BASE}/enum/pole-crop-audit/get-all-audits-of-pole-crop/${poleCropId}`;
 
@@ -129,7 +134,39 @@ const toFormFile = asset => {
     `audit_${Date.now()}${asset?.type?.includes('png') ? '.png' : '.jpg'}`;
 
   const type = asset?.type || 'image/jpeg';
-  return {uri, name, type};
+  return { uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri, name, type };
+};
+
+// ✅ remove empty keys (omit fields like Postman)
+const cleanPayload = obj =>
+  Object.fromEntries(
+    Object.entries(obj).filter(([_, v]) => {
+      if (v === undefined) return false;
+      if (v === '') return false;
+      if (v === null) return false;
+      if (Array.isArray(v) && v.length === 0) return false;
+      return true;
+    }),
+  );
+
+// ✅ convert URL -> filename (basename), like your cURL expects: ["a.jpg","b.jpg"]
+const toBasename = u => {
+  const s = String(u || '');
+  const noQuery = s.split('?')[0];
+  const lastSlash = noQuery.lastIndexOf('/');
+  return lastSlash >= 0 ? noQuery.substring(lastSlash + 1) : noQuery;
+};
+
+// ✅ better error visibility (text + json)
+const fetchJsonOrText = async res => {
+  const text = await res.text().catch(() => '');
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch (_) {
+    json = null;
+  }
+  return { text, json };
 };
 
 // Extract planted species counts from the pole crop record you clicked
@@ -138,7 +175,7 @@ const toFormFile = asset => {
 const getPoleCropSpeciesForAudit = (poleCropRow, speciesRows = []) => {
   const row = poleCropRow || {};
 
-  // new
+  // 1. Try 'poleCropSpecies'
   const pcs = Array.isArray(row?.poleCropSpecies) ? row.poleCropSpecies : [];
   if (pcs.length) {
     return pcs
@@ -151,7 +188,33 @@ const getPoleCropSpeciesForAudit = (poleCropRow, speciesRows = []) => {
       .filter(x => x.species_id != null);
   }
 
-  // legacy
+  // 2. Try normalized 'species_ids' + 'species_counts'
+  if (Array.isArray(row?.species_ids) && row.species_ids.length > 0) {
+    const countsMap = row.species_counts || {};
+    const namesMap = row.species_names_map || {};
+
+    return row.species_ids
+      .map(sid => {
+        if (!sid) return null;
+        const sString = String(sid);
+        const name =
+          namesMap[sString] ||
+          speciesRows.find(s => String(s.id) === sString)?.name ||
+          `Species ${sid}`;
+        const countVal = countsMap[sString];
+        const count = Number(String(countVal ?? '').replace(/[^\d.]/g, '')) || 0;
+
+        return {
+          species_id: sid,
+          name,
+          expectedCount: count,
+          audit_no: null,
+        };
+      })
+      .filter(x => x && x.species_id != null);
+  }
+
+  // 3. Try legacy 'species_counts' array
   const sc = Array.isArray(row?.species_counts) ? row.species_counts : [];
   if (sc.length) {
     return sc
@@ -167,6 +230,23 @@ const getPoleCropSpeciesForAudit = (poleCropRow, speciesRows = []) => {
         };
       })
       .filter(x => x.species_id != null);
+  }
+
+  // 4. Try look inside serverRaw if it exists
+  if (row?.serverRaw) {
+    const rawPcs = Array.isArray(row.serverRaw.poleCropSpecies)
+      ? row.serverRaw.poleCropSpecies
+      : [];
+    if (rawPcs.length) {
+      return rawPcs
+        .map(x => ({
+          species_id: x?.id ?? null,
+          name: String(x?.name ?? '').trim() || `#${x?.id ?? '—'}`,
+          expectedCount: Number(x?.count ?? 0) || 0,
+          audit_no: x?.audit_no ?? null,
+        }))
+        .filter(x => x.species_id != null);
+    }
   }
 
   return [];
@@ -194,11 +274,10 @@ const dedupeBySpeciesId = list => {
   return Array.from(seen.values());
 };
 
-export default function PoleCropAuditScreen({navigation, route}) {
+export default function PoleCropAuditScreen({ navigation, route }) {
   // ✅ Pass the clicked record from PoleCropRecordsScreen:
   // navigation.navigate('PoleCropAuditScreen', { poleCrop: r })
   const poleCrop = route?.params?.poleCrop || null;
-
   const poleCropId = useMemo(() => poleCrop?.id ?? null, [poleCrop]);
 
   // ---------- STATE ----------
@@ -255,13 +334,14 @@ export default function PoleCropAuditScreen({navigation, route}) {
   }, [speciesList]);
 
   const setSuccessCount = (speciesId, value) => {
-    const clean = String(value ?? '').replace(/[^\d.]/g, '');
-    setSuccessCountMap(prev => ({...(prev || {}), [String(speciesId)]: clean}));
+    const clean = String(value ?? '').replace(/[^\d]/g, '');
+    setSuccessCountMap(prev => ({ ...(prev || {}), [String(speciesId)]: clean }));
   };
 
-  const totalExpected = useMemo(() => {
-    return speciesList.reduce((acc, s) => acc + (Number(s?.expectedCount) || 0), 0);
-  }, [speciesList]);
+  const totalExpected = useMemo(
+    () => speciesList.reduce((acc, s) => acc + (Number(s?.expectedCount) || 0), 0),
+    [speciesList],
+  );
 
   const totalSuccess = useMemo(() => {
     const keys = Object.keys(successCountMap || {});
@@ -295,7 +375,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
 
   const pickImages = setter => {
     launchImageLibrary(
-      {mediaType: 'photo', quality: 0.8, selectionLimit: 0},
+      { mediaType: 'photo', quality: 0.8, selectionLimit: 0 },
       res => {
         if (res?.didCancel) return;
         if (res?.errorCode) {
@@ -320,7 +400,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
         },
       );
       return granted === PermissionsAndroid.RESULTS.GRANTED;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }, []);
@@ -334,7 +414,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
       }
 
       launchCamera(
-        {mediaType: 'photo', quality: 0.8, saveToPhotos: false, cameraType: 'back'},
+        { mediaType: 'photo', quality: 0.8, saveToPhotos: false, cameraType: 'back' },
         res => {
           if (res?.didCancel) return;
           if (res?.errorCode) {
@@ -365,7 +445,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
     form.append('isMulti', BUCKET_IS_MULTI);
     form.append('fileName', BUCKET_FILE_NAME);
 
-    const res = await fetch(BUCKET_UPLOAD_URL, {method: 'POST', body: form});
+    const res = await fetch(BUCKET_UPLOAD_URL, { method: 'POST', body: form });
     const json = await res.json().catch(() => null);
 
     if (!res.ok || !json?.status) {
@@ -386,7 +466,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
       });
     });
 
-    return urls;
+    return urls.filter(Boolean);
   };
 
   const openPicturesViewer = (pics, title = 'Pictures') => {
@@ -402,7 +482,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
 
   // ---------- FETCH AUDITS ----------
   const fetchPoleCropAudits = useCallback(
-    async ({refresh = false} = {}) => {
+    async ({ refresh = false } = {}) => {
       if (!poleCropId) {
         setAudits([]);
         setServerError('PoleCropId missing. Please open audit from Pole Crop records screen.');
@@ -416,7 +496,6 @@ export default function PoleCropAuditScreen({navigation, route}) {
         const token = await getToken();
         if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-        // ✅ UPDATED endpoint call
         const res = await fetch(POLE_CROP_AUDIT_LIST_URL(poleCropId), {
           method: 'GET',
           headers: {
@@ -425,15 +504,21 @@ export default function PoleCropAuditScreen({navigation, route}) {
           },
         });
 
-        const json = await res.json().catch(() => null);
+        const { json, text } = await fetchJsonOrText(res);
 
         if (!res.ok) {
-          const msg = json?.message || json?.error || `API Error (${res.status})`;
+          const msg = json?.message || json?.error || text || `API Error (${res.status})`;
           throw new Error(msg);
         }
 
         let rows = normalizeList(json);
         rows = Array.isArray(rows) ? rows : [];
+
+        // optional: sort latest first if date exists
+        rows = rows
+          .map((r, i) => ({ ...r, _k: i, _t: safeDate(r?.dateOfAudit)?.getTime() || 0 }))
+          .sort((a, b) => (b._t || 0) - (a._t || 0));
+
         setAudits(rows);
       } catch (e) {
         setAudits([]);
@@ -451,7 +536,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchPoleCropAudits({refresh: true});
+      fetchPoleCropAudits({ refresh: true });
     }, [fetchPoleCropAudits]),
   );
 
@@ -495,7 +580,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
     }
 
     if (!String(dateOfAudit || '').trim()) {
-      Alert.alert('Missing', 'Date of Audit is required. Use ISO or YYYY-MM-DD.');
+      Alert.alert('Missing', 'Date of Audit is required.');
       return false;
     }
     const dAudit = safeDate(dateOfAudit);
@@ -528,11 +613,11 @@ export default function PoleCropAuditScreen({navigation, route}) {
     }
 
     if (fineImposed) {
-      const fa = Number(fineAmount);
       if (!String(fineAmount || '').trim()) {
         Alert.alert('Missing', 'Fine Amount is required when Fine Imposed is ON.');
         return false;
       }
+      const fa = Number(fineAmount);
       if (!Number.isFinite(fa) || fa <= 0) {
         Alert.alert('Invalid', 'Fine Amount must be a positive number.');
         return false;
@@ -547,7 +632,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
     }
 
     if (String(drDate || '').trim() && !safeDate(drDate)) {
-      Alert.alert('Invalid', 'DR Date is invalid. Example: 2025-01-11T00:00:00Z');
+      Alert.alert('Invalid', 'DR Date is invalid.');
       return false;
     }
 
@@ -570,46 +655,57 @@ export default function PoleCropAuditScreen({navigation, route}) {
         uploadAssetsToBucket(firEvidenceAssets, BUCKET_UPLOAD_PATH_FIR_EVIDENCE),
       ]);
 
-      const speciesSuccessCounts = speciesList.map(s => {
-        const sid = Number(s.species_id);
-        return {
-          species_id: sid,
-          successCount: Number(successCountMap?.[String(s.species_id)]) || 0,
-        };
-      });
+      // ✅ IMPORTANT: Send only basenames (filenames) to backend
+      const picturesFinal = (picsUrls || []).map(toBasename).filter(Boolean);
+      const drEvidenceFinal = (drUrls || []).map(toBasename).filter(Boolean);
+      const firEvidenceFinal = (firUrls || []).map(toBasename).filter(Boolean);
 
-      const payload = {
+      const speciesSuccessCounts = speciesList.map(s => ({
+        species_id: Number(s.species_id),
+        successCount: Number(successCountMap?.[String(s.species_id)]) || 0,
+      }));
+
+      // ✅ Postman-like payload: omit empty optional keys
+      const payload = cleanPayload({
         poleCropId: Number(poleCropId),
         dateOfAudit: new Date(dateOfAudit).toISOString(),
         speciesSuccessCounts,
-        notSuccessReason: String(notSuccessReason || '').trim() || null,
-        additionalRemarks: String(additionalRemarks || '').trim() || null,
-        drNo: String(drNo || '').trim() || null,
-        drDate: String(drDate || '').trim() ? new Date(drDate).toISOString() : null,
-        drEvidence: Array.isArray(drUrls) ? drUrls : [],
+
+        notSuccessReason: String(notSuccessReason || '').trim() || undefined,
+        additionalRemarks: String(additionalRemarks || '').trim() || undefined,
+
+        drNo: String(drNo || '').trim() || undefined,
+        drDate: String(drDate || '').trim() ? new Date(drDate).toISOString() : undefined,
+        drEvidence: drEvidenceFinal.length ? drEvidenceFinal : undefined,
+
         fineImposed: !!fineImposed,
-        fineAmount: fineImposed ? Number(fineAmount) : 0,
+        fineAmount: fineImposed ? Number(fineAmount) : undefined,
+
         firRegistered: !!firRegistered,
-        firNumber: firRegistered ? String(firNumber || '').trim() : null,
-        firEvidence: Array.isArray(firUrls) ? firUrls : [],
-        pictures: Array.isArray(picsUrls) ? picsUrls : [],
-      };
+        firNumber: firRegistered ? String(firNumber || '').trim() : undefined,
+        firEvidence: firEvidenceFinal.length ? firEvidenceFinal : undefined,
+
+        pictures: picturesFinal.length ? picturesFinal : undefined,
+      });
+
+      console.log('POLE CROP AUDIT payload:', JSON.stringify(payload, null, 2));
 
       const res = await fetch(POLE_CROP_AUDIT_CREATE_URL, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       });
 
-      const json = await res.json().catch(() => null);
+      const { json, text } = await fetchJsonOrText(res);
 
       if (!res.ok) {
-        const msg = json?.message || json?.error || `API Error (${res.status})`;
+        console.log('POLE CROP AUDIT HTTP', res.status, text);
+        const msg = json?.message || json?.error || text || `API Error (${res.status})`;
         throw new Error(msg);
       }
 
       setModalVisible(false);
-      fetchPoleCropAudits({refresh: true});
+      fetchPoleCropAudits({ refresh: true });
       Alert.alert('Success', 'Audit saved successfully.');
     } catch (e) {
       Alert.alert('Error', e?.message || 'Failed to save audit');
@@ -667,9 +763,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
             <View style={styles.headerInfo}>
               <View style={styles.infoChip}>
                 <Ionicons name="id-card" size={12} color="#fff" />
-                <Text style={styles.infoChipText}>
-                  PoleCrop ID: {String(poleCropId ?? '—')}
-                </Text>
+                <Text style={styles.infoChipText}>PoleCrop ID: {String(poleCropId ?? '—')}</Text>
               </View>
             </View>
 
@@ -680,7 +774,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
 
           <TouchableOpacity
             style={styles.refreshButton}
-            onPress={() => fetchPoleCropAudits({refresh: true})}
+            onPress={() => fetchPoleCropAudits({ refresh: true })}
             activeOpacity={0.7}>
             <Ionicons name="refresh" size={22} color="#fff" />
           </TouchableOpacity>
@@ -693,7 +787,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => fetchPoleCropAudits({refresh: true})}
+            onRefresh={() => fetchPoleCropAudits({ refresh: true })}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
@@ -712,8 +806,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
             <View style={styles.summaryCard}>
               {speciesList.map((s, i) => (
                 <Text key={`${String(s.species_id)}-sum-${i}`} style={styles.summaryLine}>
-                  {s.name}:{' '}
-                  <Text style={styles.summaryStrong}>{String(s.expectedCount ?? 0)}</Text>
+                  {s.name}: <Text style={styles.summaryStrong}>{String(s.expectedCount ?? 0)}</Text>
                 </Text>
               ))}
             </View>
@@ -722,8 +815,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
               <Ionicons name="alert-circle-outline" size={48} color={COLORS.border} />
               <Text style={styles.emptyTitle}>No Species Found</Text>
               <Text style={styles.emptyText}>
-                Open audit screen from Pole Crop records screen (clicked record) so species can be
-                auto-filled.
+                Open audit screen from Pole Crop records screen (clicked record) so species can be auto-filled.
               </Text>
             </View>
           )}
@@ -738,7 +830,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
             <Text style={styles.errorMessage}>{serverError}</Text>
             <TouchableOpacity
               style={styles.errorButton}
-              onPress={() => fetchPoleCropAudits({refresh: true})}
+              onPress={() => fetchPoleCropAudits({ refresh: true })}
               activeOpacity={0.7}>
               <Text style={styles.errorButtonText}>Retry Connection</Text>
             </TouchableOpacity>
@@ -764,9 +856,9 @@ export default function PoleCropAuditScreen({navigation, route}) {
               <Text style={styles.emptyText}>Create your first audit for this Pole Crop record.</Text>
             </View>
           ) : (
-            <View style={{gap: 12}}>
+            <View style={{ gap: 12 }}>
               {audits.map((a, idx) => {
-                const auditId = a?.id ?? a?._id ?? idx;
+                const auditId = a?.id ?? a?._id ?? `idx_${idx}`;
                 const successSummary = summarizeSuccessCounts(a?.speciesSuccessCounts, speciesList);
 
                 const pics = Array.isArray(a?.pictures) ? a.pictures.filter(Boolean) : [];
@@ -779,7 +871,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
                 return (
                   <View key={`audit-${String(auditId)}-${idx}`} style={styles.auditCard}>
                     <View style={styles.auditTop}>
-                      <View style={{flex: 1}}>
+                      <View style={{ flex: 1 }}>
                         <Text style={styles.auditTitle}>Audit #{String(auditId)}</Text>
                         <Text style={styles.auditSub}>{getAuditDateLabel(a)}</Text>
                       </View>
@@ -879,7 +971,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
             style={styles.editModalContainer}>
             <View style={styles.editModalContent}>
               <View style={styles.editModalHeader}>
-                <View style={{flex: 1}}>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.editModalTitle}>Create Pole Crop Audit</Text>
                   <Text style={styles.editModalSubtitle}>
                     PoleCrop ID: {String(poleCropId ?? '—')} • Total planted: {totalExpected}
@@ -902,19 +994,19 @@ export default function PoleCropAuditScreen({navigation, route}) {
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Audit Information</Text>
 
-                  <FormRow
-                    label="Date Of Audit (ISO)"
+                  <DateField
+                    label="Date Of Audit"
                     value={dateOfAudit}
-                    onChangeText={setDateOfAudit}
-                    placeholder="e.g. 2025-01-13T10:00:00Z"
-                    required
+                    onChange={d => setDateOfAudit(d.toISOString())}
+                    placeholder="Select Date"
                   />
 
-                  <FormRow
+                  <DropdownRow
                     label="Not Success Reason"
                     value={notSuccessReason}
-                    onChangeText={setNotSuccessReason}
-                    placeholder="e.g. Failure"
+                    options={['Failure', 'Damage']}
+                    onChange={setNotSuccessReason}
+                    placeholder="Select Reason"
                   />
 
                   <FormRow
@@ -934,9 +1026,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
                       <Text style={styles.totalChipText}>Total Success: {totalSuccess}</Text>
                     </View>
                     <View style={styles.totalChip}>
-                      <Text style={styles.totalChipText}>
-                        Success %: {formatPercent(totalPercent)}
-                      </Text>
+                      <Text style={styles.totalChipText}>Success %: {formatPercent(totalPercent)}</Text>
                     </View>
                   </View>
 
@@ -950,7 +1040,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
 
                         return (
                           <View key={`${sid}-${i}`} style={styles.countRow}>
-                            <View style={{flex: 1}}>
+                            <View style={{ flex: 1 }}>
                               <Text style={styles.countName} numberOfLines={1}>
                                 {s.name}
                               </Text>
@@ -959,12 +1049,12 @@ export default function PoleCropAuditScreen({navigation, route}) {
                                 Planted/Expected: {String(planted ?? '—')}
                               </Text>
 
-                              <Text style={[styles.countHint, {marginTop: 3}]}>
+                              <Text style={[styles.countHint, { marginTop: 3 }]}>
                                 Success %: {formatPercent(pct)}
                               </Text>
                             </View>
 
-                            <View style={{alignItems: 'flex-end'}}>
+                            <View style={{ alignItems: 'flex-end' }}>
                               <TextInput
                                 value={successVal}
                                 onChangeText={v => setSuccessCount(sid, v)}
@@ -996,11 +1086,11 @@ export default function PoleCropAuditScreen({navigation, route}) {
                     onChangeText={setDrNo}
                     placeholder="e.g. DR-POLE-001"
                   />
-                  <FormRow
-                    label="DR Date (ISO)"
+                  <DateField
+                    label="DR Date"
                     value={drDate}
-                    onChangeText={setDrDate}
-                    placeholder="e.g. 2025-01-11T00:00:00Z"
+                    onChange={d => setDrDate(d.toISOString())}
+                    placeholder="Select DR Date"
                   />
 
                   <View style={styles.uploadBlock}>
@@ -1136,8 +1226,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
                       <View style={styles.pickInfo}>
                         <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
                         <Text style={styles.pickInfoText}>
-                          {auditPicsAssets.length} image{auditPicsAssets.length !== 1 ? 's' : ''}{' '}
-                          selected
+                          {auditPicsAssets.length} image{auditPicsAssets.length !== 1 ? 's' : ''} selected
                         </Text>
                       </View>
                     )}
@@ -1155,7 +1244,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.footerButtonPrimary, uploading ? {opacity: 0.7} : null]}
+                  style={[styles.footerButtonPrimary, uploading ? { opacity: 0.7 } : null]}
                   onPress={submitAudit}
                   activeOpacity={0.7}
                   disabled={uploading}>
@@ -1207,7 +1296,7 @@ export default function PoleCropAuditScreen({navigation, route}) {
               style={styles.viewerScroll}>
               {viewerImages.map((u, i) => (
                 <View key={`${String(u)}-${i}`} style={styles.viewerSlide}>
-                  <Image source={{uri: u}} style={styles.viewerImage} resizeMode="contain" />
+                  <Image source={{ uri: u }} style={styles.viewerImage} resizeMode="contain" />
                   <TouchableOpacity
                     style={styles.viewerLinkBtn}
                     onPress={() =>
@@ -1233,10 +1322,12 @@ export default function PoleCropAuditScreen({navigation, route}) {
 }
 
 /* ===================== STYLES ===================== */
+/* NOTE: styles are unchanged from your original file.
+   Keep your existing styles object below as-is. */
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
-  contentContainer: {paddingBottom: 120},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
+  contentContainer: { paddingBottom: 120 },
 
   header: {
     backgroundColor: COLORS.primary,
@@ -1246,11 +1337,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  headerContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   backButton: {
     width: 44,
     height: 44,
@@ -1260,9 +1351,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 22, fontWeight: '900', color: '#fff', marginBottom: 8},
-  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
+  headerContent: { flex: 1 },
+  headerTitle: { fontSize: 22, fontWeight: '900', color: '#fff', marginBottom: 8 },
+  headerInfo: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1272,8 +1363,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 6,
   },
-  infoChipText: {fontSize: 12, fontWeight: '700', color: '#fff'},
-  siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)'},
+  infoChipText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+  siteId: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)' },
   refreshButton: {
     width: 44,
     height: 44,
@@ -1283,15 +1374,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  section: {marginHorizontal: 20, marginBottom: 18},
+  section: { marginHorizontal: 20, marginBottom: 18 },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'baseline',
     marginBottom: 12,
   },
-  sectionTitle: {fontSize: 18, fontWeight: '900', color: COLORS.text},
-  sectionSubtitle: {fontSize: 13, fontWeight: '700', color: COLORS.textLight},
+  sectionTitle: { fontSize: 18, fontWeight: '900', color: COLORS.text },
+  sectionSubtitle: { fontSize: 13, fontWeight: '700', color: COLORS.textLight },
 
   summaryCard: {
     backgroundColor: '#fff',
@@ -1301,8 +1392,8 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 8,
   },
-  summaryLine: {fontSize: 13, fontWeight: '700', color: COLORS.text},
-  summaryStrong: {fontWeight: '900', color: COLORS.primary},
+  summaryLine: { fontSize: 13, fontWeight: '700', color: COLORS.text },
+  summaryStrong: { fontWeight: '900', color: COLORS.primary },
 
   errorCard: {
     backgroundColor: 'rgba(239,68,68,0.08)',
@@ -1313,16 +1404,16 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
   },
-  errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
-  errorTitle: {fontSize: 16, fontWeight: '800', color: COLORS.danger},
-  errorMessage: {fontSize: 14, color: COLORS.text, marginBottom: 12},
+  errorHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  errorTitle: { fontSize: 16, fontWeight: '800', color: COLORS.danger },
+  errorMessage: { fontSize: 14, color: COLORS.text, marginBottom: 12 },
   errorButton: {
     backgroundColor: COLORS.danger,
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
   },
-  errorButtonText: {color: '#fff', fontSize: 14, fontWeight: '800'},
+  errorButtonText: { color: '#fff', fontSize: 14, fontWeight: '800' },
 
   emptyState: {
     backgroundColor: '#fff',
@@ -1340,10 +1431,10 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 8,
   },
-  emptyText: {fontSize: 13, fontWeight: '700', color: COLORS.textLight, textAlign: 'center'},
+  emptyText: { fontSize: 13, fontWeight: '700', color: COLORS.textLight, textAlign: 'center' },
 
-  loadingBox: {padding: 20, alignItems: 'center', gap: 10},
-  loadingText: {fontSize: 13, fontWeight: '800', color: COLORS.textLight},
+  loadingBox: { padding: 20, alignItems: 'center', gap: 10 },
+  loadingText: { fontSize: 13, fontWeight: '800', color: COLORS.textLight },
 
   auditCard: {
     backgroundColor: '#fff',
@@ -1352,9 +1443,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 14,
   },
-  auditTop: {flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10},
-  auditTitle: {fontSize: 16, fontWeight: '900', color: COLORS.text},
-  auditSub: {marginTop: 4, fontSize: 12, fontWeight: '800', color: COLORS.textLight},
+  auditTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
+  auditTitle: { fontSize: 16, fontWeight: '900', color: COLORS.text },
+  auditSub: { marginTop: 4, fontSize: 12, fontWeight: '800', color: COLORS.textLight },
   auditBadge: {
     maxWidth: 190,
     flexDirection: 'row',
@@ -1367,12 +1458,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(5,150,105,0.18)',
     backgroundColor: 'rgba(5,150,105,0.06)',
   },
-  auditBadgeText: {flex: 1, fontSize: 11, fontWeight: '900', color: COLORS.primary},
-  auditRow: {flexDirection: 'row', gap: 10, marginTop: 8},
-  auditKey: {width: 130, fontSize: 12, fontWeight: '900', color: COLORS.textLight},
-  auditVal: {flex: 1, fontSize: 12, fontWeight: '800', color: COLORS.text},
+  auditBadgeText: { flex: 1, fontSize: 11, fontWeight: '900', color: COLORS.primary },
+  auditRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  auditKey: { width: 130, fontSize: 12, fontWeight: '900', color: COLORS.textLight },
+  auditVal: { flex: 1, fontSize: 12, fontWeight: '800', color: COLORS.text },
 
-  auditActions: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12},
+  auditActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
   viewBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1384,9 +1475,9 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: 'rgba(14, 165, 233, 0.08)',
   },
-  viewBtnText: {fontSize: 12, fontWeight: '900', color: COLORS.text},
+  viewBtnText: { fontSize: 12, fontWeight: '900', color: COLORS.text },
 
-  fab: {position: 'absolute', right: 20, bottom: 30, elevation: 8},
+  fab: { position: 'absolute', right: 20, bottom: 30, elevation: 8 },
   fabContent: {
     width: 64,
     height: 64,
@@ -1396,8 +1487,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  editModalContainer: {flex: 1, justifyContent: 'flex-end'},
+  editModalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  editModalContainer: { flex: 1, justifyContent: 'flex-end' },
   editModalContent: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
@@ -1416,8 +1507,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  editModalTitle: {fontSize: 18, fontWeight: '900', color: COLORS.text},
-  editModalSubtitle: {marginTop: 6, fontSize: 12, fontWeight: '800', color: COLORS.textLight},
+  editModalTitle: { fontSize: 18, fontWeight: '900', color: COLORS.text },
+  editModalSubtitle: { marginTop: 6, fontSize: 12, fontWeight: '800', color: COLORS.textLight },
   editModalClose: {
     width: 40,
     height: 40,
@@ -1426,12 +1517,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  editModalBody: {padding: 20},
+  editModalBody: { padding: 20 },
 
-  formSection: {marginBottom: 18},
-  formSectionTitle: {fontSize: 14, fontWeight: '900', color: COLORS.text, marginBottom: 12},
+  formSection: { marginBottom: 18 },
+  formSectionTitle: { fontSize: 14, fontWeight: '900', color: COLORS.text, marginBottom: 12 },
 
-  totalRow: {flexDirection: 'row', gap: 10, flexWrap: 'wrap', marginBottom: 10},
+  totalRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap', marginBottom: 10 },
   totalChip: {
     backgroundColor: 'rgba(5,150,105,0.10)',
     borderWidth: 1,
@@ -1440,7 +1531,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
   },
-  totalChipText: {fontSize: 12, fontWeight: '900', color: COLORS.primary},
+  totalChipText: { fontSize: 12, fontWeight: '900', color: COLORS.primary },
 
   countCard: {
     backgroundColor: 'rgba(14, 165, 233, 0.06)',
@@ -1457,8 +1548,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: 'rgba(14, 165, 233, 0.12)',
   },
-  countName: {fontSize: 13, fontWeight: '900', color: COLORS.text},
-  countHint: {marginTop: 3, fontSize: 11, fontWeight: '900', color: COLORS.textLight},
+  countName: { fontSize: 13, fontWeight: '900', color: COLORS.text },
+  countHint: { marginTop: 3, fontSize: 11, fontWeight: '900', color: COLORS.textLight },
   countInput: {
     width: 92,
     height: 44,
@@ -1472,7 +1563,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     textAlign: 'center',
   },
-  warnText: {marginTop: 6, fontSize: 11, fontWeight: '900', color: COLORS.danger},
+  warnText: { marginTop: 6, fontSize: 11, fontWeight: '900', color: COLORS.danger },
 
   toggleRow: {
     flexDirection: 'row',
@@ -1485,7 +1576,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     backgroundColor: '#fff',
   },
-  toggleLabel: {fontSize: 13, fontWeight: '900', color: COLORS.text},
+  toggleLabel: { fontSize: 13, fontWeight: '900', color: COLORS.text },
 
   uploadBlock: {
     marginTop: 10,
@@ -1495,8 +1586,8 @@ const styles = StyleSheet.create({
     padding: 12,
     backgroundColor: '#fff',
   },
-  uploadTitle: {fontSize: 12, fontWeight: '900', color: COLORS.text, marginBottom: 10},
-  uploadBtns: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center'},
+  uploadTitle: { fontSize: 12, fontWeight: '900', color: COLORS.text, marginBottom: 10 },
+  uploadBtns: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
   uploadBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1515,7 +1606,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  uploadBtnText: {color: '#fff', fontSize: 12, fontWeight: '900'},
+  uploadBtnText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   clearBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1527,10 +1618,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  clearBtnText: {fontSize: 12, fontWeight: '900', color: COLORS.danger},
+  clearBtnText: { fontSize: 12, fontWeight: '900', color: COLORS.danger },
 
-  pickInfo: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10},
-  pickInfoText: {fontSize: 12, fontWeight: '900', color: COLORS.text},
+  pickInfo: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  pickInfoText: { fontSize: 12, fontWeight: '900', color: COLORS.text },
 
   editModalFooter: {
     flexDirection: 'row',
@@ -1548,7 +1639,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: 'center',
   },
-  footerButtonSecondaryText: {fontSize: 14, fontWeight: '900', color: COLORS.text},
+  footerButtonSecondaryText: { fontSize: 14, fontWeight: '900', color: COLORS.text },
   footerButtonPrimary: {
     flex: 2,
     backgroundColor: COLORS.primary,
@@ -1557,8 +1648,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  footerButtonContent: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  footerButtonPrimaryText: {fontSize: 14, fontWeight: '900', color: '#fff'},
+  footerButtonContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  footerButtonPrimaryText: { fontSize: 14, fontWeight: '900', color: '#fff' },
 
   viewerOverlay: {
     flex: 1,
@@ -1567,7 +1658,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 14,
   },
-  viewerBackdrop: {...StyleSheet.absoluteFillObject},
+  viewerBackdrop: { ...StyleSheet.absoluteFillObject },
   viewerCard: {
     width: '100%',
     height: height * 0.75,
@@ -1587,7 +1678,7 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     backgroundColor: 'rgba(31,41,55,0.03)',
   },
-  viewerTitle: {flex: 1, fontSize: 14, fontWeight: '900', color: COLORS.text},
+  viewerTitle: { flex: 1, fontSize: 14, fontWeight: '900', color: COLORS.text },
   viewerClose: {
     width: 40,
     height: 40,
@@ -1597,9 +1688,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 10,
   },
-  viewerScroll: {flex: 1},
-  viewerSlide: {width: width - 28, alignItems: 'center', justifyContent: 'center', padding: 14},
-  viewerImage: {width: '100%', height: '100%'},
+  viewerScroll: { flex: 1 },
+  viewerSlide: { width: width - 28, alignItems: 'center', justifyContent: 'center', padding: 14 },
+  viewerImage: { width: '100%', height: '100%' },
   viewerLinkBtn: {
     position: 'absolute',
     bottom: 16,
@@ -1612,7 +1703,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  viewerLinkText: {color: '#fff', fontSize: 12, fontWeight: '900'},
+  viewerLinkText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   viewerFooter: {
     paddingVertical: 10,
     paddingHorizontal: 14,
@@ -1620,5 +1711,5 @@ const styles = StyleSheet.create({
     borderTopColor: COLORS.border,
     backgroundColor: 'rgba(31,41,55,0.02)',
   },
-  viewerFooterText: {fontSize: 12, fontWeight: '800', color: COLORS.textLight},
+  viewerFooterText: { fontSize: 12, fontWeight: '800', color: COLORS.textLight },
 });

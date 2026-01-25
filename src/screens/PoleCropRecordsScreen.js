@@ -1,12 +1,4 @@
-// PoleCropRecordsScreen.js
-// ✅ COMPLETE UPDATED FILE
-// ✅ FIXED: Edit now uses PATCH /enum/pole-crop/{id} (as per your curl)
-// ✅ FIXED: Species dropdown fetch uses Authorization header + reads json.data
-// ✅ ADDED: "Other" species flow -> shows input + POST /lpe3/species to add into DB, then refresh + auto-select
-// ✅ Updated for latest GET /enum/pole-crop response: poleCropSpecies: [{ id, name, count, audit_no }]
-// ✅ Total count derived from poleCropSpecies when present; legacy species_counts supported too
-
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -30,15 +22,18 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
-import {useFocusEffect} from '@react-navigation/native';
-import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
 
 import FormRow from '../components/FormRow';
-import {MultiSelectRow} from '../components/SelectRows';
+import { DropdownRow } from '../components/SelectRows';
 
-const {width, height} = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
-// Theme Colors
+// IMPORTANT:
+// If testing locally, set API_HOST = 'http://localhost:5000'
+const API_HOST = 'http://be.lte.gisforestry.com';
+
 const COLORS = {
   primary: '#059669',
   primaryLight: '#10b981',
@@ -56,462 +51,473 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
-// API
-const API_BASE = 'http://be.lte.gisforestry.com';
-const AWS_Base = 'https://app.eco.gisforestry.com';
+const API_BASE = API_HOST;
 
-// ✅ Species endpoints (require Authorization)
+// Species
 const SPECIES_URL = `${API_BASE}/lpe3/species`;
+const ADD_SPECIES_URL = `${API_BASE}/lpe3/species`;
 
-// Pole Crop APIs
-const POLE_CROP_LIST_URL_POST = `${API_BASE}/enum/pole-crop/user-site-wise-pole-crop`; // older POST (site-wise)
-const POLE_CROP_LIST_URL_GET = `${API_BASE}/enum/pole-crop`; // latest GET
-const POLE_CROP_CREATE_URL = `${API_BASE}/enum/pole-crop`;
-const POLE_CROP_EDIT_URL = id => `${API_BASE}/enum/pole-crop/${id}`;
+// Pole Crop
+const POLECROP_LIST_URL = `${API_BASE}/enum/pole-crop`;
+const POLECROP_SUBMIT_URL = `${API_BASE}/enum/pole-crop`;
+const POLECROP_EDIT_URL = id => `${API_BASE}/enum/pole-crop/${id}`;
 
-// Bucket Upload API (Polecrop)
-const BUCKET_UPLOAD_URL = `${AWS_Base}/aws-bucket/tree-enum`;
-const BUCKET_UPLOAD_PATH = 'Polecrop';
-const BUCKET_IS_MULTI = 'true';
-const BUCKET_FILE_NAME = 'chan';
+// AWS (same service you used)
+const AWS_UPLOAD_URL = 'https://app.eco.gisforestry.com/aws-bucket/tree-enum';
+const AWS_UPLOAD_PATH = 'PoleCrop';
 
-const OTHER_SPECIES_LABEL = 'Other';
+// Navigator routes (MUST match your RootNavigator Stack.Screen names)
+const POLECROP_SUPERDARI_SCREEN = 'PoleCropSuperdariScreen';
+const POLECROP_DISPOSAL_SCREEN = 'PoleCropDisposeScreen';
+const POLECROP_AUDIT_SCREEN = 'PoleCropAuditScreen';
 
-const getToken = async () => (await AsyncStorage.getItem('AUTH_TOKEN')) || '';
-
-/** normalizeList: handles responses like:
- * - array
- * - { data: [] }
- * - { data: { data: [] } }
- */
-const normalizeList = json => {
-  if (!json) return [];
-  if (Array.isArray(json)) return json;
-  if (typeof json === 'object') {
-    if (Array.isArray(json.data)) return json.data;
-    if (json.data && Array.isArray(json.data.data)) return json.data.data;
-  }
-  return [];
-};
-
-const formatLatLng = (lat, lng) => `${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
-
-const parseLatLng = str => {
-  const s = String(str || '').trim();
-  if (!s) return {lat: null, lng: null};
-  const parts = s
-    .split(/,|\s+/)
-    .map(p => p.trim())
-    .filter(Boolean);
-  if (parts.length < 2) return {lat: null, lng: null};
-  const lat = Number(parts[0]);
-  const lng = Number(parts[1]);
-  if (Number.isNaN(lat) || Number.isNaN(lng)) return {lat: null, lng: null};
-  return {lat, lng};
-};
-
-// RN form-data file helper
-const toFormFile = asset => {
-  const uri = asset?.uri;
-  if (!uri) return null;
-
-  const name =
-    asset?.fileName ||
-    `polecrop_${Date.now()}${asset?.type?.includes('png') ? '.png' : '.jpg'}`;
-
-  const type = asset?.type || 'image/jpeg';
-
-  return {uri, name, type};
-};
-
-/* ===================== STATUS (latestStatus / verification) ===================== */
-const truthy = v => v === true || v === 'true' || v === 1 || v === '1';
-
-const pickFirst = (obj, keys = []) => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null && v !== '') return v;
-  }
-  return null;
-};
-
-const getLatestStatusObj = rec => {
-  if (!rec || typeof rec !== 'object') return null;
-
-  if (rec?.latestStatus && typeof rec.latestStatus === 'object') {
-    const a = rec.latestStatus?.action;
-    if (a !== undefined && a !== null && String(a).trim() !== '') return rec.latestStatus;
-  }
-
-  if (Array.isArray(rec?.verification) && rec.verification.length) {
-    const last = rec.verification[rec.verification.length - 1];
-    if (last && typeof last === 'object') {
-      const a = last?.action;
-      if (a !== undefined && a !== null && String(a).trim() !== '') return last;
-    }
-  }
-
-  return null;
-};
-
-const normalizeVerificationStatus = rec => {
-  const latest = getLatestStatusObj(rec);
-  const latestAction = latest?.action ? String(latest.action).trim().toLowerCase() : '';
-
-  if (latestAction === 'verified' || latestAction === 'approved' || latestAction === 'accepted')
-    return 'approved';
-
-  if (
-    latestAction === 'rejected' ||
-    latestAction === 'disapproved' ||
-    latestAction.includes('reject')
-  )
-    return 'disapproved';
-
-  const raw =
-    pickFirst(rec, [
-      'verification_status',
-      'verificationStatus',
-      'status',
-      'current_status',
-      'currentStatus',
-      'approval_status',
-      'approvalStatus',
-      'action',
-    ]) || '';
-
-  const rawStr = String(raw).toLowerCase();
-
-  const isVerified = truthy(pickFirst(rec, ['is_verified', 'isVerified', 'verified']));
-  const isRejected = truthy(pickFirst(rec, ['is_rejected', 'isRejected', 'rejected']));
-
-  if (isVerified) return 'approved';
-  if (isRejected) return 'disapproved';
-
-  if (
-    rawStr.includes('approve') ||
-    rawStr === 'verified' ||
-    rawStr === 'accepted' ||
-    rawStr === 'approved'
-  )
-    return 'approved';
-
-  if (rawStr.includes('reject') || rawStr.includes('return') || rawStr === 'disapproved')
-    return 'disapproved';
-
-  return 'pending';
-};
-
-const getStatusInfo = recOrStatus => {
-  const key =
-    typeof recOrStatus === 'object'
-      ? normalizeVerificationStatus(recOrStatus)
-      : normalizeVerificationStatus({status: recOrStatus});
-
-  if (key === 'approved')
-    return {label: 'Approved', color: COLORS.success, icon: 'checkmark-done'};
-
-  if (key === 'disapproved')
-    return {label: 'Disapproved', color: COLORS.danger, icon: 'close-circle'};
-
-  return {label: 'Pending', color: COLORS.warning, icon: 'time'};
-};
-
-const buildStatusDetailsText = rec => {
-  const key = normalizeVerificationStatus(rec);
-  const latest = getLatestStatusObj(rec);
-
-  if (!latest) {
-    return key === 'pending'
-      ? 'Status: Pending\n\nNo verification action found yet.'
-      : `Status: ${key}\n\nNo verification details found.`;
-  }
-
-  const action = latest?.action ? String(latest.action) : '—';
-  const designation = latest?.designation ? String(latest.designation) : '—';
-  const role = latest?.user_role ? String(latest.user_role) : '—';
-  const remarksRaw = latest?.remarks;
-  const remarks = String(remarksRaw ?? '').trim() ? String(remarksRaw).trim() : '—';
-  const createdAtRaw = latest?.createdAt || latest?.created_at || null;
-  const createdAt = createdAtRaw ? new Date(createdAtRaw) : null;
-  const createdAtText =
-    createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleString() : '—';
-
-  return `Status: ${
-    key === 'approved' ? 'Approved' : key === 'disapproved' ? 'Disapproved' : 'Pending'
-  }\n\nAction: ${action}\nRole: ${role}\nDesignation: ${designation}\nRemarks: ${remarks}\nAction Time: ${createdAtText}`;
-};
-
-/* ===================== FIELD HELPERS ===================== */
-const getRdsFrom = row => row?.rds_from ?? row?.rd_from ?? row?.rdFrom ?? '';
-const getRdsTo = row => row?.rds_to ?? row?.rd_km ?? row?.rd_to ?? row?.rdTo ?? '';
-
-const getPictures = row => (Array.isArray(row?.pictures) ? row.pictures.filter(Boolean) : []);
-
-const safeDate = raw => {
-  if (!raw) return null;
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return null;
-  return d;
-};
-
-/* ===================== SPECIES COUNTS HELPERS ===================== */
-const sumSpeciesCounts = arr => {
-  const list = Array.isArray(arr) ? arr : [];
-  return list.reduce((acc, x) => acc + (Number(x?.count) || 0), 0);
-};
-
-const uniq = arr => Array.from(new Set((Array.isArray(arr) ? arr : []).filter(Boolean)));
-
-/* ===================== NEW API: poleCropSpecies HELPERS ===================== */
-// New API: poleCropSpecies: [{ id, name, count, audit_no }]
-const getPoleCropSpeciesList = row =>
-  Array.isArray(row?.poleCropSpecies) ? row.poleCropSpecies.filter(Boolean) : [];
-
-const sumPoleCropSpeciesCounts = row => {
-  const list = getPoleCropSpeciesList(row);
-  if (!list.length) return 0;
-  return list.reduce((acc, x) => acc + (Number(x?.count) || 0), 0);
-};
-
-const buildPoleCropSpeciesLabel = row => {
-  const list = getPoleCropSpeciesList(row);
-
-  if (list.length) {
-    const parts = list
-      .map(x => {
-        const name = String(x?.name || '').trim() || `#${x?.id ?? '—'}`;
-        const c = Number(x?.count) || 0;
-        return `${name}(${c})`;
-      })
-      .filter(Boolean);
-
-    if (!parts.length) return '—';
-    return parts.length > 2
-      ? `${parts.slice(0, 2).join(', ')} +${parts.length - 2} more`
-      : parts.join(', ');
-  }
-
-  return '—';
-};
-
-export default function PoleCropRecordsScreen({navigation, route}) {
+export default function PoleCropRecordsScreen({ navigation, route }) {
   const enumeration = route?.params?.enumeration;
 
   // ---------- STATE ----------
   const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [serverError, setServerError] = useState('');
-  const [search, setSearch] = useState('');
-  const [filterModalVisible, setFilterModalVisible] = useState(false);
-  const [filters, setFilters] = useState({
-    speciesOne: '',
-    dateFrom: '',
-    dateTo: '',
-    rdFrom: '',
-    rdTo: '',
-    totalFrom: '',
-    totalTo: '',
-    status: '',
-  });
-
-  const [speciesRows, setSpeciesRows] = useState([]);
-  const [speciesOptions, setSpeciesOptions] = useState([]);
-  const [speciesLoading, setSpeciesLoading] = useState(false);
-
-  // Other species flow
-  const [otherSpeciesName, setOtherSpeciesName] = useState('');
-  const [addingSpecies, setAddingSpecies] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
+  const [serverRefreshing, setServerRefreshing] = useState(false);
 
   const [modalVisible, setModalVisible] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
-  const [editingServerId, setEditingServerId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
 
-  const [rdFrom, setRdFrom] = useState('');
-  const [rdTo, setRdTo] = useState('');
+  // Keep server pictures when editing (do not overwrite with [])
+  const [existingPictures, setExistingPictures] = useState([]);
 
-  // MultiSelectRow stores names
-  const [selectedSpeciesNames, setSelectedSpeciesNames] = useState([]);
+  // Search + filters (light)
+  const [search, setSearch] = useState('');
 
-  // per-species counts keyed by species_id (string)
-  const [speciesCountMap, setSpeciesCountMap] = useState({});
+  // Form fields
+  const [rdsFrom, setRdsFrom] = useState('');
+  const [rdsTo, setRdsTo] = useState('');
 
+  // Species master + selection (multi) + counts
+  const [speciesRows, setSpeciesRows] = useState([]);
+  const [speciesLoading, setSpeciesLoading] = useState(false);
+  const [speciesModalVisible, setSpeciesModalVisible] = useState(false);
+
+  // Selected species ids
+  const [speciesIds, setSpeciesIds] = useState([]);
+  // counts map: { "12": "30", "14": "20" }
+  const [speciesCounts, setSpeciesCounts] = useState({});
+
+  // "Other species" flow
+  const [otherSpeciesModal, setOtherSpeciesModal] = useState(false);
+  const [otherSpeciesName, setOtherSpeciesName] = useState('');
+  const [addingOtherSpecies, setAddingOtherSpecies] = useState(false);
+
+  // GPS
   const [autoGps, setAutoGps] = useState('');
-  const [manualGps, setManualGps] = useState('');
+  const [gpsList, setGpsList] = useState(['']);
   const [gpsLoading, setGpsLoading] = useState(false);
+  const lastGpsRequestAtRef = useRef(0);
 
-  const [locPermVisible, setLocPermVisible] = useState(false);
-  const [locPermBlocked, setLocPermBlocked] = useState(false);
-  const [locPermMsg, setLocPermMsg] = useState(
-    'This app needs location access to fetch GPS coordinates.',
+  // Images (local URIs)
+  const [pictureUris, setPictureUris] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [imagePickerModal, setImagePickerModal] = useState(false);
+
+  // Keep last record opened for edit (for late species master resolution)
+  const editRecordRef = useRef(null);
+
+  // ---------- HELPERS ----------
+  const normalizeList = json => {
+    if (!json) return [];
+    if (Array.isArray(json)) return json;
+    if (typeof json === 'object' && Array.isArray(json.data)) return json.data;
+    return [];
+  };
+
+  const getAuthToken = async () => {
+    const t = await AsyncStorage.getItem('AUTH_TOKEN');
+    return t || '';
+  };
+
+  const asValidId = v => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+    if (typeof v === 'string') {
+      const s = v.trim();
+      if (!s) return null;
+      const n = Number(s);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  };
+
+  // ✅ IMPROVED POLECROP ID RESOLVER
+  const resolvePoleCropId = useCallback((record, fallbackParams = {}) => {
+    console.log('🔍 RESOLVING POLE CROP ID FROM:', { record, fallbackParams });
+
+    // First check direct record properties
+    const directCandidates = [
+      record?.id,
+      record?.serverId,
+      record?._id,
+    ];
+
+    for (const c of directCandidates) {
+      const n = asValidId(c);
+      if (n) {
+        console.log('✅ Found direct ID:', n, 'from:', c);
+        return n;
+      }
+    }
+
+    // Check serverRaw (from API response)
+    if (record?.serverRaw) {
+      const serverCandidates = [
+        record.serverRaw.id,
+        record.serverRaw._id,
+        record.serverRaw.serverId,
+      ];
+
+      for (const c of serverCandidates) {
+        const n = asValidId(c);
+        if (n) {
+          console.log('✅ Found serverRaw ID:', n, 'from:', c);
+          return n;
+        }
+      }
+    }
+
+    // Check fallback params
+    const paramCandidates = [
+      fallbackParams?.poleCropId,
+      fallbackParams?.polecropId,
+      fallbackParams?.id,
+      fallbackParams?.record?.id,
+      fallbackParams?.record?.serverId,
+    ];
+
+    for (const c of paramCandidates) {
+      const n = asValidId(c);
+      if (n) {
+        console.log('✅ Found param ID:', n, 'from:', c);
+        return n;
+      }
+    }
+
+    console.log('❌ No valid Pole Crop ID found');
+    return null;
+  }, []);
+
+  const resolveNameOfSiteId = useCallback(() => {
+    const p = route?.params || {};
+    const e = enumeration || {};
+    const candidates = [
+      p.nameOfSiteId,
+      p.name_of_site_id,
+      p.siteId,
+      p.site_id,
+      e.nameOfSiteId,
+      e.name_of_site_id,
+      e.siteId,
+      e.site_id,
+      e.site?.id,
+      e.nameOfSite?.id,
+      e.name_of_site?.id,
+      e.id,
+      e._id,
+    ];
+    for (const c of candidates) {
+      const n = asValidId(c);
+      if (n) return n;
+    }
+    return null;
+  }, [route?.params, enumeration]);
+
+  const nameOfSiteId = useMemo(() => resolveNameOfSiteId(), [resolveNameOfSiteId]);
+
+  const parseLatLng = str => {
+    const s = String(str || '').trim();
+    if (!s) return { lat: null, lng: null };
+    const parts = s
+      .split(/,|\s+/)
+      .map(p => p.trim())
+      .filter(Boolean);
+    if (parts.length < 2) return { lat: null, lng: null };
+    const lat = Number(parts[0]);
+    const lng = Number(parts[1]);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return { lat: null, lng: null };
+    return { lat, lng };
+  };
+
+  // ---------- SAFE NAVIGATION ----------
+  const canNavigateTo = useCallback(
+    screenName => {
+      const st = navigation?.getState?.();
+      const names = Array.isArray(st?.routeNames) ? st.routeNames : [];
+      return names.includes(screenName);
+    },
+    [navigation],
   );
 
-  const [pickedAssets, setPickedAssets] = useState([]);
+  const safeNavigate = useCallback(
+    (screenName, params) => {
+      if (!screenName) return;
+      if (!canNavigateTo(screenName)) {
+        Alert.alert(
+          'Screen Not Registered',
+          `Navigator does not have "${screenName}". Please register this screen in your navigator first.`,
+        );
+        return;
+      }
+      console.log('🚀 NAVIGATING TO:', screenName, 'WITH PARAMS:', params);
+      navigation.navigate(screenName, params);
+    },
+    [navigation, canNavigateTo],
+  );
 
-  // Image Viewer
-  const [viewerVisible, setViewerVisible] = useState(false);
-  const [viewerImages, setViewerImages] = useState([]);
-  const [viewerTitle, setViewerTitle] = useState('');
-
-  const lastGpsRequestAtRef = useRef(0);
-  const prevAutoGpsRef = useRef('');
-
-  const nameOfSiteId = useMemo(() => {
-    return enumeration?.name_of_site_id ?? enumeration?.id ?? null;
-  }, [enumeration]);
-
-  /* ===================== IMAGES ===================== */
-  const addAssets = useCallback(newAssets => {
-    const incoming = Array.isArray(newAssets) ? newAssets : [];
-    if (!incoming.length) return;
-
-    setPickedAssets(prev => {
-      const prevArr = Array.isArray(prev) ? prev : [];
-      const map = new Map();
-
-      prevArr.forEach(a => {
-        if (a?.uri) map.set(a.uri, a);
-      });
-
-      incoming.forEach(a => {
-        if (a?.uri) map.set(a.uri, a);
-      });
-
-      return Array.from(map.values());
-    });
-  }, []);
-
-  const pickImages = () => {
-    launchImageLibrary(
-      {mediaType: 'photo', quality: 0.8, selectionLimit: 0},
-      res => {
-        if (res?.didCancel) return;
-        if (res?.errorCode) {
-          Alert.alert('Image Error', res.errorMessage || res.errorCode);
-          return;
-        }
-        addAssets(res?.assets || []);
-      },
-    );
+  // ---------- STATUS OVERRIDE (Disposed > Superdari > Workflow) ----------
+  const normalizeRole = role => {
+    const r = String(role || '').trim().toLowerCase();
+    if (!r) return '';
+    if (r.includes('block')) return 'Block Officer';
+    if (r.includes('sdfo')) return 'SDFO';
+    if (r.includes('dfo')) return 'DFO';
+    if (r.includes('survey')) return 'Surveyor';
+    if (r.includes('guard') || r.includes('beat')) return 'Guard';
+    return String(role || '').trim();
   };
 
-  const ensureCameraPermission = useCallback(async () => {
-    if (Platform.OS !== 'android') return true;
-    try {
-      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
-        title: 'Camera Permission',
-        message: 'This app needs camera access to capture pole crop images.',
-        buttonPositive: 'Allow',
-        buttonNegative: 'Deny',
-      });
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
-    } catch (e) {
-      return false;
-    }
-  }, []);
-
-  const captureImage = useCallback(async () => {
-    const ok = await ensureCameraPermission();
-    if (!ok) {
-      Alert.alert('Permission Required', 'Camera permission is required to take a photo.');
-      return;
-    }
-
-    launchCamera(
-      {mediaType: 'photo', quality: 0.8, saveToPhotos: false, cameraType: 'back'},
-      res => {
-        if (res?.didCancel) return;
-        if (res?.errorCode) {
-          Alert.alert('Camera Error', res.errorMessage || res.errorCode);
-          return;
-        }
-        addAssets(res?.assets || []);
-      },
-    );
-  }, [addAssets, ensureCameraPermission]);
-
-  const clearImages = () => setPickedAssets([]);
-
-  /* ===================== UPLOAD IMAGES ===================== */
-  const uploadPoleCropImages = async () => {
-    if (!pickedAssets.length) return [];
-
-    const form = new FormData();
-    pickedAssets.forEach(a => {
-      const f = toFormFile(a);
-      if (f) form.append('files', f);
-    });
-
-    form.append('uploadPath', BUCKET_UPLOAD_PATH);
-    form.append('isMulti', BUCKET_IS_MULTI);
-    form.append('fileName', BUCKET_FILE_NAME);
-
-    const res = await fetch(BUCKET_UPLOAD_URL, {method: 'POST', body: form});
-    const json = await res.json().catch(() => null);
-
-    if (!res.ok || !json?.status) {
-      const msg = json?.message || json?.error || `upload failed (${res.status})`;
-      throw new Error(msg);
-    }
-
-    const data = Array.isArray(json?.data) ? json.data : [];
-    const urls = [];
-
-    data.forEach(item => {
-      const img = item?.availableSizes?.image;
-      if (img) urls.push(img);
-
-      const arr = Array.isArray(item?.url) ? item.url : [];
-      arr.forEach(u => {
-        if (u && !urls.includes(u)) urls.push(u);
-      });
-    });
-
-    return urls;
+  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO', 'Surveyor'];
+  const nextRole = currentRole => {
+    const idx = ROLE_ORDER.indexOf(currentRole);
+    return idx >= 0 ? ROLE_ORDER[idx + 1] || null : null;
   };
 
-  /* ===================== SPECIES FETCH (GET) ===================== */
+  const deriveRowUi = r => {
+    const latestStatus = r?.latestStatus || null;
+
+    // OVERRIDE
+    if (r?.isDisposed) {
+      return {
+        statusText: 'Disposed',
+        statusColor: COLORS.warning,
+        showEdit: false,
+        rowAccent: null,
+        isRejected: false,
+        _remarks: '',
+      };
+    }
+    if (r?.hasSuperdari) {
+      return {
+        statusText: 'Superdari',
+        statusColor: COLORS.secondary,
+        showEdit: false,
+        rowAccent: null,
+        isRejected: false,
+        _remarks: '',
+      };
+    }
+
+    const actionRaw = String(latestStatus?.action || '').trim();
+    const action = actionRaw.toLowerCase();
+    const byRole = normalizeRole(latestStatus?.user_role || '');
+    const byDesignation = String(latestStatus?.designation || '').trim();
+    const remarks = String(latestStatus?.remarks || '').trim();
+
+    if (!latestStatus || !actionRaw) {
+      return {
+        statusText: 'Pending (Block Officer)',
+        statusColor: COLORS.textLight,
+        showEdit: false,
+        rowAccent: null,
+        isRejected: false,
+        _remarks: remarks,
+      };
+    }
+
+    if (action === 'rejected') {
+      const rejectBy = byDesignation || byRole || 'Officer';
+      return {
+        statusText: `Rejected by ${rejectBy}`,
+        statusColor: COLORS.danger,
+        showEdit: true,
+        rowAccent: 'rejected',
+        isRejected: true,
+        _remarks: remarks,
+        _rejectedBy: rejectBy,
+      };
+    }
+
+    if (action === 'verified') {
+      const approver = byRole || 'Block Officer';
+      const nxt = nextRole(approver);
+      if (!nxt) {
+        return {
+          statusText: 'Final Approved',
+          statusColor: COLORS.success,
+          showEdit: false,
+          rowAccent: null,
+          isRejected: false,
+          _remarks: remarks,
+        };
+      }
+      return {
+        statusText: `Verified • Pending (${nxt})`,
+        statusColor: COLORS.warning,
+        showEdit: false,
+        rowAccent: null,
+        isRejected: false,
+        _remarks: remarks,
+      };
+    }
+
+    return {
+      statusText: actionRaw || 'Pending',
+      statusColor: COLORS.textLight,
+      showEdit: false,
+      rowAccent: null,
+      isRejected: false,
+      _remarks: remarks,
+    };
+  };
+
+  const isRejectedStatus = record => deriveRowUi(record).isRejected;
+
+  // ---------- SUPERDARI / DISPOSAL FLAGS ----------
+  const pickLatestByCreatedAt = arr => {
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    const withTime = arr
+      .map(x => {
+        const t = Date.parse(x?.created_at || x?.createdAt || '');
+        return { x, t: Number.isFinite(t) ? t : -1 };
+      })
+      .sort((a, b) => b.t - a.t);
+    return withTime[0]?.x || arr[arr.length - 1] || null;
+  };
+
+  const extractSuperdariInfo = raw => {
+    const r = raw || {};
+    const list = Array.isArray(r?.superdari) ? r.superdari : [];
+    const latest = pickLatestByCreatedAt(list);
+    const sid = latest?.id ?? latest?.superdariId ?? latest?.superdari_id ?? null;
+    const superdarName = latest?.superdar_name ?? latest?.superdarName ?? latest?.superdar ?? '';
+    const has = Boolean(
+      list.length > 0 || (typeof sid === 'number' && sid > 0) || String(superdarName || '').trim(),
+    );
+    return {
+      hasSuperdari: has,
+      superdariId: sid ?? null,
+      superdarName: String(superdarName || '').trim(),
+    };
+  };
+
+  const extractDisposalInfo = raw => {
+    const r = raw || {};
+    const list = Array.isArray(r?.disposal) ? r.disposal : [];
+    const latest = pickLatestByCreatedAt(list);
+
+    const did = latest?.id ?? latest?.disposalId ?? latest?.disposal_id ?? null;
+    const disposedAt =
+      latest?.dr_date ??
+      latest?.disposed_at ??
+      latest?.disposedAt ??
+      latest?.created_at ??
+      latest?.createdAt ??
+      null;
+
+    const isDisposed = Boolean(list.length > 0 || (typeof did === 'number' && did > 0));
+    return {
+      isDisposed,
+      disposalId: did ?? null,
+      disposedAt: disposedAt ?? null,
+    };
+  };
+
+  // ---------- POLECROP SPECIES SNAPSHOT HELPERS ----------
+  const normalizeAuditNo = v => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const pickLatestPoleCropSpeciesPerId = arr => {
+    if (!Array.isArray(arr)) return [];
+
+    const byId = new Map();
+    for (const row of arr) {
+      const sid = Number(row?.id ?? row?.species_id ?? row?.speciesId);
+      if (!Number.isFinite(sid) || sid <= 0) continue;
+
+      const audit = normalizeAuditNo(row?.audit_no ?? row?.auditNo);
+      const prev = byId.get(sid);
+      if (!prev || audit > prev._audit) {
+        byId.set(sid, {
+          species_id: sid,
+          name: String(row?.name || row?.species_name || row?.speciesName || '').trim(),
+          count: row?.count ?? 0,
+          _audit: audit,
+        });
+      }
+    }
+
+    return Array.from(byId.values())
+      .sort((a, b) => {
+        const an = (a.name || '').toLowerCase();
+        const bn = (b.name || '').toLowerCase();
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+        return a.species_id - b.species_id;
+      })
+      .map(x => ({
+        species_id: x.species_id,
+        name: x.name,
+        count: x.count,
+      }));
+  };
+
+  const normalizeSpeciesArrayPayload = arr => {
+    if (!Array.isArray(arr)) return { ids: [], counts: {}, namesMap: {} };
+
+    const counts = {};
+    const namesMap = {};
+    const idsSet = new Set();
+
+    for (const it of arr) {
+      const sid = Number(it?.species_id ?? it?.speciesId ?? it?.id);
+      if (!Number.isFinite(sid) || sid <= 0) continue;
+
+      idsSet.add(sid);
+
+      const cNum = Number(String(it?.count ?? '').replace(/[^\d]/g, ''));
+      counts[String(sid)] = Number.isFinite(cNum) ? String(cNum) : '';
+
+      const nm = String(it?.name || it?.species_name || it?.speciesName || '').trim();
+      if (nm) namesMap[String(sid)] = nm;
+    }
+
+    const ids = Array.from(idsSet);
+    return { ids, counts, namesMap };
+  };
+
+  // ---------- SPECIES MASTER ----------
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
+      const token = await getAuthToken();
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
-      const token = await getToken();
-      if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
-
-      const res = await fetch(SPECIES_URL, {
-        method: 'GET',
-        headers: {Authorization: `Bearer ${token}`},
-      });
-
+      const res = await fetch(SPECIES_URL, { headers });
       const json = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const msg = json?.message || json?.error || `Species API Error (${res.status})`;
-        throw new Error(msg);
-      }
-
-      // Your shape: { statusCode, message, data: [...] }
-      const rows = Array.isArray(json?.data) ? json.data : [];
+      const rows = normalizeList(json);
 
       const normalized = rows
-        .map(x => ({
-          id: x?.id ?? null,
-          name: String(x?.name ?? '').trim(),
-        }))
-        .filter(x => x.id != null && x.name);
+        .map(x => {
+          if (typeof x === 'string') return { id: null, name: x };
+          return {
+            id: x?.id ?? x?.species_id ?? null,
+            name: x?.name ?? x?.species_name ?? '',
+          };
+        })
+        .filter(x => String(x.name || '').trim());
 
       setSpeciesRows(normalized);
-
-      // ✅ Ensure "Other" exists as an option
-      const names = normalized.map(x => x.name);
-      const finalOptions = [...names, OTHER_SPECIES_LABEL];
-
-      setSpeciesOptions(finalOptions);
     } catch (e) {
       setSpeciesRows([]);
-      setSpeciesOptions([OTHER_SPECIES_LABEL]);
-      Alert.alert('Species Error', e?.message || 'Failed to load species');
     } finally {
       setSpeciesLoading(false);
     }
@@ -521,454 +527,666 @@ export default function PoleCropRecordsScreen({navigation, route}) {
     fetchSpecies();
   }, [fetchSpecies]);
 
-  /* ===================== SPECIES CREATE (POST /lpe3/species) ===================== */
-  const createSpecies = useCallback(
-    async name => {
-      const token = await getToken();
+  const speciesLabel = useMemo(() => {
+    if (!speciesIds.length) return 'Select species';
+
+    const idsNum = speciesIds.map(Number).filter(n => Number.isFinite(n));
+    const namesFromMaster = speciesRows
+      .filter(x => idsNum.includes(Number(x.id)))
+      .map(x => x.name)
+      .filter(Boolean);
+
+    if (namesFromMaster.length) {
+      return namesFromMaster.length > 2
+        ? `${namesFromMaster.slice(0, 2).join(', ')} +${namesFromMaster.length - 2} more`
+        : namesFromMaster.join(', ');
+    }
+    return `${speciesIds.length} selected`;
+  }, [speciesIds, speciesRows]);
+
+  const toggleSpeciesId = id => {
+    if (id === '__other__') {
+      setSpeciesModalVisible(false);
+      setTimeout(() => setOtherSpeciesModal(true), 150);
+      return;
+    }
+
+    const num = Number(id);
+    if (!Number.isFinite(num) || num <= 0) return;
+
+    setSpeciesIds(prev => {
+      const set = new Set((prev || []).map(Number).filter(n => Number.isFinite(n)));
+      const next = new Set(set);
+
+      if (next.has(num)) next.delete(num);
+      else next.add(num);
+
+      setSpeciesCounts(prevCounts => {
+        const copy = { ...(prevCounts || {}) };
+        if (next.has(num) && (copy[String(num)] === undefined || copy[String(num)] === null)) {
+          copy[String(num)] = '';
+        }
+        if (!next.has(num)) delete copy[String(num)];
+        return copy;
+      });
+
+      return Array.from(next);
+    });
+  };
+
+  // ---------- OTHER SPECIES ADD ----------
+  const addOtherSpecies = async () => {
+    const name = String(otherSpeciesName || '').trim();
+    if (!name) {
+      Alert.alert('Missing', 'Please type species name.');
+      return;
+    }
+
+    try {
+      setAddingOtherSpecies(true);
+      const token = await getAuthToken();
       if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-      const res = await fetch(SPECIES_URL, {
+      const res = await fetch(ADD_SPECIES_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({name}),
+        body: JSON.stringify({ name }),
       });
 
       const json = await res.json().catch(() => null);
-
       if (!res.ok) {
-        const msg = json?.message || json?.error || `Create Species Error (${res.status})`;
+        const msg = json?.message || json?.error || `API Error (${res.status})`;
         throw new Error(msg);
       }
 
-      // Some backends return {data:{...}} others return {...}
-      const created = json?.data || json;
-      const createdName = String(created?.name || name).trim();
-      return {name: createdName};
-    },
-    [],
-  );
-
-  const onAddOtherSpecies = useCallback(async () => {
-    const raw = String(otherSpeciesName || '').trim();
-    if (!raw) {
-      Alert.alert('Missing', 'Please enter species name.');
-      return;
-    }
-
-    // Prevent duplicates (case-insensitive)
-    const exists = speciesRows.some(s => String(s.name).trim().toLowerCase() === raw.toLowerCase());
-    if (exists) {
-      // Auto-select existing
-      setSelectedSpeciesNames(prev => {
-        const p = Array.isArray(prev) ? prev : [];
-        const withoutOther = p.filter(x => x !== OTHER_SPECIES_LABEL);
-        if (withoutOther.includes(raw)) return withoutOther;
-        return [...withoutOther, raw];
-      });
-      setOtherSpeciesName('');
-      Alert.alert('Already Exists', 'This species already exists and has been selected.');
-      return;
-    }
-
-    try {
-      setAddingSpecies(true);
-
-      const created = await createSpecies(raw);
-
-      // Refresh species list from server
       await fetchSpecies();
 
-      // Replace "Other" with the newly created species in selection
-      setSelectedSpeciesNames(prev => {
-        const p = Array.isArray(prev) ? prev : [];
-        const withoutOther = p.filter(x => x !== OTHER_SPECIES_LABEL);
-        const nameToUse = created?.name || raw;
-        if (withoutOther.includes(nameToUse)) return withoutOther;
-        return [...withoutOther, nameToUse];
-      });
+      setTimeout(() => {
+        setSpeciesRows(prev => {
+          const found = (prev || []).find(
+            x => String(x?.name || '').trim().toLowerCase() === name.toLowerCase(),
+          );
+          if (found?.id) {
+            const sid = Number(found.id);
+            setSpeciesIds(p => {
+              const set = new Set((p || []).map(Number).filter(Number.isFinite));
+              set.add(sid);
+              return Array.from(set);
+            });
+            setSpeciesCounts(pc => ({ ...(pc || {}), [String(sid)]: pc?.[String(sid)] ?? '' }));
+          }
+          return prev;
+        });
+      }, 200);
 
+      setOtherSpeciesModal(false);
       setOtherSpeciesName('');
       Alert.alert('Success', 'Species added successfully.');
     } catch (e) {
-      Alert.alert('Error', e?.message || 'Failed to add species');
+      Alert.alert('Failed', e?.message || 'Could not add species.');
     } finally {
-      setAddingSpecies(false);
+      setAddingOtherSpecies(false);
     }
-  }, [otherSpeciesName, speciesRows, createSpecies, fetchSpecies]);
+  };
 
-  /* ===================== RECORDS FETCH ===================== */
-  const fetchPoleCropRecords = useCallback(
-    async ({refresh = false} = {}) => {
+  // ---------- GPS ----------
+  const fillAutoIntoManual = useCallback(autoValue => {
+    const v = String(autoValue || '').trim();
+    if (!v) return;
+
+    setGpsList(prev => {
+      const list = Array.isArray(prev) ? [...prev] : [];
+      if (list.length === 0) return [v];
+      if (list.length === 1 && !String(list[0] || '').trim()) return [v];
+      list[list.length - 1] = v;
+      return list;
+    });
+  }, []);
+
+  const openAppSettings = () => {
+    Alert.alert(
+      'Permission Required',
+      'Please allow camera permission from Settings to take photos.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Open Settings',
+          onPress: () => {
+            Linking.openSettings().catch(() => { });
+          },
+        },
+      ],
+    );
+  };
+
+  const requestAndroidCameraPermission = async () => {
+    if (Platform.OS !== 'android') return true;
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.CAMERA,
+        {
+          title: 'Camera Permission',
+          message: 'We need camera access so you can take a photo.',
+          buttonNegative: 'Cancel',
+          buttonPositive: 'OK',
+        },
+      );
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  const fetchAutoGps = (silent = false) => {
+    const now = Date.now();
+    if (now - lastGpsRequestAtRef.current < 1200) return;
+    lastGpsRequestAtRef.current = now;
+
+    setGpsLoading(true);
+    Geolocation.getCurrentPosition(
+      pos => {
+        const { latitude, longitude } = pos.coords;
+        const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+        setAutoGps(value);
+        fillAutoIntoManual(value);
+        setGpsLoading(false);
+      },
+      err => {
+        setGpsLoading(false);
+        if (!silent) Alert.alert('Location Error', err.message);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+    );
+  };
+
+  // ---------- IMAGE PICKER ----------
+  const onImagePickerResult = res => {
+    if (!res) return;
+    if (res.didCancel) return;
+
+    if (res.errorCode) {
+      if (res.errorCode === 'permission' || res.errorCode === 'camera_unavailable') {
+        openAppSettings();
+        return;
+      }
+      Alert.alert('Image Error', res.errorMessage || 'Could not get image');
+      return;
+    }
+
+    const assets = res.assets || [];
+    const uris = assets.map(a => a?.uri).filter(Boolean);
+    if (uris.length) setPictureUris(uris); // replace behavior
+  };
+
+  const pickFromGallery = () => {
+    setImagePickerModal(false);
+    launchImageLibrary(
+      { mediaType: 'photo', quality: 0.7, selectionLimit: 0 },
+      onImagePickerResult,
+    );
+  };
+
+  const takePhotoFromCamera = async () => {
+    setImagePickerModal(false);
+    const ok = await requestAndroidCameraPermission();
+    if (!ok) {
+      openAppSettings();
+      return;
+    }
+    launchCamera(
+      { mediaType: 'photo', quality: 0.7, saveToPhotos: true, cameraType: 'back' },
+      onImagePickerResult,
+    );
+  };
+
+  const pickImage = () => setImagePickerModal(true);
+
+  // ---------- AWS UPLOAD ----------
+  const uploadImagesToS3 = async (
+    localUris,
+    { uploadPath = AWS_UPLOAD_PATH, fileName = 'pole' } = {},
+  ) => {
+    if (!Array.isArray(localUris) || localUris.length === 0) return [];
+
+    const form = new FormData();
+    form.append('uploadPath', uploadPath);
+    form.append('isMulti', 'true');
+    form.append('fileName', fileName);
+
+    localUris.forEach((uri, idx) => {
+      const cleanUri = Platform.OS === 'ios' ? uri.replace('file://', '') : uri;
+      const extGuess = (uri || '').split('.').pop();
+      const ext = extGuess && extGuess.length <= 5 ? extGuess.toLowerCase() : 'jpg';
+      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+
+      form.append('files', {
+        uri: cleanUri,
+        type: mime,
+        name: `${fileName}_${idx}.${ext}`,
+      });
+    });
+
+    const res = await fetch(AWS_UPLOAD_URL, { method: 'POST', body: form });
+    const json = await res.json().catch(() => null);
+
+    if (!res.ok || !json?.status) {
+      const msg = json?.message || `Upload failed (HTTP ${res.status})`;
+      throw new Error(msg);
+    }
+
+    const items = Array.isArray(json?.data) ? json.data : [];
+    const finalUrls = [];
+
+    items.forEach(it => {
+      const img = it?.availableSizes?.image;
+      if (img) {
+        finalUrls.push(img);
+        return;
+      }
+      if (Array.isArray(it?.url) && it.url.length) {
+        finalUrls.push(it.url[it.url.length - 1]);
+        return;
+      }
+    });
+
+    return finalUrls.filter(Boolean);
+  };
+
+  // ---------- NORMALIZE RECORD + SPECIES AUTO-SELECT ----------
+  const normalizeApiRecord = raw => {
+    const serverId = raw?.id ?? raw?._id ?? null;
+
+    const autoLat = raw?.auto_lat ?? raw?.autoLat ?? null;
+    const autoLng = raw?.auto_long ?? raw?.autoLong ?? null;
+    const manualLat = raw?.manual_lat ?? raw?.manualLat ?? null;
+    const manualLng = raw?.manual_long ?? raw?.manualLong ?? null;
+
+    const autoGpsLatLong =
+      Number.isFinite(Number(autoLat)) && Number.isFinite(Number(autoLng))
+        ? `${Number(autoLat).toFixed(6)}, ${Number(autoLng).toFixed(6)}`
+        : '';
+
+    const gpsBoundingBox =
+      Number.isFinite(Number(manualLat)) && Number.isFinite(Number(manualLng))
+        ? [`${Number(manualLat).toFixed(6)}, ${Number(manualLng).toFixed(6)}`]
+        : [''];
+
+    const pictures = Array.isArray(raw?.pictures) ? raw.pictures : [];
+
+    // 1) poleCropSpecies snapshot array (latest by audit_no)
+    const pcsArr = Array.isArray(raw?.poleCropSpecies) ? raw.poleCropSpecies : [];
+    const latestSpeciesFromPCS = pickLatestPoleCropSpeciesPerId(pcsArr);
+
+    const derivedSpeciesIdsPCS = latestSpeciesFromPCS
+      .map(x => Number(x?.species_id))
+      .filter(n => Number.isFinite(n) && n > 0);
+
+    const derivedCountsPCS = {};
+    const derivedNamesMapPCS = {};
+    latestSpeciesFromPCS.forEach(x => {
+      const sid = Number(x?.species_id);
+      if (!Number.isFinite(sid) || sid <= 0) return;
+      derivedCountsPCS[String(sid)] = String(x?.count ?? '');
+      const nm = String(x?.name || '').trim();
+      if (nm) derivedNamesMapPCS[String(sid)] = nm;
+    });
+
+    // 2) species array payload (common)
+    const speciesArray = Array.isArray(raw?.species) ? raw.species : null;
+    const fromSpeciesArray = normalizeSpeciesArrayPayload(speciesArray);
+
+    // 3) legacy single species field (string/number/object)
+    const legacySpeciesValue = raw?.species ?? raw?.species_id ?? raw?.speciesId ?? null;
+    const legacySpeciesId = asValidId(
+      typeof legacySpeciesValue === 'object' ? legacySpeciesValue?.id : legacySpeciesValue,
+    );
+    const legacySpeciesName =
+      typeof legacySpeciesValue === 'string'
+        ? legacySpeciesValue
+        : typeof legacySpeciesValue === 'object'
+          ? legacySpeciesValue?.name
+          : raw?.species_name ?? '';
+
+    // Choose best available species source
+    let species_ids = derivedSpeciesIdsPCS;
+    let species_counts = derivedCountsPCS;
+    let species_names_map = derivedNamesMapPCS;
+
+    if (!species_ids.length && fromSpeciesArray.ids.length) {
+      species_ids = fromSpeciesArray.ids;
+      species_counts = fromSpeciesArray.counts;
+      species_names_map = fromSpeciesArray.namesMap;
+    }
+
+    if (!species_ids.length) {
+      if (legacySpeciesId) {
+        species_ids = [Number(legacySpeciesId)];
+        species_counts = { [String(legacySpeciesId)]: String(raw?.count ?? '') };
+      } else if (String(legacySpeciesName || '').trim()) {
+        species_ids = [];
+        species_counts = {};
+        species_names_map = { '__legacy_name__': String(legacySpeciesName || '').trim() };
+      }
+    }
+
+    // Total count: prefer PCS, then species array, then raw.count
+    const totalCount =
+      latestSpeciesFromPCS.length > 0
+        ? latestSpeciesFromPCS.reduce((sum, x) => {
+          const n = Number(String(x?.count ?? '').replace(/[^\d]/g, ''));
+          return sum + (Number.isFinite(n) ? n : 0);
+        }, 0)
+        : fromSpeciesArray.ids.length > 0
+          ? fromSpeciesArray.ids.reduce((sum, sid) => {
+            const n = Number(String(fromSpeciesArray.counts[String(sid)] ?? '').replace(/[^\d]/g, ''));
+            return sum + (Number.isFinite(n) ? n : 0);
+          }, 0)
+          : Number(String(raw?.count ?? '').replace(/[^\d]/g, '') || 0);
+
+    const superdari = extractSuperdariInfo(raw);
+    const disposal = extractDisposalInfo(raw);
+
+    const numericServerId = Number(serverId);
+    const stableId = Number.isFinite(numericServerId) && numericServerId > 0 ? numericServerId : serverId;
+
+    return {
+      id: stableId,
+      serverId: stableId,
+
+      nameOfSiteId: raw?.nameOfSiteId ?? raw?.name_of_site_id ?? raw?.nameOfSite?.id ?? null,
+
+      rds_from: raw?.rds_from ?? raw?.rdsFrom ?? '',
+      rds_to: raw?.rds_to ?? raw?.rdsTo ?? '',
+
+      count: totalCount,
+
+      autoGpsLatLong,
+      gpsBoundingBox,
+
+      pictures,
+      picturePreview: pictures?.[0] || null,
+      pictureUris: [],
+
+      species_ids,
+      species_counts,
+      species_names_map,
+
+      verification: Array.isArray(raw?.verification) ? raw.verification : [],
+      latestStatus: raw?.latestStatus || null,
+
+      createdAt: raw?.created_at || raw?.createdAt || new Date().toISOString(),
+      serverRaw: raw,
+
+      hasSuperdari: superdari.hasSuperdari,
+      superdariId: superdari.superdariId,
+      superdarName: superdari.superdarName,
+
+      isDisposed: disposal.isDisposed,
+      disposalId: disposal.disposalId,
+      disposedAt: disposal.disposedAt,
+    };
+  };
+
+  // ---------- FETCH LIST ----------
+  const fetchPoleCropList = useCallback(
+    async ({ refresh = false } = {}) => {
       try {
-        refresh ? setRefreshing(true) : setLoading(true);
-        setServerError('');
+        refresh ? setServerRefreshing(true) : setListLoading(true);
 
-        const token = await getToken();
+        const token = await getAuthToken();
         if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-        let json = null;
-        let ok = false;
-        let status = 0;
+        const res = await fetch(POLECROP_LIST_URL, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        });
 
-        // Try POST site-wise endpoint first
-        if (nameOfSiteId) {
-          try {
-            const resPost = await fetch(POLE_CROP_LIST_URL_POST, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({nameOfSiteId: Number(nameOfSiteId)}),
-            });
-            status = resPost.status;
-            json = await resPost.json().catch(() => null);
-            ok = resPost.ok;
-          } catch (e) {
-            // ignore -> fallback
-          }
-        }
-
-        // Fallback: GET /enum/pole-crop
-        if (!ok) {
-          const resGet = await fetch(POLE_CROP_LIST_URL_GET, {
-            method: 'GET',
-            headers: {Authorization: `Bearer ${token}`},
-          });
-          status = resGet.status;
-          json = await resGet.json().catch(() => null);
-          ok = resGet.ok;
-        }
-
-        if (!ok) {
-          const msg = json?.message || json?.error || `API Error (${status})`;
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          const msg = json?.message || json?.error || `API Error (${res.status})`;
           throw new Error(msg);
         }
 
-        let rows = normalizeList(json);
-        rows = Array.isArray(rows) ? rows : [];
+        const rows = normalizeList(json);
+        const normalized = rows.map(normalizeApiRecord);
 
-        // If we have route site id, filter client-side too
-        if (nameOfSiteId != null) {
-          const sid = Number(nameOfSiteId);
-          rows = rows.filter(r => {
-            const a = Number(r?.nameOfSiteId);
-            const b = Number(r?.nameOfSite?.id);
-            return (Number.isFinite(a) && a === sid) || (Number.isFinite(b) && b === sid);
-          });
-        }
+        const filtered = nameOfSiteId
+          ? normalized.filter(x => Number(x?.nameOfSiteId) === Number(nameOfSiteId))
+          : normalized;
 
-        setRecords(rows);
+        setRecords(filtered);
+        console.log('📥 Loaded records:', normalized.length, 'Filtered:', filtered.length);
       } catch (e) {
         setRecords([]);
-        setServerError(e?.message || 'Failed to fetch records');
+        Alert.alert('Load Failed', e?.message || 'Failed to load records from server.');
       } finally {
-        refresh ? setRefreshing(false) : setLoading(false);
+        refresh ? setServerRefreshing(false) : setListLoading(false);
       }
     },
     [nameOfSiteId],
   );
 
-  useEffect(() => {
-    fetchPoleCropRecords();
-  }, [fetchPoleCropRecords]);
-
   useFocusEffect(
     useCallback(() => {
-      fetchPoleCropRecords({refresh: true});
-    }, [fetchPoleCropRecords]),
+      fetchPoleCropList({ refresh: true });
+    }, [fetchPoleCropList]),
   );
 
-  /* ===================== LOCATION PERMISSION + GPS ===================== */
-  const openSettingsSafe = useCallback(() => {
-    Linking.openSettings().catch(() => {
-      Alert.alert('Settings', 'Unable to open Settings on this device.');
-    });
-  }, []);
-
-  const ensureLocationPermission = useCallback(async () => {
-    if (Platform.OS === 'ios') {
-      try {
-        Geolocation.requestAuthorization?.('whenInUse');
-        return {ok: true, blocked: false};
-      } catch (e) {
-        return {ok: false, blocked: false};
-      }
-    }
-
-    try {
-      const result = await PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-      ]);
-
-      const fine = result?.[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
-      const coarse = result?.[PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION];
-
-      const ok =
-        fine === PermissionsAndroid.RESULTS.GRANTED ||
-        coarse === PermissionsAndroid.RESULTS.GRANTED;
-
-      const blocked =
-        fine === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
-        coarse === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
-
-      return {ok, blocked};
-    } catch (e) {
-      return {ok: false, blocked: false};
-    }
-  }, []);
-
-  const showLocationPermissionModal = useCallback(({blocked = false, message} = {}) => {
-    setLocPermBlocked(!!blocked);
-    setLocPermMsg(
-      message ||
-        (blocked
-          ? 'Location permission is blocked. Please enable it from Settings to fetch GPS coordinates.'
-          : 'This app needs location access to fetch GPS coordinates.'),
-    );
-    setLocPermVisible(true);
-  }, []);
-
-  const fetchGps = useCallback(
-    async silent => {
-      const now = Date.now();
-      if (now - lastGpsRequestAtRef.current < 1200) return;
-      lastGpsRequestAtRef.current = now;
-
-      const perm = await ensureLocationPermission();
-      if (!perm.ok) {
-        if (!silent) {
-          showLocationPermissionModal({
-            blocked: perm.blocked,
-            message: perm.blocked
-              ? 'Location permission is blocked. Please enable it from Settings.'
-              : 'Location permission is required to fetch GPS coordinates.',
-          });
-        }
-        return;
-      }
-
-      setGpsLoading(true);
-
-      Geolocation.getCurrentPosition(
-        pos => {
-          const {latitude, longitude} = pos.coords;
-          const nextAuto = formatLatLng(latitude, longitude);
-          setAutoGps(nextAuto);
-
-          setManualGps(prev => {
-            const prevAuto = prevAutoGpsRef.current;
-            const prevTrim = String(prev || '').trim();
-            if (!prevTrim) return nextAuto;
-            if (prevTrim === String(prevAuto || '').trim()) return nextAuto;
-            return prevTrim;
-          });
-
-          prevAutoGpsRef.current = nextAuto;
-          setGpsLoading(false);
-        },
-        err => {
-          setGpsLoading(false);
-          const msg = err?.message || 'Unable to fetch location.';
-          if (!silent) {
-            if (String(msg).toLowerCase().includes('permission')) {
-              showLocationPermissionModal({
-                blocked: false,
-                message: 'Location permission was denied. Please allow it to fetch GPS coordinates.',
-              });
-            } else {
-              Alert.alert('Location Error', msg);
-            }
-          }
-        },
-        {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
-      );
-    },
-    [ensureLocationPermission, showLocationPermissionModal],
-  );
-
-  useEffect(() => {
-    const a = String(autoGps || '').trim();
-    if (!a) return;
-    setManualGps(prev => (String(prev || '').trim() ? prev : a));
-  }, [autoGps]);
-
-  const resolveFinalGps = () => {
-    const m = String(manualGps || '').trim();
-    return m || String(autoGps || '').trim();
-  };
-
-  /* ===================== SPECIES COUNT MAP SYNC ===================== */
-  const selectedSpeciesIds = useMemo(() => {
-    // ignore "Other" in mapping
-    const actualNames = (Array.isArray(selectedSpeciesNames) ? selectedSpeciesNames : []).filter(
-      n => String(n) !== OTHER_SPECIES_LABEL,
-    );
-
-    const ids = actualNames
-      .map(n => speciesRows.find(s => String(s.name) === String(n))?.id)
-      .filter(id => id !== null && id !== undefined)
-      .map(id => String(id));
-
-    return uniq(ids);
-  }, [selectedSpeciesNames, speciesRows]);
-
-  useEffect(() => {
-    setSpeciesCountMap(prev => {
-      const next = {};
-      selectedSpeciesIds.forEach(id => {
-        next[id] = prev?.[id] ?? '';
-      });
-      return next;
-    });
-  }, [selectedSpeciesIds]);
-
-  const setSpeciesCount = (speciesId, value) => {
-    const clean = String(value ?? '').replace(/[^\d.]/g, '');
-    setSpeciesCountMap(prev => ({...(prev || {}), [String(speciesId)]: clean}));
-  };
-
-  const totalCount = useMemo(() => {
-    const items = selectedSpeciesIds.map(id => ({species_id: id, count: speciesCountMap?.[id]}));
-    return items.reduce((acc, x) => acc + (Number(x.count) || 0), 0);
-  }, [selectedSpeciesIds, speciesCountMap]);
-
-  /* ===================== FORM ===================== */
+  // ---------- FORM RESET ----------
   const resetFormForAdd = () => {
     setIsEdit(false);
-    setEditingServerId(null);
-    setRdFrom('');
-    setRdTo('');
-    setSelectedSpeciesNames([]);
-    setSpeciesCountMap({});
+    setEditingId(null);
+    setExistingPictures([]);
+    editRecordRef.current = null;
+
+    setRdsFrom('');
+    setRdsTo('');
+
+    setSpeciesIds([]);
+    setSpeciesCounts({});
+
     setAutoGps('');
-    setManualGps('');
-    setPickedAssets([]);
-    setOtherSpeciesName('');
+    setGpsList(['']);
+    setPictureUris([]);
   };
 
   const openAddForm = () => {
     resetFormForAdd();
     setModalVisible(true);
-    setTimeout(() => fetchGps(true), 250);
+    setTimeout(() => fetchAutoGps(true), 300);
   };
 
-  const openEditFormServer = row => {
-    if (normalizeVerificationStatus(row) !== 'disapproved') {
-      Alert.alert('Not Allowed', 'This record can only be edited when it is Disapproved (Rejected).');
+  // resolve species selection reliably when editing
+  const resolveSpeciesSelectionForEdit = useCallback(
+    record => {
+      const ids = Array.isArray(record?.species_ids) ? record.species_ids.map(Number) : [];
+      const counts = record?.species_counts || {};
+      const namesMap = record?.species_names_map || {};
+
+      if (ids.length) {
+        const cleanIds = ids.filter(n => Number.isFinite(n) && n > 0);
+        const normCounts = { ...counts };
+        cleanIds.forEach(sid => {
+          const k = String(sid);
+          if (normCounts[k] === undefined || normCounts[k] === null) normCounts[k] = '';
+          normCounts[k] = String(normCounts[k]);
+        });
+        return { ids: cleanIds, counts: normCounts };
+      }
+
+      const legacyName = String(namesMap?.['__legacy_name__'] || '').trim();
+      if (legacyName) {
+        const found = (speciesRows || []).find(
+          s => String(s?.name || '').trim().toLowerCase() === legacyName.toLowerCase(),
+        );
+        if (found?.id) {
+          const sid = Number(found.id);
+          const c = String(record?.count ?? '');
+          return { ids: [sid], counts: { [String(sid)]: c } };
+        }
+      }
+
+      return { ids: [], counts: {} };
+    },
+    [speciesRows],
+  );
+
+  useEffect(() => {
+    if (!modalVisible || !isEdit) return;
+    const rec = editRecordRef.current;
+    if (!rec) return;
+
+    const namesMap = rec?.species_names_map || {};
+    const hasLegacyName = Boolean(String(namesMap?.['__legacy_name__'] || '').trim());
+
+    if (speciesRows?.length > 0 && (speciesIds.length === 0 || hasLegacyName)) {
+      const resolved = resolveSpeciesSelectionForEdit(rec);
+      if (resolved?.ids?.length) {
+        setSpeciesIds(resolved.ids);
+        setSpeciesCounts(resolved.counts || {});
+      }
+    }
+  }, [speciesRows, modalVisible, isEdit]);
+
+  const openEditForm = record => {
+    if (!isRejectedStatus(record)) {
+      Alert.alert('Not Allowed', 'You can edit only when status is Rejected.');
       return;
     }
 
+    editRecordRef.current = record;
+
     setIsEdit(true);
-    setEditingServerId(row?.id ?? null);
-    setRdFrom(String(getRdsFrom(row) ?? ''));
-    setRdTo(String(getRdsTo(row) ?? ''));
 
-    // ✅ NEW API: poleCropSpecies is flat: {id, name, count}
-    const pcs = getPoleCropSpeciesList(row);
-    const selectedNames = pcs.map(x => x?.name).filter(Boolean);
-    setSelectedSpeciesNames(selectedNames);
+    const editPoleId = resolvePoleCropId(record, route?.params);
+    setEditingId(editPoleId ? String(editPoleId) : null);
+    console.log('📝 Editing Pole Crop ID:', editPoleId);
 
-    const nextCountMap = {};
-    pcs.forEach(x => {
-      const sid = x?.id;
-      if (sid !== null && sid !== undefined) nextCountMap[String(sid)] = String(x?.count ?? '');
-    });
-    setSpeciesCountMap(nextCountMap);
+    setRdsFrom(
+      record?.rds_from !== null && record?.rds_from !== undefined ? String(record.rds_from) : '',
+    );
+    setRdsTo(record?.rds_to !== null && record?.rds_to !== undefined ? String(record.rds_to) : '');
 
-    const auto =
-      row?.auto_lat != null && row?.auto_long != null ? `${row.auto_lat}, ${row.auto_long}` : '';
+    const serverPics = Array.isArray(record?.pictures) ? record.pictures : [];
+    setExistingPictures(serverPics);
+
+    const resolved = resolveSpeciesSelectionForEdit(record);
+    setSpeciesIds(resolved.ids);
+    setSpeciesCounts(resolved.counts);
+
+    setAutoGps(record.autoGpsLatLong || '');
     const manual =
-      row?.manual_lat != null && row?.manual_long != null
-        ? `${row.manual_lat}, ${row.manual_long}`
-        : '';
+      Array.isArray(record.gpsBoundingBox) && record.gpsBoundingBox.length
+        ? record.gpsBoundingBox
+        : [''];
+    setGpsList(manual);
 
-    setAutoGps(auto);
-    const availableGps = manual || auto || '';
-    setManualGps(availableGps);
-    prevAutoGpsRef.current = auto || '';
-    setPickedAssets([]);
-    setOtherSpeciesName('');
+    setPictureUris([]);
+    setModalVisible(true);
 
-    // ✅ Ensure selected names are present in options (for old/custom names)
-    setSpeciesOptions(prev => {
-      const p = Array.isArray(prev) ? prev : [OTHER_SPECIES_LABEL];
-      const union = uniq([...p, ...selectedNames, OTHER_SPECIES_LABEL]);
-      return union;
+    if (record.autoGpsLatLong) {
+      setTimeout(() => fillAutoIntoManual(record.autoGpsLatLong), 0);
+    } else {
+      setTimeout(() => fetchAutoGps(true), 300);
+    }
+  };
+
+  // ---------- ACTION NAV ----------
+  const openSuperdariForRecord = record => {
+    const poleCropId = resolvePoleCropId(record, route?.params);
+    console.log('🔵 OPEN SUPERDARI:', {
+      recordId: poleCropId,
+      screenName: POLECROP_SUPERDARI_SCREEN,
+      recordData: record,
+      fromParams: route?.params
     });
 
-    setModalVisible(true);
-    if (!auto) setTimeout(() => fetchGps(true), 250);
+    if (!poleCropId) {
+      Alert.alert('Error', 'PoleCrop ID is missing/invalid.');
+      return;
+    }
+
+    safeNavigate(POLECROP_SUPERDARI_SCREEN, {
+      poleCropId,
+      polecropId: poleCropId,
+      id: poleCropId,
+      nameOfSiteId: Number(nameOfSiteId || record?.nameOfSiteId || 0),
+      enumeration,
+      record,
+      poleCrop: record, // ✅ Fix: Pass as poleCrop for receiving screen
+      superdariId: record?.superdariId ?? null,
+    });
   };
 
-  /* ===================== VALIDATION ===================== */
-  const validate = () => {
-    if (!nameOfSiteId && !isEdit) {
-      Alert.alert('Error', 'Parent site id missing.');
-      return false;
-    }
-    if (!String(rdFrom || '').trim()) {
-      Alert.alert('Missing', 'RDS From is required.');
-      return false;
-    }
-    if (!String(rdTo || '').trim()) {
-      Alert.alert('Missing', 'RDS To is required.');
-      return false;
-    }
-    if (!selectedSpeciesNames?.length) {
-      Alert.alert('Missing', 'Please select at least one species.');
-      return false;
+  const openDisposalForRecord = record => {
+    const poleCropId = resolvePoleCropId(record, route?.params);
+    console.log('🔵 OPEN DISPOSAL:', {
+      recordId: poleCropId,
+      screenName: POLECROP_DISPOSAL_SCREEN,
+      recordData: record,
+      fromParams: route?.params
+    });
+
+    if (!poleCropId) {
+      Alert.alert('Error', 'PoleCrop ID is missing/invalid.');
+      return;
     }
 
-    // If user selected "Other", they must add it before saving
-    if (selectedSpeciesNames.includes(OTHER_SPECIES_LABEL)) {
-      Alert.alert('Species', 'Please add the "Other" species name before saving.');
-      return false;
-    }
-
-    if (!selectedSpeciesIds.length) {
-      Alert.alert('Species', 'Species mapping failed (missing ids). Please refresh species list.');
-      return false;
-    }
-
-    for (const sid of selectedSpeciesIds) {
-      const v = speciesCountMap?.[sid];
-      if (!String(v ?? '').trim()) {
-        const name = speciesRows.find(s => String(s.id) === String(sid))?.name || `#${sid}`;
-        Alert.alert('Missing', `Count is required for ${name}.`);
-        return false;
-      }
-      const n = Number(v);
-      if (!Number.isFinite(n) || n <= 0) {
-        const name = speciesRows.find(s => String(s.id) === String(sid))?.name || `#${sid}`;
-        Alert.alert('Invalid', `Count must be a positive number for ${name}.`);
-        return false;
-      }
-    }
-
-    return true;
+    safeNavigate(POLECROP_DISPOSAL_SCREEN, {
+      poleCropId,
+      polecropId: poleCropId,
+      id: poleCropId,
+      nameOfSiteId: Number(nameOfSiteId || record?.nameOfSiteId || 0),
+      enumeration,
+      record,
+      poleCrop: record, // ✅ Fix: Pass as poleCrop for receiving screen
+      disposalId: record?.disposalId ?? null,
+    });
   };
 
-  /* ===================== SUBMIT (POST create, PATCH edit) ===================== */
-  const submitToApi = async ({isEditMode, id, payload}) => {
-    const token = await getToken();
+  const openAuditForRecord = record => {
+    const poleCropId = resolvePoleCropId(record, route?.params);
+    console.log('🔵 OPEN AUDIT:', {
+      recordId: poleCropId,
+      screenName: POLECROP_AUDIT_SCREEN,
+      recordData: record,
+      fromParams: route?.params
+    });
+
+    if (!poleCropId) {
+      Alert.alert('Error', 'PoleCrop ID is missing/invalid.');
+      return;
+    }
+
+    safeNavigate(POLECROP_AUDIT_SCREEN, {
+      poleCropId,
+      polecropId: poleCropId,
+      id: poleCropId,
+      nameOfSiteId: Number(nameOfSiteId || record?.nameOfSiteId || 0),
+      enumeration,
+      record,
+      poleCrop: record, // ✅ Fix: Pass as poleCrop for receiving screen
+    });
+  };
+
+  // ---------- SUBMIT / EDIT ----------
+  const submitPoleCropToApi = async (body, { isEditMode = false, editId = null } = {}) => {
+    const token = await getAuthToken();
     if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
-    const url = isEditMode ? POLE_CROP_EDIT_URL(id) : POLE_CROP_CREATE_URL;
+    const url = isEditMode ? POLECROP_EDIT_URL(editId) : POLECROP_SUBMIT_URL;
     const method = isEditMode ? 'PATCH' : 'POST';
 
     const res = await fetch(url, {
       method,
-      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
-      body: JSON.stringify(payload),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
     });
 
     const json = await res.json().catch(() => null);
-
     if (!res.ok) {
       const msg = json?.message || json?.error || `API Error (${res.status})`;
       throw new Error(msg);
@@ -977,214 +1195,164 @@ export default function PoleCropRecordsScreen({navigation, route}) {
   };
 
   const upsertRecord = async () => {
-    if (!validate()) return;
-
-    const rdFromNum = Number(rdFrom);
-    const rdToNum = Number(rdTo);
-    if (!Number.isFinite(rdFromNum) || !Number.isFinite(rdToNum)) {
-      Alert.alert('Invalid', 'RDS From / To must be numeric.');
+    if (!rdsFrom || !rdsTo) {
+      Alert.alert('Missing', 'RDS From and RDS To are required.');
       return;
     }
 
-    const {lat: autoLat, lng: autoLng} = parseLatLng(autoGps);
-    const finalGps = resolveFinalGps();
-    const {lat: manualLat, lng: manualLng} = parseLatLng(finalGps);
+    if (!nameOfSiteId && !route?.params?.nameOfSiteId && !enumeration) {
+      Alert.alert('Error', 'nameOfSiteId missing. Ensure previous screen passes it.');
+      return;
+    }
 
-    const species_counts = selectedSpeciesIds.map(sid => ({
+    if (!speciesIds.length) {
+      Alert.alert('Missing', 'Please select at least 1 species.');
+      return;
+    }
+
+    for (const sid of speciesIds) {
+      const v = speciesCounts[String(sid)];
+      const n = Number(String(v || '').replace(/[^\d]/g, ''));
+      if (!Number.isFinite(n) || n <= 0) {
+        const row = speciesRows.find(x => Number(x.id) === Number(sid));
+        Alert.alert('Missing', `Please enter valid count for ${row?.name || `species ${sid}`}.`);
+        return;
+      }
+    }
+
+    const cleanGps = gpsList.map(x => (x || '').trim()).filter(x => x.length > 0);
+    const { lat: autoLat, lng: autoLng } = parseLatLng(autoGps);
+
+    const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : autoGps;
+    const { lat: manualLat, lng: manualLng } = parseLatLng(lastManual || autoGps);
+
+    let uploadedUrls = [];
+    try {
+      if (pictureUris?.length) {
+        setUploading(true);
+        const safeFileName = `pole_${Number(nameOfSiteId || 0)}_${Date.now()}`;
+        uploadedUrls = await uploadImagesToS3(pictureUris, {
+          uploadPath: AWS_UPLOAD_PATH,
+          fileName: safeFileName,
+        });
+      }
+    } catch (e) {
+      setUploading(false);
+      Alert.alert('Upload Failed', e?.message || 'Image upload failed.');
+      return;
+    } finally {
+      setUploading(false);
+    }
+
+    const speciesPayload = speciesIds.map(sid => ({
       species_id: Number(sid),
-      count: Number(speciesCountMap?.[sid]),
+      count: Number(String(speciesCounts[String(sid)] || '').replace(/[^\d]/g, '')),
     }));
 
+    const finalPictures =
+      isEdit && (!pictureUris || pictureUris.length === 0)
+        ? Array.isArray(existingPictures)
+          ? existingPictures
+          : []
+        : uploadedUrls;
+
+    const body = {
+      nameOfSiteId: Number(nameOfSiteId || route?.params?.nameOfSiteId || 0),
+
+      rds_from: Number(String(rdsFrom).replace(/[^\d.]+/g, '')) || 0,
+      rds_to: Number(String(rdsTo).replace(/[^\d.]+/g, '')) || 0,
+
+      auto_lat: autoLat,
+      auto_long: autoLng,
+      manual_lat: manualLat,
+      manual_long: manualLng,
+
+      pictures: finalPictures,
+
+      species_counts: speciesPayload,
+    };
+
     try {
-      const uploadedUrls = await uploadPoleCropImages();
-
-      const existingRow = isEdit
-        ? records.find(x => String(x?.id) === String(editingServerId))
-        : null;
-
-      // If user did not pick new images, keep existing server images in edit
-      const finalPictures =
-        uploadedUrls.length > 0 ? uploadedUrls : isEdit ? getPictures(existingRow) : [];
-
-      const basePayload = {
-        rds_from: rdFromNum,
-        rds_to: rdToNum,
-        auto_lat: autoLat,
-        auto_long: autoLng,
-        manual_lat: manualLat,
-        manual_long: manualLng,
-        pictures: finalPictures,
-        species_counts,
-      };
-
-      // ✅ Create requires site id; Edit curl does NOT include it
-      const payload = isEdit
-        ? basePayload
-        : {
-            ...basePayload,
-            nameOfSiteId: String(nameOfSiteId),
-          };
-
-      await submitToApi({
-        isEditMode: isEdit,
-        id: Number(editingServerId),
-        payload,
-      });
+      if (isEdit) {
+        if (!editingId) throw new Error('Edit ID missing. Cannot PATCH without record id.');
+        await submitPoleCropToApi(body, { isEditMode: true, editId: editingId });
+        Alert.alert('Success', 'Record updated and resubmitted successfully.');
+      } else {
+        await submitPoleCropToApi(body, { isEditMode: false });
+        Alert.alert('Success', 'Saved to server.');
+      }
 
       setModalVisible(false);
-      fetchPoleCropRecords({refresh: true});
-      Alert.alert('Success', isEdit ? 'Record updated successfully.' : 'Record saved successfully.');
+      fetchPoleCropList({ refresh: true });
     } catch (e) {
-      Alert.alert('Error', e?.message || 'Failed to save');
+      Alert.alert('Submit Failed', e?.message || 'Server submit failed.');
     }
   };
 
-  /* ===================== UI HELPERS (UPDATED) ===================== */
-  const getSpeciesLabel = r => {
-    // legacy: species_counts
-    const sc = Array.isArray(r?.species_counts) ? r.species_counts : [];
-    if (sc.length) {
-      const parts = sc
-        .map(x => {
-          const name =
-            speciesRows.find(s => String(s.id) === String(x?.species_id))?.name ||
-            `#${x?.species_id}`;
-          const c = Number(x?.count) || 0;
-          return `${name}(${c})`;
-        })
-        .filter(Boolean);
-
-      if (!parts.length) return '—';
-      return parts.length > 2
-        ? `${parts.slice(0, 2).join(', ')} +${parts.length - 2} more`
-        : parts.join(', ');
-    }
-
-    // new: poleCropSpecies
-    return buildPoleCropSpeciesLabel(r);
-  };
-
-  const getTotalCountForRow = r => {
-    const sc = Array.isArray(r?.species_counts) ? r.species_counts : [];
-    if (sc.length) return sumSpeciesCounts(sc);
-
-    const poleSum = sumPoleCropSpeciesCounts(r);
-    if (poleSum > 0) return poleSum;
-
-    return Number(r?.count ?? 0) || 0;
-  };
-
-  const getGpsLabel = r => {
-    const m =
-      r?.manual_lat != null && r?.manual_long != null ? `${r.manual_lat}, ${r.manual_long}` : '';
-    const a = r?.auto_lat != null && r?.auto_long != null ? `${r.auto_lat}, ${r.auto_long}` : '';
-    return m || a || '—';
-  };
-
-  const openPicturesViewer = (pics, title = 'Pictures') => {
-    const list = Array.isArray(pics) ? pics.filter(Boolean) : [];
-    if (!list.length) {
-      Alert.alert('Pictures', 'No pictures available for this record.');
-      return;
-    }
-    setViewerImages(list);
-    setViewerTitle(title);
-    setViewerVisible(true);
-  };
-
-  const activeFilterCount = useMemo(() => {
-    const adv = Object.values(filters).filter(v => String(v || '').trim() !== '').length;
-    const s = search.trim() ? 1 : 0;
-    return adv + s;
-  }, [filters, search]);
-
-  const clearAll = () => {
-    setSearch('');
-    setFilters({
-      speciesOne: '',
-      dateFrom: '',
-      dateTo: '',
-      rdFrom: '',
-      rdTo: '',
-      totalFrom: '',
-      totalTo: '',
-      status: '',
-    });
-  };
-
+  // ---------- FILTER / SEARCH ----------
   const filteredRecords = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const df = filters.dateFrom ? new Date(filters.dateFrom + 'T00:00:00') : null;
-    const dt = filters.dateTo ? new Date(filters.dateTo + 'T23:59:59') : null;
-    const rdF = filters.rdFrom !== '' ? Number(filters.rdFrom) : null;
-    const rdT = filters.rdTo !== '' ? Number(filters.rdTo) : null;
-    const totF = filters.totalFrom !== '' ? Number(filters.totalFrom) : null;
-    const totT = filters.totalTo !== '' ? Number(filters.totalTo) : null;
+    if (!q) return records;
 
     return records.filter(r => {
-      const st = normalizeVerificationStatus(r);
-      if (filters.status && st !== String(filters.status).toLowerCase()) return false;
+      const ui = deriveRowUi(r);
 
-      if (filters.speciesOne) {
-        const label = getSpeciesLabel(r);
-        if (!label.toLowerCase().includes(String(filters.speciesOne).toLowerCase())) return false;
-      }
+      const ids = Array.isArray(r.species_ids) ? r.species_ids : [];
+      const counts = r?.species_counts || {};
+      const apiNames = r?.species_names_map || {};
+      const speciesCountsText = ids
+        .map(sid => {
+          const master = speciesRows.find(x => Number(x.id) === Number(sid));
+          const name = master?.name || apiNames[String(sid)] || `Species ${sid}`;
+          const c = counts[String(sid)] ?? '';
+          return `${name}:${c}`;
+        })
+        .join(' ');
 
-      if (df || dt) {
-        const dRaw = r?.created_at || r?.createdAt || r?.updated_at || r?.updatedAt;
-        const d = safeDate(dRaw);
-        if (!d) return false;
-        if (df && d < df) return false;
-        if (dt && d > dt) return false;
-      }
-
-      if (rdF !== null || rdT !== null) {
-        const v = Number(getRdsFrom(r) ?? NaN);
-        if (!Number.isFinite(v)) return false;
-        if (rdF !== null && v < rdF) return false;
-        if (rdT !== null && v > rdT) return false;
-      }
-
-      if (totF !== null || totT !== null) {
-        const total = getTotalCountForRow(r);
-        if (!Number.isFinite(total)) return false;
-        if (totF !== null && total < totF) return false;
-        if (totT !== null && total > totT) return false;
-      }
-
-      if (!q) return true;
-
-      const latest = getLatestStatusObj(r);
       const blob = [
-        r?.id,
-        r?.nameOfSite?.site_name,
-        r?.nameOfSiteId,
-        getRdsFrom(r),
-        getRdsTo(r),
-        getTotalCountForRow(r),
-        getSpeciesLabel(r),
-        getGpsLabel(r),
-        normalizeVerificationStatus(r),
-        latest?.action,
-        latest?.remarks,
-        latest?.designation,
-        (getPictures(r) || []).join(' '),
-        r?.created_at,
+        r.serverId,
+        r.rds_from,
+        r.rds_to,
+        r.count,
+        r.autoGpsLatLong,
+        Array.isArray(r.gpsBoundingBox) ? r.gpsBoundingBox.join(' | ') : '',
+        ui.statusText,
+        speciesCountsText,
+        r?.hasSuperdari ? `superdari ${r?.superdarName || ''}` : 'no superdari',
+        r?.isDisposed ? 'disposed' : 'not disposed',
+        'audit',
       ]
-        .filter(v => v !== null && v !== undefined)
+        .filter(Boolean)
         .join(' ')
         .toLowerCase();
 
       return blob.includes(q);
     });
-  }, [records, search, filters, speciesRows]);
+  }, [records, search, speciesRows]);
 
-  const showOtherInput = useMemo(
-    () => Array.isArray(selectedSpeciesNames) && selectedSpeciesNames.includes(OTHER_SPECIES_LABEL),
-    [selectedSpeciesNames],
+  // ---------- RENDER ----------
+  const tableColumns = useMemo(
+    () => [
+      { label: 'ID', width: 80 },
+      { label: 'RDS From', width: 110 },
+      { label: 'RDS To', width: 110 },
+      { label: 'Total Count', width: 120 },
+      { label: 'Species Counts', width: 260 },
+      { label: 'Auto GPS', width: 200 },
+      { label: 'Manual GPS', width: 250 },
+      { label: 'Status', width: 220 },
+      { label: 'Superdari', width: 150 },
+      { label: 'Disposal', width: 150 },
+      { label: 'Audit', width: 140 },
+      { label: 'Actions', width: 110 },
+    ],
+    [],
   );
 
-  /* ===================== RENDER ===================== */
+  const speciesRowsWithOther = useMemo(() => {
+    return [...(speciesRows || []), { id: '__other__', name: 'Other (Add new species)' }];
+  }, [speciesRows]);
+
   return (
     <View style={styles.screen}>
       <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
@@ -1200,54 +1368,39 @@ export default function PoleCropRecordsScreen({navigation, route}) {
           </TouchableOpacity>
 
           <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>Pole Crop Records</Text>
-            <View style={styles.headerInfo}>
-              <View style={styles.infoChip}>
-                <Ionicons name="business" size={12} color="#fff" />
-                <Text style={styles.infoChipText}>{enumeration?.division || '—'}</Text>
-              </View>
-              <View style={styles.infoChip}>
-                <Ionicons name="cube" size={12} color="#fff" />
-                <Text style={styles.infoChipText}>{enumeration?.block || '—'}</Text>
-              </View>
-              <View style={styles.infoChip}>
-                <Ionicons name="calendar" size={12} color="#fff" />
-                <Text style={styles.infoChipText}>{enumeration?.year || '—'}</Text>
-              </View>
-            </View>
-            <Text style={styles.siteId}>Site ID: {String(nameOfSiteId ?? '—')}</Text>
+            <Text style={styles.headerTitle}>Pole Crop</Text>
+            {nameOfSiteId ? <Text style={styles.siteId}>Site ID: {nameOfSiteId}</Text> : null}
           </View>
 
           <TouchableOpacity
-            style={styles.refreshButton}
-            onPress={() => fetchPoleCropRecords({refresh: true})}
+            style={styles.headerAction}
+            onPress={() => fetchPoleCropList({ refresh: true })}
             activeOpacity={0.7}>
             <Ionicons name="refresh" size={22} color="#fff" />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Main Content */}
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => fetchPoleCropRecords({refresh: true})}
+            refreshing={serverRefreshing}
+            onRefresh={() => fetchPoleCropList({ refresh: true })}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
-        }
-        showsVerticalScrollIndicator={false}>
-        {/* Search Section */}
+        }>
+        {/* Search */}
         <View style={styles.searchSection}>
           <View style={styles.searchContainer}>
             <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search by ID, RDS range, species, GPS, remarks..."
+              placeholder="Search by ID, species, status..."
               placeholderTextColor={COLORS.textLight}
               style={styles.searchInput}
             />
@@ -1257,47 +1410,25 @@ export default function PoleCropRecordsScreen({navigation, route}) {
               </TouchableOpacity>
             )}
           </View>
-
-          <TouchableOpacity
-            style={styles.filterButton}
-            onPress={() => setFilterModalVisible(true)}
-            activeOpacity={0.7}>
-            <Ionicons name="filter" size={22} color="#fff" />
-            {activeFilterCount > 0 && (
-              <View style={styles.filterBadge}>
-                <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
         </View>
 
-        {!!serverError && (
-          <View style={styles.errorCard}>
-            <View style={styles.errorHeader}>
-              <Ionicons name="warning" size={20} color={COLORS.danger} />
-              <Text style={styles.errorTitle}>Server Error</Text>
-            </View>
-            <Text style={styles.errorMessage}>{serverError}</Text>
-            <TouchableOpacity
-              style={styles.errorButton}
-              onPress={() => fetchPoleCropRecords({refresh: true})}
-              activeOpacity={0.7}>
-              <Text style={styles.errorButtonText}>Retry Connection</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
+        {/* Table */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Pole Crop Records</Text>
             <Text style={styles.sectionSubtitle}>
-              {filteredRecords.length} of {records.length} records
+              Showing {filteredRecords.length} of {records.length} records
             </Text>
           </View>
 
-          {records.length === 0 ? (
+          {listLoading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="large" color={COLORS.primary} />
+              <Text style={styles.loadingText}>Loading records from server...</Text>
+            </View>
+          ) : records.length === 0 ? (
             <View style={styles.emptyState}>
-              <Ionicons name="cut-outline" size={64} color={COLORS.border} />
+              <Ionicons name="leaf-outline" size={64} color={COLORS.border} />
               <Text style={styles.emptyTitle}>No Records Yet</Text>
               <Text style={styles.emptyText}>Start by adding pole crop records for this site</Text>
             </View>
@@ -1306,144 +1437,180 @@ export default function PoleCropRecordsScreen({navigation, route}) {
               <Ionicons name="search" size={64} color={COLORS.border} />
               <Text style={styles.emptyTitle}>No Results Found</Text>
               <Text style={styles.emptyText}>No records match your search criteria</Text>
-              {activeFilterCount > 0 && (
-                <TouchableOpacity style={styles.emptyAction} onPress={clearAll}>
-                  <Text style={styles.emptyActionText}>Clear Filters</Text>
-                </TouchableOpacity>
-              )}
             </View>
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableContainer}>
+            <ScrollView horizontal showsHorizontalScrollIndicator style={styles.tableContainer}>
               <View style={styles.table}>
                 <View style={styles.tableHeader}>
-                  {[
-                    {label: 'ID', width: 80},
-                    {label: 'RDS From', width: 110},
-                    {label: 'RDS To', width: 110},
-                    {label: 'Total Count', width: 120},
-                    {label: 'Status', width: 150},
-                    {label: 'Species (Count)', width: 320},
-                    {label: 'Pictures', width: 170},
-                    {label: 'GPS', width: 200},
-                    {label: 'Actions', width: 160},
-                  ].map((col, idx) => (
-                    <View key={idx} style={[styles.thCell, {width: col.width}]}>
+                  {tableColumns.map((col, idx) => (
+                    <View key={idx} style={[styles.thCell, { width: col.width }]}>
                       <Text style={styles.thText}>{col.label}</Text>
                     </View>
                   ))}
                 </View>
 
                 {filteredRecords.map((r, idx) => {
-                  const statusInfo = getStatusInfo(r);
-                  const pics = getPictures(r);
-                  const canEdit = normalizeVerificationStatus(r) === 'disapproved';
-                  const hasStatusDetails = !!getLatestStatusObj(r);
+                  const ui = deriveRowUi(r);
+
+                  const gpsText =
+                    Array.isArray(r.gpsBoundingBox) && r.gpsBoundingBox.length
+                      ? r.gpsBoundingBox.join(' | ')
+                      : '';
+
+                  const speciesCountsText = (() => {
+                    const ids = Array.isArray(r.species_ids) ? r.species_ids : [];
+                    const counts = r?.species_counts || {};
+                    const apiNames = r?.species_names_map || {};
+                    if (!ids.length) return '—';
+
+                    return ids
+                      .map(sid => {
+                        const master = speciesRows.find(x => Number(x.id) === Number(sid));
+                        const name = master?.name || apiNames[String(sid)] || `Species ${sid}`;
+                        const c = counts[String(sid)] ?? '0';
+                        return `${name}: ${c}`;
+                      })
+                      .join('\n');
+                  })();
+
+                  const rowStyle = [
+                    styles.tableRow,
+                    idx % 2 === 0 ? styles.rowEven : styles.rowOdd,
+                    ui.rowAccent === 'rejected' ? styles.rowRejected : null,
+                  ];
 
                   return (
-                    <View
-                      key={String(r?.id ?? idx)}
-                      style={[styles.tableRow, idx % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
-                      <View style={[styles.tdCell, {width: 80}]}>
+                    <View key={String(r.serverId || r.id || idx)} style={rowStyle}>
+                      <View style={[styles.tdCell, { width: 80 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r?.id ?? '—')}
+                          {String(r.serverId || r.id || '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 110}]}>
+                      <View style={[styles.tdCell, { width: 110 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
-                          {String(getRdsFrom(r) ?? '—')}
+                          {String(r.rds_from ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 110}]}>
+                      <View style={[styles.tdCell, { width: 110 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
-                          {String(getRdsTo(r) ?? '—')}
+                          {String(r.rds_to ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 120}]}>
-                        <View style={styles.countBadge}>
-                          <Text style={styles.countText}>{String(getTotalCountForRow(r) ?? '—')}</Text>
+                      <View style={[styles.tdCell, { width: 120 }]}>
+                        <Text style={styles.tdText} numberOfLines={1}>
+                          {String(r.count ?? '—')}
+                        </Text>
+                      </View>
+
+                      <View style={[styles.tdCell, { width: 260 }]}>
+                        <Text style={styles.multiLineCell} numberOfLines={5}>
+                          {speciesCountsText}
+                        </Text>
+                      </View>
+
+                      <View style={[styles.tdCell, { width: 200 }]}>
+                        <Text style={styles.gpsText} numberOfLines={1}>
+                          {r.autoGpsLatLong || '—'}
+                        </Text>
+                      </View>
+
+                      <View style={[styles.tdCell, { width: 250 }]}>
+                        <Text style={styles.tdText} numberOfLines={2}>
+                          {gpsText || '—'}
+                        </Text>
+                      </View>
+
+                      {/* Status */}
+                      <View style={[styles.tdCell, { width: 220 }]}>
+                        <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+                          <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+                          <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
+                            {ui.statusText}
+                          </Text>
                         </View>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 150}]}>
-                        <TouchableOpacity
-                          activeOpacity={0.8}
-                          onPress={() => Alert.alert('Status Details', buildStatusDetailsText(r))}
-                          style={[styles.statusBadge, {borderColor: statusInfo.color}]}>
-                          <Ionicons name={statusInfo.icon} size={14} color={statusInfo.color} />
-                          <Text style={[styles.statusText, {color: statusInfo.color}]} numberOfLines={1}>
-                            {statusInfo.label}
-                          </Text>
-                          <Ionicons
-                            name={hasStatusDetails ? 'information-circle-outline' : 'help-circle-outline'}
-                            size={16}
-                            color={COLORS.textLight}
-                          />
-                        </TouchableOpacity>
-                      </View>
-
-                      <View style={[styles.tdCell, {width: 320}]}>
-                        <Text style={styles.tdText} numberOfLines={2}>
-                          {getSpeciesLabel(r)}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, {width: 170}]}>
-                        {pics.length ? (
-                          <TouchableOpacity
-                            style={styles.picButton}
-                            onPress={() => openPicturesViewer(pics, `Record #${r?.id} Pictures`)}>
-                            <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
-                            <Text style={styles.picButtonText}>View ({pics.length})</Text>
-                          </TouchableOpacity>
+                      {/* Superdari */}
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 150 }]}>
+                        {r?.hasSuperdari ? (
+                          <Text style={styles.tdText}>—</Text>
                         ) : (
-                          <Text style={styles.mutedText}>—</Text>
+                          <TouchableOpacity
+                            style={[
+                              styles.actionButton,
+                              { backgroundColor: 'rgba(14, 165, 233, 0.10)' },
+                            ]}
+                            onPress={() => {
+                              console.log('📱 Clicked Superdari for record:', r);
+                              openSuperdariForRecord(r);
+                            }}
+                            activeOpacity={0.7}>
+                            <Ionicons name="person-circle-outline" size={16} color={COLORS.secondary} />
+                            <Text style={[styles.actionButtonText, { color: COLORS.secondary }]}>
+                              Add Superdari
+                            </Text>
+                          </TouchableOpacity>
                         )}
                       </View>
 
-                      <View style={[styles.tdCell, {width: 200}]}>
-                        <Text style={styles.gpsText} numberOfLines={1}>
-                          {getGpsLabel(r)}
-                        </Text>
+                      {/* Disposal */}
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 150 }]}>
+                        {r?.isDisposed ? (
+                          <Text style={styles.tdText}>—</Text>
+                        ) : (
+                          <TouchableOpacity
+                            style={[
+                              styles.actionButton,
+                              { backgroundColor: 'rgba(249, 115, 22, 0.10)' },
+                            ]}
+                            onPress={() => {
+                              console.log('📱 Clicked Disposal for record:', r);
+                              openDisposalForRecord(r);
+                            }}
+                            activeOpacity={0.7}>
+                            <Ionicons name="trash-outline" size={16} color={COLORS.warning} />
+                            <Text style={[styles.actionButtonText, { color: COLORS.warning }]}>
+                              Dispose
+                            </Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
 
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 420}]}>
+                      {/* Audit */}
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 140 }]}>
+                        <TouchableOpacity
+                          style={[
+                            styles.actionButton,
+                            { backgroundColor: 'rgba(124, 58, 237, 0.10)' },
+                          ]}
+                          onPress={() => {
+                            console.log('📱 Clicked Audit for record:', r);
+                            openAuditForRecord(r);
+                          }}
+                          activeOpacity={0.7}>
+                          <Ionicons name="clipboard-outline" size={16} color={COLORS.info} />
+                          <Text style={[styles.actionButtonText, { color: COLORS.info }]}>Audit</Text>
+                        </TouchableOpacity>
+                      </View>
 
-                      <TouchableOpacity
-                        style={[styles.actionButton, {backgroundColor: 'rgba(5,150,105,0.10)'}]}
-                        onPress={() => navigation.navigate('PoleCropAuditScreen', {poleCrop: r})}
-                        activeOpacity={0.7}>
-                        <Ionicons name="clipboard-outline" size={16} color={COLORS.primary} />
-                        <Text style={[styles.actionButtonText, {color: COLORS.primary}]}>Audit</Text>
-                      </TouchableOpacity>
-
-
-                        {canEdit ? (
+                      {/* Actions (Edit only when rejected) */}
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 110 }]}>
+                        {ui.showEdit ? (
                           <TouchableOpacity
                             style={styles.actionButton}
-                            onPress={() => openEditFormServer(r)}
+                            onPress={() => {
+                              console.log('📱 Clicked Edit for record:', r);
+                              openEditForm(r);
+                            }}
                             activeOpacity={0.7}>
                             <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
                             <Text style={styles.actionButtonText}>Edit</Text>
                           </TouchableOpacity>
                         ) : (
-                          <Text style={styles.mutedText}>—</Text>
-                        )}
-
-                        {normalizeVerificationStatus(r) === 'disapproved' && (
-                          <TouchableOpacity
-                            style={styles.reasonButton}
-                            onPress={() => Alert.alert('Rejection Reason', buildStatusDetailsText(r))}
-                            activeOpacity={0.7}>
-                            <Ionicons
-                              name="chatbox-ellipses-outline"
-                              size={16}
-                              color={COLORS.danger}
-                            />
-                            <Text style={styles.reasonButtonText}>Reason</Text>
-                          </TouchableOpacity>
+                          <Text style={styles.tdText}>—</Text>
                         )}
                       </View>
                     </View>
@@ -1455,11 +1622,241 @@ export default function PoleCropRecordsScreen({navigation, route}) {
         </View>
       </ScrollView>
 
+      {/* FAB */}
       <TouchableOpacity style={styles.fab} onPress={openAddForm} activeOpacity={0.8}>
         <View style={styles.fabContent}>
           <Ionicons name="add" size={28} color="#fff" />
         </View>
       </TouchableOpacity>
+
+      {/* Image Picker Modal */}
+      <Modal
+        transparent
+        visible={imagePickerModal}
+        animationType="fade"
+        onRequestClose={() => setImagePickerModal(false)}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={() => setImagePickerModal(false)}>
+            <View style={styles.modalBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.modalContainer}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.35 }]}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="image-outline" size={24} color={COLORS.primary} />
+                  <Text style={styles.modalTitle}>Add Image</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.modalClose}
+                  onPress={() => setImagePickerModal(false)}
+                  activeOpacity={0.7}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ padding: 20, gap: 12 }}>
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: COLORS.primary,
+                    paddingVertical: 14,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                    flexDirection: 'row',
+                    justifyContent: 'center',
+                    gap: 10,
+                  }}
+                  onPress={takePhotoFromCamera}
+                  activeOpacity={0.8}>
+                  <Ionicons name="camera-outline" size={20} color="#fff" />
+                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>Take Photo</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: 'rgba(5,150,105,0.10)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(5,150,105,0.25)',
+                    paddingVertical: 14,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                    flexDirection: 'row',
+                    justifyContent: 'center',
+                    gap: 10,
+                  }}
+                  onPress={pickFromGallery}
+                  activeOpacity={0.8}>
+                  <Ionicons name="images-outline" size={20} color={COLORS.primary} />
+                  <Text style={{ color: COLORS.primary, fontWeight: '800', fontSize: 15 }}>
+                    Choose from Gallery
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{ paddingVertical: 12, borderRadius: 14, alignItems: 'center' }}
+                  onPress={() => setImagePickerModal(false)}
+                  activeOpacity={0.8}>
+                  <Text style={{ color: COLORS.textLight, fontWeight: '800' }}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Other Species Modal */}
+      <Modal
+        transparent
+        visible={otherSpeciesModal}
+        animationType="fade"
+        onRequestClose={() => setOtherSpeciesModal(false)}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={() => setOtherSpeciesModal(false)}>
+            <View style={styles.modalBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.modalContainer}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.45 }]}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="leaf" size={24} color={COLORS.primary} />
+                  <Text style={styles.modalTitle}>Add New Species</Text>
+                </View>
+                <TouchableOpacity style={styles.modalClose} onPress={() => setOtherSpeciesModal(false)}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ padding: 20 }}>
+                <FormRow
+                  label="Species Name"
+                  value={otherSpeciesName}
+                  onChangeText={setOtherSpeciesName}
+                  placeholder="e.g., Poplar"
+                  required
+                />
+
+                <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                  <TouchableOpacity
+                    style={[styles.modalButtonSecondary, { flex: 1 }]}
+                    onPress={() => setOtherSpeciesModal(false)}
+                    activeOpacity={0.7}>
+                    <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.modalButtonPrimary,
+                      { flex: 2, opacity: addingOtherSpecies ? 0.7 : 1 },
+                    ]}
+                    onPress={addOtherSpecies}
+                    disabled={addingOtherSpecies}
+                    activeOpacity={0.7}>
+                    {addingOtherSpecies ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.modalButtonPrimaryText}>Add Species</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Species Selection Modal */}
+      <Modal
+        visible={speciesModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSpeciesModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={() => setSpeciesModalVisible(false)}>
+            <View style={styles.modalBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalTitleRow}>
+                  <Ionicons name="leaf" size={24} color={COLORS.primary} />
+                  <Text style={styles.modalTitle}>Select Species</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.modalClose}
+                  onPress={() => setSpeciesModalVisible(false)}
+                  activeOpacity={0.7}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              {speciesLoading ? (
+                <View style={styles.loadingState}>
+                  <ActivityIndicator size="large" color={COLORS.primary} />
+                  <Text style={styles.loadingText}>Loading species...</Text>
+                </View>
+              ) : (
+                <>
+                  <ScrollView style={styles.speciesList} showsVerticalScrollIndicator={false}>
+                    {speciesRowsWithOther.map(row => {
+                      const isOther = row.id === '__other__';
+                      const checked =
+                        !isOther && (speciesIds || []).map(Number).includes(Number(row.id));
+                      return (
+                        <TouchableOpacity
+                          key={String(row.id ?? row.name)}
+                          style={styles.speciesItem}
+                          onPress={() => toggleSpeciesId(row.id)}
+                          activeOpacity={0.7}>
+                          <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                            {checked && <Ionicons name="checkmark" size={16} color="#fff" />}
+                            {isOther && <Ionicons name="add" size={16} color={COLORS.primary} />}
+                          </View>
+                          <View style={styles.speciesInfo}>
+                            <Text style={styles.speciesName}>{row.name}</Text>
+                            {!isOther && row.id && <Text style={styles.speciesId}>ID: {row.id}</Text>}
+                          </View>
+                          {checked && (
+                            <View style={styles.selectedIndicator}>
+                              <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+
+                  <View style={styles.speciesFooter}>
+                    <View style={styles.speciesCountBadge}>
+                      <Text style={styles.speciesCountText}>{speciesIds.length} species selected</Text>
+                    </View>
+
+                    <View style={styles.speciesActions}>
+                      <TouchableOpacity
+                        style={styles.speciesActionButton}
+                        onPress={() => {
+                          setSpeciesIds([]);
+                          setSpeciesCounts({});
+                        }}
+                        activeOpacity={0.7}>
+                        <Text style={styles.speciesActionButtonText}>Clear All</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.speciesActionButton, styles.speciesActionButtonPrimary]}
+                        onPress={() => setSpeciesModalVisible(false)}
+                        activeOpacity={0.7}>
+                        <Text style={styles.speciesActionButtonPrimaryText}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Add/Edit Modal */}
       <Modal
@@ -1477,8 +1874,14 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                   <Text style={styles.editModalTitle}>
                     {isEdit ? 'Edit Pole Crop Record' : 'Add Pole Crop Record'}
                   </Text>
-                  {isEdit && editingServerId && (
-                    <Text style={styles.editModalSubtitle}>Record ID: {editingServerId}</Text>
+                  {isEdit && editingId && (
+                    <Text style={styles.editModalSubtitle}>Record ID: {editingId}</Text>
+                  )}
+                  {isEdit && Array.isArray(existingPictures) && existingPictures.length > 0 && (
+                    <Text style={[styles.editModalSubtitle, { marginTop: 4 }]}>
+                      Existing Images: {existingPictures.length}
+                      {pictureUris?.length ? ` • New Selected: ${pictureUris.length}` : ''}
+                    </Text>
                   )}
                 </View>
                 <TouchableOpacity
@@ -1494,120 +1897,74 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled">
                 <View style={styles.formSection}>
-                  <Text style={styles.formSectionTitle}>RDS / KM Information</Text>
-                  <View style={styles.formRow}>
-                    <View style={styles.formColumn}>
-                      <FormRow
-                        label="RDS From"
-                        value={rdFrom}
-                        onChangeText={setRdFrom}
-                        placeholder="e.g. 12.5"
-                        keyboardType="numeric"
-                        required
-                      />
-                    </View>
-                    <View style={styles.formColumn}>
-                      <FormRow
-                        label="RDS To"
-                        value={rdTo}
-                        onChangeText={setRdTo}
-                        placeholder="e.g. 15.0"
-                        keyboardType="numeric"
-                        required
-                      />
-                    </View>
-                  </View>
-                </View>
+                  <Text style={styles.formSectionTitle}>Basic Information</Text>
 
-                <View style={styles.formSection}>
-                  <Text style={styles.formSectionTitle}>Species Selection</Text>
-
-                  <MultiSelectRow
-                    label={speciesLoading ? 'Species (Loading...)' : 'Select Species (Multiple)'}
-                    values={selectedSpeciesNames}
-                    onChange={vals => setSelectedSpeciesNames(Array.isArray(vals) ? vals : [])}
-                    options={speciesOptions}
-                    disabled={speciesLoading}
+                  <FormRow
+                    label="RDS From"
+                    value={rdsFrom}
+                    onChangeText={setRdsFrom}
+                    keyboardType="numeric"
+                    required
+                    placeholder="e.g. 12.5"
                   />
 
-                  {/* ✅ OTHER SPECIES INPUT + POST to DB */}
-                  {showOtherInput && (
-                    <View style={styles.otherBox}>
-                      <Text style={styles.otherTitle}>Add New Species</Text>
-                      <TextInput
-                        value={otherSpeciesName}
-                        onChangeText={setOtherSpeciesName}
-                        placeholder="Type species name (e.g. Guava)"
-                        placeholderTextColor={COLORS.textLight}
-                        style={styles.otherInput}
-                      />
-                      <TouchableOpacity
-                        onPress={onAddOtherSpecies}
-                        disabled={addingSpecies}
-                        style={[styles.otherAddBtn, addingSpecies ? styles.otherAddBtnDisabled : null]}>
-                        {addingSpecies ? (
-                          <ActivityIndicator size="small" color="#fff" />
-                        ) : (
-                          <>
-                            <Ionicons name="add-circle-outline" size={18} color="#fff" />
-                            <Text style={styles.otherAddBtnText}>Add Species</Text>
-                          </>
-                        )}
-                      </TouchableOpacity>
+                  <FormRow
+                    label="RDS To"
+                    value={rdsTo}
+                    onChangeText={setRdsTo}
+                    keyboardType="numeric"
+                    required
+                    placeholder="e.g. 15"
+                  />
 
-                      <TouchableOpacity
-                        style={styles.otherRemoveBtn}
-                        onPress={() => {
-                          setSelectedSpeciesNames(prev =>
-                            (Array.isArray(prev) ? prev : []).filter(x => x !== OTHER_SPECIES_LABEL),
-                          );
-                          setOtherSpeciesName('');
-                        }}>
-                        <Ionicons name="close-circle-outline" size={18} color={COLORS.danger} />
-                        <Text style={styles.otherRemoveBtnText}>Remove “Other”</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-
-                  {selectedSpeciesNames.length > 0 && (
-                    <View style={styles.selectedSpeciesBadge}>
-                      <Text style={styles.selectedSpeciesText}>
-                        {selectedSpeciesNames.filter(n => n !== OTHER_SPECIES_LABEL).length} species selected
+                  <View style={styles.fieldWithButton}>
+                    <Text style={styles.fieldLabel}>Species Selection</Text>
+                    <TouchableOpacity
+                      style={styles.multiSelectButton}
+                      onPress={() => setSpeciesModalVisible(true)}
+                      activeOpacity={0.7}>
+                      <Ionicons name="leaf-outline" size={18} color="#fff" />
+                      <Text style={styles.multiSelectButtonText} numberOfLines={1}>
+                        {speciesLabel}
                       </Text>
-                    </View>
-                  )}
+                      <Ionicons name="chevron-forward" size={18} color="#fff" />
+                    </TouchableOpacity>
+                    {speciesIds.length > 0 && (
+                      <Text style={styles.speciesHint}>{speciesIds.length} species selected</Text>
+                    )}
+                  </View>
 
-                  {selectedSpeciesIds.length > 0 && (
-                    <View style={styles.speciesCountsCard}>
-                      <View style={styles.speciesCountsHeader}>
-                        <Ionicons name="list" size={18} color={COLORS.primary} />
-                        <Text style={styles.speciesCountsTitle}>Species-wise Counts</Text>
-                        <View style={styles.totalChip}>
-                          <Text style={styles.totalChipText}>Total: {totalCount}</Text>
-                        </View>
-                      </View>
+                  {/* Per-species counts */}
+                  {speciesIds.length > 0 && (
+                    <View style={{ marginTop: 6 }}>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          fontWeight: '800',
+                          color: COLORS.textLight,
+                          marginBottom: 10,
+                        }}>
+                        Species Counts
+                      </Text>
 
-                      {selectedSpeciesIds.map(sid => {
-                        const name =
-                          speciesRows.find(s => String(s.id) === String(sid))?.name || `#${sid}`;
+                      {speciesIds.map(sid => {
+                        const row = speciesRows.find(x => Number(x.id) === Number(sid));
+                        const label = row?.name ? `${row.name} Count` : `Species ${sid} Count`;
                         return (
-                          <View key={sid} style={styles.speciesCountRow}>
-                            <View style={styles.speciesCountLeft}>
-                              <Text style={styles.speciesCountName} numberOfLines={1}>
-                                {name}
-                              </Text>
-                              <Text style={styles.speciesCountHint}>Enter plants count</Text>
-                            </View>
-
-                            <TextInput
-                              value={String(speciesCountMap?.[sid] ?? '')}
-                              onChangeText={v => setSpeciesCount(sid, v)}
-                              placeholder="0"
-                              keyboardType="numeric"
-                              placeholderTextColor={COLORS.textLight}
-                              style={styles.speciesCountInput}
-                            />
-                          </View>
+                          <FormRow
+                            key={String(sid)}
+                            label={label}
+                            value={speciesCounts[String(sid)] ?? ''}
+                            onChangeText={v =>
+                              setSpeciesCounts(prev => ({
+                                ...(prev || {}),
+                                [String(sid)]: String(v || '').replace(/[^\d]/g, ''),
+                              }))
+                            }
+                            keyboardType="numeric"
+                            placeholder="e.g. 30"
+                            required
+                          />
                         );
                       })}
                     </View>
@@ -1622,7 +1979,7 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                       <Text style={styles.gpsCardTitle}>Auto GPS Coordinates</Text>
                       <TouchableOpacity
                         style={styles.gpsFetchButton}
-                        onPress={() => fetchGps(false)}
+                        onPress={() => fetchAutoGps(false)}
                         activeOpacity={0.7}>
                         <Ionicons name="locate" size={16} color="#fff" />
                         <Text style={styles.gpsFetchButtonText}>Fetch GPS</Text>
@@ -1640,61 +1997,79 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                     </View>
                   </View>
 
-                  <FormRow
-                    label="Coordinates (Auto-filled, editable)"
-                    value={manualGps}
-                    onChangeText={setManualGps}
-                    placeholder={autoGps || 'e.g. 31.560000, 74.360000'}
-                  />
+                  <Text style={styles.gpsNote}>
+                    Auto GPS fetch will also fill the last manual coordinate automatically.
+                  </Text>
+
+                  {gpsList.map((coord, index) => (
+                    <View key={index} style={styles.coordinateRow}>
+                      <View style={styles.coordinateInputContainer}>
+                        <FormRow
+                          label={`Coordinate ${index + 1}`}
+                          value={coord}
+                          onChangeText={text => {
+                            const copy = [...gpsList];
+                            copy[index] = text;
+                            setGpsList(copy);
+                          }}
+                          placeholder="31.5204, 74.3587"
+                        />
+                      </View>
+                    </View>
+                  ))}
                 </View>
 
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Images</Text>
-                  <View style={styles.imageUploadSection}>
-                    <View style={styles.imageUploadButtons}>
-                      <TouchableOpacity
-                        style={styles.imageUploadButton}
-                        onPress={pickImages}
-                        activeOpacity={0.7}>
-                        <View style={styles.imageUploadButtonContent}>
-                          <Ionicons name="image-outline" size={20} color="#fff" />
-                          <Text style={styles.imageUploadButtonText}>Select Images</Text>
-                        </View>
-                      </TouchableOpacity>
 
-                      <TouchableOpacity
-                        style={styles.imageCameraButton}
-                        onPress={captureImage}
-                        activeOpacity={0.7}>
-                        <View style={styles.imageUploadButtonContent}>
-                          <Ionicons name="camera-outline" size={20} color="#fff" />
-                          <Text style={styles.imageUploadButtonText}>Camera</Text>
-                        </View>
-                      </TouchableOpacity>
-
-                      {pickedAssets.length > 0 && (
-                        <TouchableOpacity
-                          style={styles.imageClearButton}
-                          onPress={clearImages}
-                          activeOpacity={0.7}>
-                          <Ionicons name="trash-outline" size={20} color={COLORS.danger} />
-                          <Text style={styles.imageClearButtonText}>Clear</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    {pickedAssets.length > 0 && (
-                      <View style={styles.imagePreview}>
-                        <View style={styles.imagePreviewHeader}>
-                          <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
-                          <Text style={styles.imagePreviewTitle}>
-                            {pickedAssets.length} image{pickedAssets.length !== 1 ? 's' : ''} selected
-                          </Text>
-                        </View>
-                        <Text style={styles.imagePreviewText}>Upload Path: "{BUCKET_UPLOAD_PATH}"</Text>
+                  <TouchableOpacity
+                    style={styles.imageUploadButton}
+                    onPress={pickImage}
+                    activeOpacity={0.7}>
+                    <View style={styles.imageUploadContent}>
+                      <Ionicons name="cloud-upload-outline" size={24} color={COLORS.primary} />
+                      <View style={styles.imageUploadText}>
+                        <Text style={styles.imageUploadTitle}>Upload Images</Text>
+                        <Text style={styles.imageUploadSubtitle}>Camera or Gallery</Text>
                       </View>
-                    )}
-                  </View>
+                    </View>
+                  </TouchableOpacity>
+
+                  {pictureUris.length > 0 && (
+                    <View style={styles.imagePreview}>
+                      <View style={styles.imagePreviewHeader}>
+                        <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                        <Text style={styles.imagePreviewTitle}>
+                          {pictureUris.length} image{pictureUris.length !== 1 ? 's' : ''} selected
+                        </Text>
+                      </View>
+                      <Text style={styles.imagePreviewText} numberOfLines={1}>
+                        Ready for upload
+                      </Text>
+                    </View>
+                  )}
+
+                  {isEdit && pictureUris.length === 0 && existingPictures.length > 0 && (
+                    <View
+                      style={[
+                        styles.imagePreview,
+                        {
+                          marginTop: 10,
+                          backgroundColor: 'rgba(14,165,233,0.08)',
+                          borderColor: 'rgba(14,165,233,0.20)',
+                        },
+                      ]}>
+                      <View style={styles.imagePreviewHeader}>
+                        <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
+                        <Text style={[styles.imagePreviewTitle, { color: COLORS.secondary }]}>
+                          Keeping existing images ({existingPictures.length})
+                        </Text>
+                      </View>
+                      <Text style={styles.imagePreviewText} numberOfLines={1}>
+                        Select new images only if you want to replace them
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </ScrollView>
 
@@ -1709,118 +2084,37 @@ export default function PoleCropRecordsScreen({navigation, route}) {
                 <TouchableOpacity
                   style={styles.footerButtonPrimary}
                   onPress={upsertRecord}
+                  disabled={uploading}
                   activeOpacity={0.7}>
-                  <View style={styles.footerButtonContent}>
-                    <Ionicons
-                      name={isEdit ? 'save-outline' : 'add-circle-outline'}
-                      size={20}
-                      color="#fff"
-                    />
-                    <Text style={styles.footerButtonPrimaryText}>
-                      {isEdit ? 'Update Record' : 'Save Record'}
-                    </Text>
-                  </View>
+                  {uploading ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <Ionicons
+                        name={isEdit ? 'save-outline' : 'add-circle-outline'}
+                        size={20}
+                        color="#fff"
+                      />
+                      <Text style={styles.footerButtonPrimaryText}>
+                        {isEdit ? 'Update Record' : 'Save Record'}
+                      </Text>
+                    </>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
           </KeyboardAvoidingView>
         </View>
       </Modal>
-
-      {/* Pictures Viewer */}
-      <Modal
-        visible={viewerVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setViewerVisible(false)}>
-        <View style={styles.viewerOverlay}>
-          <TouchableWithoutFeedback onPress={() => setViewerVisible(false)}>
-            <View style={styles.viewerBackdrop} />
-          </TouchableWithoutFeedback>
-
-          <View style={styles.viewerCard}>
-            <View style={styles.viewerHeader}>
-              <Text style={styles.viewerTitle} numberOfLines={1}>
-                {viewerTitle || 'Pictures'}
-              </Text>
-              <TouchableOpacity
-                style={styles.viewerClose}
-                onPress={() => setViewerVisible(false)}
-                activeOpacity={0.7}>
-                <Ionicons name="close" size={22} color={COLORS.text} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              style={styles.viewerScroll}>
-              {viewerImages.map((u, i) => (
-                <View key={String(u) + i} style={styles.viewerSlide}>
-                  <Image source={{uri: u}} style={styles.viewerImage} resizeMode="contain" />
-                  <TouchableOpacity
-                    style={styles.viewerLinkBtn}
-                    onPress={() =>
-                      Linking.openURL(u).catch(() => Alert.alert('Error', 'Cannot open link'))
-                    }>
-                    <Ionicons name="open-outline" size={16} color="#fff" />
-                    <Text style={styles.viewerLinkText}>Open URL</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </ScrollView>
-
-            <View style={styles.viewerFooter}>
-              <Text style={styles.viewerFooterText}>
-                {viewerImages.length} image{viewerImages.length !== 1 ? 's' : ''} found
-              </Text>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Location Permission Modal */}
-      <Modal visible={locPermVisible} transparent animationType="fade">
-        <View style={styles.permOverlay}>
-          <View style={styles.permCard}>
-            <Text style={styles.permTitle}>Location Permission</Text>
-            <Text style={styles.permText}>{locPermMsg}</Text>
-
-            <View style={styles.permActions}>
-              <TouchableOpacity
-                style={styles.permBtnSecondary}
-                onPress={() => setLocPermVisible(false)}>
-                <Text style={styles.permBtnSecondaryText}>Close</Text>
-              </TouchableOpacity>
-
-              {locPermBlocked ? (
-                <TouchableOpacity style={styles.permBtnPrimary} onPress={openSettingsSafe}>
-                  <Text style={styles.permBtnPrimaryText}>Open Settings</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={styles.permBtnPrimary}
-                  onPress={() => {
-                    setLocPermVisible(false);
-                    fetchGps(false);
-                  }}>
-                  <Text style={styles.permBtnPrimaryText}>Try Again</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
 
-/* ===================== STYLES ===================== */
+// Styles (kept aligned to your Afforestation style to avoid UI regressions)
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
-  contentContainer: {paddingBottom: 100},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
+  contentContainer: { paddingBottom: 100 },
 
   header: {
     backgroundColor: COLORS.primary,
@@ -1830,11 +2124,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  headerContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   backButton: {
     width: 44,
     height: 44,
@@ -1844,21 +2138,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 8},
-  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
-  infoChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-    gap: 4,
-  },
-  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
-  siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)'},
-  refreshButton: {
+  headerContent: { flex: 1 },
+  headerTitle: { fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 6 },
+  siteId: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)' },
+  headerAction: {
     width: 44,
     height: 44,
     borderRadius: 12,
@@ -1867,16 +2150,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  searchSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 16,
-    gap: 12,
-  },
+  searchSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
   searchContainer: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
@@ -1886,66 +2161,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  searchIcon: {marginRight: 12},
-  searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
-  searchClear: {padding: 4},
-  filterButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: COLORS.danger,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-  },
-  filterBadgeText: {color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4},
+  searchIcon: { marginRight: 12 },
+  searchInput: { flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text },
+  searchClear: { padding: 4 },
 
-  errorCard: {
-    backgroundColor: 'rgba(239,68,68,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(239,68,68,0.2)',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 16,
-    padding: 16,
-  },
-  errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
-  errorTitle: {fontSize: 16, fontWeight: '700', color: COLORS.danger},
-  errorMessage: {fontSize: 14, color: COLORS.text, marginBottom: 12},
-  errorButton: {
-    backgroundColor: COLORS.danger,
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  errorButtonText: {color: '#fff', fontSize: 14, fontWeight: '700'},
-
-  section: {marginHorizontal: 20, marginBottom: 20},
+  section: { marginHorizontal: 20, marginBottom: 20 },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
   },
-  sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
-  sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text },
+  sectionSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
+
+  loadingState: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 40,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  loadingText: { fontSize: 14, color: COLORS.textLight, marginTop: 12, fontWeight: '600' },
 
   emptyState: {
     backgroundColor: '#fff',
@@ -1956,18 +2199,27 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     borderStyle: 'dashed',
   },
-  emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
-  emptyText: {fontSize: 14, color: COLORS.textLight, textAlign: 'center', marginBottom: 20},
-  emptyAction: {backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12},
-  emptyActionText: {color: '#fff', fontSize: 14, fontWeight: '700'},
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8 },
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.textLight,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
 
-  tableContainer: {borderRadius: 16, overflow: 'hidden'},
+  tableContainer: { borderRadius: 16, overflow: 'hidden' },
   table: {
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   tableHeader: {
     flexDirection: 'row',
@@ -1976,55 +2228,58 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     minHeight: 56,
   },
-  thCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  thText: {fontSize: 12, fontWeight: '800', color: COLORS.text, textTransform: 'uppercase'},
-  tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
-  rowEven: {backgroundColor: '#fff'},
-  rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
-  tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
-  mutedText: {fontSize: 13, fontWeight: '600', color: COLORS.textLight},
+  thCell: {
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: COLORS.border,
+  },
+  thText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.text,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  tableRow: { flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  rowEven: { backgroundColor: '#fff' },
+  rowOdd: { backgroundColor: 'rgba(5, 150, 105, 0.02)' },
+  rowRejected: { backgroundColor: 'rgba(239, 68, 68, 0.06)' },
+  tdCell: {
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: COLORS.border,
+  },
+  tdText: { fontSize: 13, fontWeight: '600', color: COLORS.text },
+  multiLineCell: { fontSize: 12, fontWeight: '700', color: COLORS.text, lineHeight: 18 },
   gpsText: {
     fontSize: 11,
     fontWeight: '600',
     color: COLORS.text,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  countBadge: {
-    backgroundColor: 'rgba(14, 165, 233, 0.1)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    alignSelf: 'flex-start',
-  },
-  countText: {fontSize: 13, fontWeight: '800', color: COLORS.secondary},
 
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
+    alignSelf: 'flex-start',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(0,0,0,0.03)',
-  },
-  statusText: {fontSize: 12, fontWeight: '800'},
-
-  picButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    borderRadius: 20,
     gap: 6,
-    backgroundColor: 'rgba(14, 165, 233, 0.10)',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
+    maxWidth: 210,
   },
-  picButtonText: {fontSize: 12, fontWeight: '800', color: COLORS.secondary},
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    flexShrink: 1,
+  },
 
-  actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
+  actionsCell: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2034,209 +2289,266 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 4,
   },
-  actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
-  reasonButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(220, 38, 38, 0.08)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(220, 38, 38, 0.15)',
+  actionButtonText: { fontSize: 12, fontWeight: '700', color: COLORS.secondary },
+
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 30,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
-  reasonButtonText: {fontSize: 12, fontWeight: '800', color: COLORS.danger},
+  fabContent: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: COLORS.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  fab: {position: 'absolute', right: 20, bottom: 30, elevation: 8},
-  fabContent: {width: 64, height: 64, borderRadius: 32, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center'},
-
-  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  editModalContainer: {flex: 1, justifyContent: 'flex-end'},
-  editModalContent: {
+  modalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalContainer: { flex: 1, justifyContent: 'center', padding: 20 },
+  modalContent: {
     backgroundColor: '#fff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: height * 0.92,
+    borderRadius: 24,
+    overflow: 'hidden',
+    maxHeight: height * 0.8,
     borderWidth: 1,
     borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
+  modalClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonSecondary: {
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  modalButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  modalButtonPrimary: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  modalButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
+
+  speciesList: { maxHeight: 400 },
+  speciesItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  checkboxChecked: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  speciesInfo: { flex: 1 },
+  speciesName: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginBottom: 2 },
+  speciesId: { fontSize: 12, color: COLORS.textLight, fontWeight: '500' },
+  selectedIndicator: { marginLeft: 8 },
+  speciesFooter: { padding: 20, borderTopWidth: 1, borderTopColor: COLORS.border },
+  speciesCountBadge: {
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  speciesCountText: { fontSize: 14, fontWeight: '700', color: COLORS.primary },
+  speciesActions: { flexDirection: 'row', gap: 12 },
+  speciesActionButton: {
+    flex: 1,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  speciesActionButtonText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  speciesActionButtonPrimary: { backgroundColor: COLORS.primary },
+  speciesActionButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
+
+  editModalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  editModalContainer: { flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20 },
+  editModalContent: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   editModalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    paddingHorizontal: 20,
-    paddingVertical: 18,
+    paddingHorizontal: 24,
+    paddingTop: 28,
+    paddingBottom: 20,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  editModalTitle: {fontSize: 18, fontWeight: '900', color: COLORS.text},
-  editModalSubtitle: {marginTop: 6, fontSize: 12, fontWeight: '700', color: COLORS.textLight},
+  editModalTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  editModalSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
   editModalClose: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     backgroundColor: 'rgba(31, 41, 55, 0.05)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  editModalBody: {padding: 20},
-
-  formSection: {marginBottom: 18},
-  formSectionTitle: {fontSize: 14, fontWeight: '900', color: COLORS.text, marginBottom: 12},
-  formRow: {flexDirection: 'row', gap: 12},
-  formColumn: {flex: 1},
-
-  selectedSpeciesBadge: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(5,150,105,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(5,150,105,0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+  editModalBody: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20 },
+  editModalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
   },
-  selectedSpeciesText: {fontSize: 12, fontWeight: '800', color: COLORS.primary},
 
-  speciesCountsCard: {
-    marginTop: 14,
-    backgroundColor: 'rgba(14, 165, 233, 0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(14, 165, 233, 0.14)',
-    borderRadius: 16,
-    padding: 14,
-  },
-  speciesCountsHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10},
-  speciesCountsTitle: {flex: 1, fontSize: 14, fontWeight: '900', color: COLORS.text},
-  totalChip: {
-    backgroundColor: 'rgba(5,150,105,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(5,150,105,0.18)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-  },
-  totalChipText: {fontSize: 12, fontWeight: '900', color: COLORS.primary},
-
-  speciesCountRow: {
+  formSection: { marginBottom: 24 },
+  formSectionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16 },
+  fieldWithButton: { marginBottom: 16 },
+  fieldLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
+  multiSelectButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(14, 165, 233, 0.12)',
-  },
-  speciesCountLeft: {flex: 1},
-  speciesCountName: {fontSize: 13, fontWeight: '900', color: COLORS.text},
-  speciesCountHint: {marginTop: 3, fontSize: 11, fontWeight: '700', color: COLORS.textLight},
-  speciesCountInput: {
-    width: 90,
-    height: 44,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderRadius: 12,
-    paddingHorizontal: 12,
-    fontSize: 14,
-    fontWeight: '900',
-    color: COLORS.text,
-    backgroundColor: '#fff',
-    textAlign: 'center',
+    gap: 12,
   },
+  multiSelectButtonText: { flex: 1, fontSize: 16, fontWeight: '700', color: '#fff' },
+  speciesHint: { fontSize: 12, color: COLORS.textLight, marginTop: 4, fontStyle: 'italic' },
 
-  otherBox: {
-    marginTop: 12,
-    backgroundColor: 'rgba(124, 58, 237, 0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(124, 58, 237, 0.16)',
+  gpsCard: {
+    backgroundColor: 'rgba(5, 150, 105, 0.03)',
     borderRadius: 16,
-    padding: 12,
-  },
-  otherTitle: {fontSize: 13, fontWeight: '900', color: COLORS.text, marginBottom: 8},
-  otherInput: {
-    height: 46,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 12,
+    borderColor: 'rgba(5, 150, 105, 0.1)',
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  gpsCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(5, 150, 105, 0.1)',
+  },
+  gpsCardTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  gpsFetchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
     paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  gpsFetchButtonText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+  gpsCardBody: { padding: 16 },
+  gpsValue: {
     fontSize: 14,
     fontWeight: '700',
     color: COLORS.text,
-    backgroundColor: '#fff',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginBottom: 8,
   },
-  otherAddBtn: {
-    marginTop: 10,
-    backgroundColor: COLORS.info,
+  gpsLoading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  gpsLoadingText: { fontSize: 12, color: COLORS.textLight, fontWeight: '600' },
+  gpsNote: { fontSize: 12, color: COLORS.textLight, marginBottom: 16, fontStyle: 'italic' },
+  coordinateRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  coordinateInputContainer: { flex: 1 },
+
+  imageUploadButton: {
+    backgroundColor: 'rgba(5, 150, 105, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.2)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+  },
+  imageUploadContent: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  imageUploadText: { flex: 1 },
+  imageUploadTitle: { fontSize: 16, fontWeight: '700', color: COLORS.primary, marginBottom: 4 },
+  imageUploadSubtitle: { fontSize: 12, color: COLORS.textLight },
+  imagePreview: {
+    backgroundColor: 'rgba(22, 163, 74, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(22, 163, 74, 0.2)',
     borderRadius: 12,
-    paddingVertical: 12,
+    padding: 12,
+  },
+  imagePreviewHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  imagePreviewTitle: { fontSize: 14, fontWeight: '700', color: COLORS.success },
+  imagePreviewText: {
+    fontSize: 12,
+    color: COLORS.textLight,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+
+  footerButtonSecondary: {
+    flex: 1,
+    backgroundColor: 'rgba(31, 41, 55, 0.05)',
+    paddingVertical: 16,
+    borderRadius: 14,
     alignItems: 'center',
-    justifyContent: 'center',
+  },
+  footerButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  footerButtonPrimary: {
+    flex: 2,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
     flexDirection: 'row',
+    justifyContent: 'center',
     gap: 8,
   },
-  otherAddBtnDisabled: {opacity: 0.6},
-  otherAddBtnText: {color: '#fff', fontSize: 13, fontWeight: '900'},
-  otherRemoveBtn: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  otherRemoveBtnText: {fontSize: 12, fontWeight: '800', color: COLORS.danger},
-
-  gpsCard: {backgroundColor: '#fff', borderWidth: 1, borderColor: COLORS.border, borderRadius: 16, overflow: 'hidden', marginBottom: 12},
-  gpsCardHeader: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12, backgroundColor: 'rgba(5,150,105,0.06)', borderBottomWidth: 1, borderBottomColor: COLORS.border},
-  gpsCardTitle: {fontSize: 13, fontWeight: '900', color: COLORS.text},
-  gpsFetchButton: {flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12},
-  gpsFetchButtonText: {color: '#fff', fontSize: 12, fontWeight: '900'},
-  gpsCardBody: {paddingHorizontal: 14, paddingVertical: 14},
-  gpsValue: {fontSize: 12, fontWeight: '800', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
-  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10},
-  gpsLoadingText: {fontSize: 12, fontWeight: '800', color: COLORS.textLight},
-
-  imageUploadSection: {marginTop: 6},
-  imageUploadButtons: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center'},
-  imageUploadButton: {backgroundColor: COLORS.secondary, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12},
-  imageCameraButton: {backgroundColor: COLORS.info, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12},
-  imageClearButton: {backgroundColor: 'rgba(220,38,38,0.06)', borderWidth: 1, borderColor: 'rgba(220,38,38,0.20)', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8},
-  imageUploadButtonContent: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  imageUploadButtonText: {color: '#fff', fontSize: 12, fontWeight: '900'},
-  imageClearButtonText: {color: COLORS.danger, fontSize: 12, fontWeight: '900'},
-  imagePreview: {marginTop: 12, backgroundColor: 'rgba(22,163,74,0.06)', borderWidth: 1, borderColor: 'rgba(22,163,74,0.16)', borderRadius: 14, padding: 12},
-  imagePreviewHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6},
-  imagePreviewTitle: {fontSize: 12, fontWeight: '900', color: COLORS.text},
-  imagePreviewText: {fontSize: 12, fontWeight: '700', color: COLORS.textLight},
-
-  editModalFooter: {flexDirection: 'row', gap: 12, paddingHorizontal: 20, paddingVertical: 16, borderTopWidth: 1, borderTopColor: COLORS.border, backgroundColor: '#fff'},
-  footerButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.06)', borderRadius: 14, paddingVertical: 14, alignItems: 'center'},
-  footerButtonSecondaryText: {fontSize: 14, fontWeight: '900', color: COLORS.text},
-  footerButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center', justifyContent: 'center'},
-  footerButtonContent: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  footerButtonPrimaryText: {fontSize: 14, fontWeight: '900', color: '#fff'},
-
-  viewerOverlay: {flex: 1, backgroundColor: COLORS.overlay, justifyContent: 'center', alignItems: 'center', padding: 14},
-  viewerBackdrop: {...StyleSheet.absoluteFillObject},
-  viewerCard: {width: '100%', height: height * 0.75, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: COLORS.border, overflow: 'hidden'},
-  viewerHeader: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: COLORS.border, backgroundColor: 'rgba(31,41,55,0.03)'},
-  viewerTitle: {flex: 1, fontSize: 14, fontWeight: '900', color: COLORS.text},
-  viewerClose: {width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(31, 41, 55, 0.06)', alignItems: 'center', justifyContent: 'center', marginLeft: 10},
-  viewerScroll: {flex: 1},
-  viewerSlide: {width: width - 28, alignItems: 'center', justifyContent: 'center', padding: 14},
-  viewerImage: {width: '100%', height: '100%'},
-  viewerLinkBtn: {position: 'absolute', bottom: 16, right: 16, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primary, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12},
-  viewerLinkText: {color: '#fff', fontSize: 12, fontWeight: '900'},
-  viewerFooter: {paddingVertical: 10, paddingHorizontal: 14, borderTopWidth: 1, borderTopColor: COLORS.border, backgroundColor: 'rgba(31,41,55,0.02)'},
-  viewerFooterText: {fontSize: 12, fontWeight: '800', color: COLORS.textLight},
-
-  permOverlay: {flex: 1, backgroundColor: COLORS.overlay, alignItems: 'center', justifyContent: 'center', padding: 20},
-  permCard: {width: '100%', backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: COLORS.border, padding: 16},
-  permTitle: {fontSize: 16, fontWeight: '900', color: COLORS.text, marginBottom: 8},
-  permText: {fontSize: 13, fontWeight: '700', color: COLORS.textLight, marginBottom: 14},
-  permActions: {flexDirection: 'row', gap: 10, justifyContent: 'flex-end'},
-  permBtnSecondary: {paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, backgroundColor: 'rgba(31,41,55,0.06)'},
-  permBtnSecondaryText: {fontSize: 13, fontWeight: '900', color: COLORS.text},
-  permBtnPrimary: {paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, backgroundColor: COLORS.primary},
-  permBtnPrimaryText: {fontSize: 13, fontWeight: '900', color: '#fff'},
+  footerButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 });

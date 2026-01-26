@@ -1,5 +1,5 @@
 // AfforestationRecordsScreen.js
-import React, {useCallback, useMemo, useRef, useState, useEffect} from 'react';
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -22,13 +22,16 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
-import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
-import {useFocusEffect} from '@react-navigation/native';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
+
+import { apiService } from '../services/ApiService';
+import { offlineService } from '../services/OfflineService';
 
 import FormRow from '../components/FormRow';
-import {DropdownRow} from '../components/SelectRows';
+import { DropdownRow } from '../components/SelectRows';
 
-const {height} = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
@@ -87,7 +90,7 @@ const YEAR_OPTIONS = [
 const SCHEME_OPTIONS = ['Development', 'Non Development'];
 const NON_DEV_OPTIONS = ['1% Plantation', 'Replenishment', 'Gap Filling', 'Other'];
 
-export default function AfforestationRecordsScreen({navigation, route}) {
+export default function AfforestationRecordsScreen({ navigation, route }) {
   const enumeration = route?.params?.enumeration;
 
   // ---------- STATE ----------
@@ -289,7 +292,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   };
 
   const closeRejectionPopup = () => {
-    setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
+    setRejectionModal({ visible: false, rejectedBy: '', remarks: '' });
   };
 
   // Only show Edit if status is rejected
@@ -363,16 +366,16 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
   const parseLatLng = str => {
     const s = String(str || '').trim();
-    if (!s) return {lat: null, lng: null};
+    if (!s) return { lat: null, lng: null };
     const parts = s
       .split(/,|\s+/)
       .map(p => p.trim())
       .filter(Boolean);
-    if (parts.length < 2) return {lat: null, lng: null};
+    if (parts.length < 2) return { lat: null, lng: null };
     const lat = Number(parts[0]);
     const lng = Number(parts[1]);
-    if (Number.isNaN(lat) || Number.isNaN(lng)) return {lat: null, lng: null};
-    return {lat, lng};
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return { lat: null, lng: null };
+    return { lat, lng };
   };
 
   const toNumber = v => {
@@ -472,16 +475,13 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     try {
       setSpeciesLoading(true);
 
-      const token = await getAuthToken();
-      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
-
-      const res = await fetch(SPECIES_URL, {headers});
-      const json = await res.json().catch(() => null);
+      // Use ApiService.get for offline caching
+      const json = await apiService.get(SPECIES_URL);
       const rows = normalizeList(json);
 
       const normalized = rows
         .map(x => {
-          if (typeof x === 'string') return {id: null, name: x};
+          if (typeof x === 'string') return { id: null, name: x };
           return {
             id: x?.id ?? x?.species_id ?? null,
             name: x?.name ?? x?.species_name ?? '',
@@ -532,7 +532,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       else next.add(num);
 
       setSpeciesCounts(prevCounts => {
-        const copy = {...(prevCounts || {})};
+        const copy = { ...(prevCounts || {}) };
 
         if (next.has(num) && (copy[String(num)] === undefined || copy[String(num)] === null)) {
           copy[String(num)] = '';
@@ -554,7 +554,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     const withTime = arr
       .map(x => {
         const t = Date.parse(x?.created_at || x?.createdAt || '');
-        return {x, t: Number.isFinite(t) ? t : -1};
+        return { x, t: Number.isFinite(t) ? t : -1 };
       })
       .sort((a, b) => b.t - a.t);
 
@@ -573,8 +573,8 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
     const has = Boolean(
       list.length > 0 ||
-        (typeof sid === 'number' && sid > 0) ||
-        String(superdarName || '').trim(),
+      (typeof sid === 'number' && sid > 0) ||
+      String(superdarName || '').trim(),
     );
 
     return {
@@ -711,7 +711,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
   // REALTIME ONLY: always fetch server
   const fetchAfforestationList = useCallback(
-    async ({refresh = false} = {}) => {
+    async ({ refresh = false } = {}) => {
       if (!nameOfSiteId) {
         setRecords([]);
         return;
@@ -721,29 +721,106 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         refresh ? setServerRefreshing(true) : setListLoading(true);
 
         const token = await getAuthToken();
-        if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
+        // API List Fetch
+        let serverRows = [];
+        try {
+          const res = await fetch(AFFORESTATION_LIST_URL, {
+            method: 'POST',
+            headers: token ? {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`
+            } : { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name_of_site_id: Number(nameOfSiteId) }),
+          });
 
-        const res = await fetch(AFFORESTATION_LIST_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({name_of_site_id: Number(nameOfSiteId)}),
-        });
-
-        const json = await res.json().catch(() => null);
-        if (!res.ok) {
-          const msg = json?.message || json?.error || `API Error (${res.status})`;
-          throw new Error(msg);
+          const json = await res.json().catch(() => null);
+          if (res.ok) {
+            const rows = normalizeList(json);
+            serverRows = rows.map(normalizeApiRecord);
+          }
+        } catch (e) {
+          console.warn('Online fetch failed, using offline pending only if any', e);
         }
 
-        const rows = normalizeList(json);
-        const normalized = rows.map(normalizeApiRecord);
-        setRecords(normalized);
+        // ------------------------------------------------------------------
+        // Merge Pending Offline Items (POST to AFFORESTATION_SUBMIT_URL)
+        // ------------------------------------------------------------------
+        const pendingItems = offlineService.getPendingItems(item => {
+          if (item.method !== 'POST') return false;
+          // Filter by URL (must be submission url)
+          if (!item.url.includes('/enum/afforestation')) return false;
+          // Filter by site id
+          const b = item.body || {};
+          if (nameOfSiteId != null && String(b.nameOfSiteId) !== String(nameOfSiteId)) return false;
+          return true;
+        });
+
+        const mappedPending = pendingItems.map(item => {
+          const b = item.body || {};
+
+          // Map body keys to what normalizeApiRecord/UI expects
+          // Body: nameOfSiteId, av_miles_km, year, scheme_type, project_name, replenishment_details, auto_lat, manual_lat, species (array)
+
+          // Construct a "raw" like object pass to normalizeApiRecord or manual map
+          // We can just construct the UI object directly or map to raw then normalize.
+          // Let's map strict to UI object to avoid double conversion issues.
+
+          // Reconstruct species counts map from body.species array
+          const species_ids = [];
+          const species_counts = {};
+          if (Array.isArray(b.species)) {
+            b.species.forEach(s => {
+              const sid = Number(s.species_id);
+              if (sid) {
+                species_ids.push(sid);
+                species_counts[String(sid)] = String(s.count);
+              }
+            });
+          }
+
+          return {
+            id: `offline_${item.id}`,
+            serverId: null,
+            isOffline: true,
+
+            avgMilesKm: String(b.av_miles_km || ''),
+            year: String(b.year || ''),
+            schemeType: String(b.scheme_type || ''),
+            projectName: b.scheme_type === 'Development' ? String(b.project_name || '') : '',
+            nonDevScheme: b.scheme_type !== 'Development' ? String(b.project_name || '') : '',
+            replenishment_details: String(b.replenishment_details || ''),
+            main_species: String(b.main_species || ''),
+
+            autoGpsLatLong: (b.auto_lat && b.auto_long) ? `${b.auto_lat}, ${b.auto_long}` : '',
+            gpsBoundingBox: (b.manual_lat && b.manual_long) ? [`${b.manual_lat}, ${b.manual_long}`] : [],
+
+            species_ids,
+            species_counts,
+            species_names_map: {}, // Cannot easily know names unless we look up in master list, but UI handles id fallback
+
+            verification: [],
+            latestStatus: { action: 'Pending Sync', user_role: 'You', remarks: 'Saved offline' },
+
+            createdAt: new Date(item.createdAt).toISOString(),
+            serverRaw: b,
+            pictures: [],
+            picturePreview: null,
+            pictureUris: [],
+
+            hasSuperdari: false,
+            superdariId: null,
+            superdarName: '',
+            isDisposed: false,
+            disposalId: null,
+            disposedAt: null
+          };
+        });
+
+        setRecords([...mappedPending, ...serverRows]);
+
       } catch (e) {
         setRecords([]);
-        Alert.alert('Load Failed', e?.message || 'Failed to load records from server.');
+        Alert.alert('Load Failed', e?.message || 'Failed to load records.');
       } finally {
         refresh ? setServerRefreshing(false) : setListLoading(false);
       }
@@ -751,9 +828,17 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     [nameOfSiteId],
   );
 
+  // Subscribe to offline sync to refresh list
+  useEffect(() => {
+    const unsub = offlineService.subscribe(() => {
+      fetchAfforestationList({ refresh: false });
+    });
+    return unsub;
+  }, [fetchAfforestationList]);
+
   useFocusEffect(
     useCallback(() => {
-      fetchAfforestationList({refresh: true});
+      fetchAfforestationList({ refresh: true });
     }, [fetchAfforestationList]),
   );
 
@@ -787,7 +872,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const {latitude, longitude} = pos.coords;
+        const { latitude, longitude } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
 
@@ -799,7 +884,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         setGpsLoading(false);
         if (!silent) Alert.alert('Location Error', err.message);
       },
-      {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
     );
   };
 
@@ -844,7 +929,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
     // ✅ ensure counts exist for all selected species
     const incomingCounts = record?.species_counts || {};
-    const normalizedCounts = {...incomingCounts};
+    const normalizedCounts = { ...incomingCounts };
     idsNum.forEach(x => {
       const k = String(x);
       if (normalizedCounts[k] === undefined || normalizedCounts[k] === null) normalizedCounts[k] = '';
@@ -941,11 +1026,11 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       'Permission Required',
       'Please allow camera permission from Settings to take photos.',
       [
-        {text: 'Cancel', style: 'cancel'},
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Open Settings',
           onPress: () => {
-            Linking.openSettings().catch(() => {});
+            Linking.openSettings().catch(() => { });
           },
         },
       ],
@@ -1067,7 +1152,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   // ---------- AWS UPLOAD ----------
   const uploadImagesToS3 = async (
     localUris,
-    {uploadPath = AWS_UPLOAD_PATH, fileName = 'chan'} = {},
+    { uploadPath = AWS_UPLOAD_PATH, fileName = 'chan' } = {},
   ) => {
     if (!Array.isArray(localUris) || localUris.length === 0) return [];
 
@@ -1119,7 +1204,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
   };
 
   // ---------- SUBMIT / EDIT ----------
-  const submitAfforestationToApi = async (body, {isEditMode = false, editId = null} = {}) => {
+  const submitAfforestationToApi = async (body, { isEditMode = false, editId = null } = {}) => {
     const token = await getAuthToken();
     if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
@@ -1173,30 +1258,34 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     }
 
     const cleanGps = gpsList.map(x => (x || '').trim()).filter(x => x.length > 0);
-    const {lat: autoLat, lng: autoLng} = parseLatLng(autoGps);
+    const { lat: autoLat, lng: autoLng } = parseLatLng(autoGps);
 
     const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : autoGps;
-    const {lat: manualLat, lng: manualLng} = parseLatLng(lastManual || autoGps);
+    const { lat: manualLat, lng: manualLng } = parseLatLng(lastManual || autoGps);
 
     const av = Number(String(avgMilesKm).replace(/[^\d.]+/g, ''));
     const avMilesKmNum = Number.isFinite(av) ? av : 0;
 
-    let uploadedUrls = [];
-    try {
-      if (pictureUris?.length) {
-        setUploading(true);
-        const safeFileName = `aff_${Number(nameOfSiteId)}_${Date.now()}`;
-        uploadedUrls = await uploadImagesToS3(pictureUris, {
-          uploadPath: AWS_UPLOAD_PATH,
-          fileName: safeFileName,
-        });
-      }
-    } catch (e) {
-      setUploading(false);
-      Alert.alert('Upload Failed', e?.message || 'Image upload failed.');
-      return;
-    } finally {
-      setUploading(false);
+    // Prepare attachments
+    const safeFileName = `aff_${Number(nameOfSiteId)}_${Date.now()}`;
+    const attachments = (pictureUris || []).map((uri, idx) => ({
+      uri,
+      type: 'image/jpeg',
+      name: `${safeFileName}_${idx}.jpg`,
+      uploadUrl: AWS_UPLOAD_URL,
+      uploadPath: AWS_UPLOAD_PATH,
+      targetFieldInBody: 'pictures'
+    }));
+
+    // Pictures logic
+    // If Editing and user did NOT select new images, we keep existing.
+    // ApiService appends new uploads to 'pictures'.
+    // If replacing (new pics selected), we initialize 'pictures' in body to [], ApiService appends new.
+    // If not replacing (isEdit && empty new), we put existingPictures.
+
+    let initialPictures = [];
+    if (isEdit && (!pictureUris || pictureUris.length === 0)) {
+      initialPictures = Array.isArray(existingPictures) ? existingPictures : [];
     }
 
     const speciesPayload = speciesIds.map(sid => ({
@@ -1207,12 +1296,6 @@ export default function AfforestationRecordsScreen({navigation, route}) {
     // main_species: keep first selected name if available
     const firstSpecies = speciesRows.find(x => Number(x.id) === Number(speciesIds[0]));
     const mainSpeciesName = firstSpecies?.name ? String(firstSpecies.name) : '';
-
-    // ✅ Do not wipe existing pictures on edit if user didn't select new ones
-    const finalPictures =
-      isEdit && (!pictureUris || pictureUris.length === 0)
-        ? (Array.isArray(existingPictures) ? existingPictures : [])
-        : uploadedUrls;
 
     const apiBody = {
       nameOfSiteId: Number(nameOfSiteId),
@@ -1230,24 +1313,27 @@ export default function AfforestationRecordsScreen({navigation, route}) {
       manual_lat: manualLat,
       manual_long: manualLng,
 
-      pictures: finalPictures,
+      pictures: initialPictures,
       species: speciesPayload,
     };
 
     try {
+      setUploading(true);
+      let res;
       if (isEdit) {
-        if (!editingId) throw new Error('Edit ID missing. Cannot PATCH without record id.');
-        await submitAfforestationToApi(apiBody, {isEditMode: true, editId: editingId});
-        Alert.alert('Success', 'Record updated and resubmitted successfully.');
+        if (!editingId) throw new Error('Edit ID missing.');
+        res = await apiService.patch(AFFORESTATION_EDIT_URL(editingId), apiBody, { attachments });
       } else {
-        await submitAfforestationToApi(apiBody, {isEditMode: false});
-        Alert.alert('Success', 'Saved to server.');
+        res = await apiService.post(AFFORESTATION_SUBMIT_URL, apiBody, { attachments });
       }
 
       setModalVisible(false);
-      fetchAfforestationList({refresh: true});
+      fetchAfforestationList({ refresh: true });
+      Alert.alert(res.offline ? 'Saved Offline' : 'Success', res.message || 'Saved successfully.');
     } catch (e) {
       Alert.alert('Submit Failed', e?.message || 'Server submit failed.');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -1366,24 +1452,24 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
   const tableColumns = useMemo(() => {
     const base = [
-      {label: 'ID', width: 80},
-      {label: 'Year', width: 100},
-      {label: 'Avg KM', width: 100},
-      {label: 'Scheme', width: 130},
-      {label: 'Project', width: 180},
-      {label: 'Species Counts', width: 260},
-      {label: 'Auto GPS', width: 200},
-      {label: 'GPS List', width: 250},
-      {label: 'Status', width: 220},
+      { label: 'ID', width: 80 },
+      { label: 'Year', width: 100 },
+      { label: 'Avg KM', width: 100 },
+      { label: 'Scheme', width: 130 },
+      { label: 'Project', width: 180 },
+      { label: 'Species Counts', width: 260 },
+      { label: 'Auto GPS', width: 200 },
+      { label: 'GPS List', width: 250 },
+      { label: 'Status', width: 220 },
 
       // ✅ NEW
-      {label: 'Superdari', width: 150},
-      {label: 'Disposal', width: 150},
+      { label: 'Superdari', width: 150 },
+      { label: 'Disposal', width: 150 },
 
       // ✅ Audit column always
-      {label: 'Audit', width: 120},
+      { label: 'Audit', width: 120 },
     ];
-    if (showActionsColumn) base.push({label: 'Actions', width: 110});
+    if (showActionsColumn) base.push({ label: 'Actions', width: 110 });
     return base;
   }, [showActionsColumn]);
 
@@ -1443,7 +1529,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
         refreshControl={
           <RefreshControl
             refreshing={serverRefreshing}
-            onRefresh={() => fetchAfforestationList({refresh: true})}
+            onRefresh={() => fetchAfforestationList({ refresh: true })}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
@@ -1526,7 +1612,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                 {/* Table Header */}
                 <View style={styles.tableHeader}>
                   {tableColumns.map((col, idx) => (
-                    <View key={idx} style={[styles.thCell, {width: col.width}]}>
+                    <View key={idx} style={[styles.thCell, { width: col.width }]}>
                       <Text style={styles.thText}>{col.label}</Text>
                     </View>
                   ))}
@@ -1543,8 +1629,8 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     r.schemeType === 'Development'
                       ? r.projectName || '—'
                       : r.schemeType === 'Non Development'
-                      ? r.nonDevScheme || '—'
-                      : '—';
+                        ? r.nonDevScheme || '—'
+                        : '—';
 
                   const allowActions = ui.showEdit;
 
@@ -1576,25 +1662,25 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
                   return (
                     <View key={String(r.id)} style={rowStyle}>
-                      <View style={[styles.tdCell, {width: 80}]}>
+                      <View style={[styles.tdCell, { width: 80 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.serverId || '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 100}]}>
+                      <View style={[styles.tdCell, { width: 100 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {r.year || '—'}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 100}]}>
+                      <View style={[styles.tdCell, { width: 100 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {r.avgMilesKm || '—'}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 130}]}>
+                      <View style={[styles.tdCell, { width: 130 }]}>
                         <View
                           style={[
                             styles.schemeBadge,
@@ -1618,32 +1704,32 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                         </View>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 180}]}>
+                      <View style={[styles.tdCell, { width: 180 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {proj}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 260}]}>
+                      <View style={[styles.tdCell, { width: 260 }]}>
                         <Text style={styles.multiLineCell} numberOfLines={5}>
                           {speciesCountsText}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 200}]}>
+                      <View style={[styles.tdCell, { width: 200 }]}>
                         <Text style={styles.gpsText} numberOfLines={1}>
                           {r.autoGpsLatLong || '—'}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 250}]}>
+                      <View style={[styles.tdCell, { width: 250 }]}>
                         <Text style={styles.tdText} numberOfLines={2}>
                           {gpsText || '—'}
                         </Text>
                       </View>
 
                       {/* Status Cell with clickable rejection */}
-                      <View style={[styles.tdCell, {width: 220}]}>
+                      <View style={[styles.tdCell, { width: 220 }]}>
                         {ui.isRejected ? (
                           <TouchableOpacity
                             activeOpacity={0.85}
@@ -1651,16 +1737,16 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                             <View
                               style={[
                                 styles.statusBadge,
-                                {backgroundColor: `${ui.statusColor}15`},
+                                { backgroundColor: `${ui.statusColor}15` },
                               ]}>
                               <View
                                 style={[
                                   styles.statusDot,
-                                  {backgroundColor: ui.statusColor},
+                                  { backgroundColor: ui.statusColor },
                                 ]}
                               />
                               <Text
-                                style={[styles.statusText, {color: ui.statusColor}]}
+                                style={[styles.statusText, { color: ui.statusColor }]}
                                 numberOfLines={2}>
                                 {ui.statusText}
                               </Text>
@@ -1670,11 +1756,11 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                           <View
                             style={[
                               styles.statusBadge,
-                              {backgroundColor: `${ui.statusColor}15`},
+                              { backgroundColor: `${ui.statusColor}15` },
                             ]}>
-                            <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
+                            <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
                             <Text
-                              style={[styles.statusText, {color: ui.statusColor}]}
+                              style={[styles.statusText, { color: ui.statusColor }]}
                               numberOfLines={2}>
                               {ui.statusText}
                             </Text>
@@ -1684,19 +1770,19 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
                       {/* ✅ Superdari Column */}
                       {showSuperdariColumn && (
-                        <View style={[styles.tdCell, styles.actionsCell, {width: 150}]}>
+                        <View style={[styles.tdCell, styles.actionsCell, { width: 150 }]}>
                           {r?.hasSuperdari ? (
                             <Text style={styles.tdText}>—</Text>
                           ) : (
                             <TouchableOpacity
                               style={[
                                 styles.actionButton,
-                                {backgroundColor: 'rgba(14, 165, 233, 0.10)'},
+                                { backgroundColor: 'rgba(14, 165, 233, 0.10)' },
                               ]}
                               onPress={() => openSuperdariForRecord(r)}
                               activeOpacity={0.7}>
                               <Ionicons name="person-circle-outline" size={16} color={COLORS.secondary} />
-                              <Text style={[styles.actionButtonText, {color: COLORS.secondary}]}>
+                              <Text style={[styles.actionButtonText, { color: COLORS.secondary }]}>
                                 Add Superdari
                               </Text>
                             </TouchableOpacity>
@@ -1707,19 +1793,19 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
                       {/* ✅ Disposal Column */}
                       {showDisposalColumn && (
-                        <View style={[styles.tdCell, styles.actionsCell, {width: 150}]}>
+                        <View style={[styles.tdCell, styles.actionsCell, { width: 150 }]}>
                           {r?.isDisposed ? (
                             <Text style={styles.tdText}>—</Text>
                           ) : (
                             <TouchableOpacity
                               style={[
                                 styles.actionButton,
-                                {backgroundColor: 'rgba(249, 115, 22, 0.10)'},
+                                { backgroundColor: 'rgba(249, 115, 22, 0.10)' },
                               ]}
                               onPress={() => openDisposalForRecord(r)}
                               activeOpacity={0.7}>
                               <Ionicons name="trash-outline" size={16} color={COLORS.warning} />
-                              <Text style={[styles.actionButtonText, {color: COLORS.warning}]}>
+                              <Text style={[styles.actionButtonText, { color: COLORS.warning }]}>
                                 Dispose
                               </Text>
                             </TouchableOpacity>
@@ -1730,16 +1816,16 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
                       {/* ✅ Audit Column */}
                       {showAuditColumn && (
-                        <View style={[styles.tdCell, styles.actionsCell, {width: 120}]}>
+                        <View style={[styles.tdCell, styles.actionsCell, { width: 120 }]}>
                           <TouchableOpacity
                             style={[
                               styles.actionButton,
-                              {backgroundColor: 'rgba(22, 163, 74, 0.10)'},
+                              { backgroundColor: 'rgba(22, 163, 74, 0.10)' },
                             ]}
                             onPress={() => openAuditForRecord(r)}
                             activeOpacity={0.7}>
                             <Ionicons name="clipboard-outline" size={16} color={COLORS.success} />
-                            <Text style={[styles.actionButtonText, {color: COLORS.success}]}>
+                            <Text style={[styles.actionButtonText, { color: COLORS.success }]}>
                               Audit
                             </Text>
                           </TouchableOpacity>
@@ -1748,7 +1834,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
                       {/* Actions Column */}
                       {showActionsColumn && (
-                        <View style={[styles.tdCell, styles.actionsCell, {width: 110}]}>
+                        <View style={[styles.tdCell, styles.actionsCell, { width: 110 }]}>
                           {allowActions ? (
                             <TouchableOpacity
                               style={styles.actionButton}
@@ -1790,7 +1876,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
           </TouchableWithoutFeedback>
 
           <View style={styles.modalContainer}>
-            <View style={[styles.modalContent, {maxHeight: height * 0.35}]}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.35 }]}>
               <View style={styles.modalHeader}>
                 <View style={styles.modalTitleRow}>
                   <Ionicons name="image-outline" size={24} color={COLORS.primary} />
@@ -1804,7 +1890,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{padding: 20, gap: 12}}>
+              <View style={{ padding: 20, gap: 12 }}>
                 <TouchableOpacity
                   style={{
                     backgroundColor: COLORS.primary,
@@ -1818,7 +1904,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   onPress={takePhotoFromCamera}
                   activeOpacity={0.8}>
                   <Ionicons name="camera-outline" size={20} color="#fff" />
-                  <Text style={{color: '#fff', fontWeight: '800', fontSize: 15}}>Take Photo</Text>
+                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>Take Photo</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -1836,7 +1922,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   onPress={pickFromGallery}
                   activeOpacity={0.8}>
                   <Ionicons name="images-outline" size={20} color={COLORS.primary} />
-                  <Text style={{color: COLORS.primary, fontWeight: '800', fontSize: 15}}>
+                  <Text style={{ color: COLORS.primary, fontWeight: '800', fontSize: 15 }}>
                     Choose from Gallery
                   </Text>
                 </TouchableOpacity>
@@ -1849,7 +1935,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   }}
                   onPress={() => setImagePickerModal(false)}
                   activeOpacity={0.8}>
-                  <Text style={{color: COLORS.textLight, fontWeight: '800'}}>Cancel</Text>
+                  <Text style={{ color: COLORS.textLight, fontWeight: '800' }}>Cancel</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1869,7 +1955,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
           </TouchableWithoutFeedback>
 
           <View style={styles.modalContainer}>
-            <View style={[styles.modalContent, {maxHeight: height * 0.5}]}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.5 }]}>
               <View style={styles.modalHeader}>
                 <View style={styles.modalTitleRow}>
                   <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
@@ -1880,8 +1966,8 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{padding: 20}}>
-                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+              <View style={{ padding: 20 }}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textLight }}>
                   Rejected By
                 </Text>
                 <Text
@@ -1894,7 +1980,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                   {rejectionModal.rejectedBy || 'Officer'}
                 </Text>
 
-                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textLight }}>
                   Remarks
                 </Text>
                 <View
@@ -1926,7 +2012,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     alignItems: 'center',
                   }}
                   onPress={closeRejectionPopup}>
-                  <Text style={{color: '#fff', fontWeight: '800'}}>Close</Text>
+                  <Text style={{ color: '#fff', fontWeight: '800' }}>Close</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1964,21 +2050,21 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                 <FormRow
                   label="Status"
                   value={filters.status}
-                  onChangeText={v => setFilters(prev => ({...prev, status: v}))}
+                  onChangeText={v => setFilters(prev => ({ ...prev, status: v }))}
                   placeholder="e.g., Pending, Rejected, Verified, Superdari, Disposed"
                 />
 
                 <DropdownRow
                   label="Year"
                   value={filters.year}
-                  onChange={v => setFilters(prev => ({...prev, year: v}))}
+                  onChange={v => setFilters(prev => ({ ...prev, year: v }))}
                   options={YEAR_OPTIONS}
                 />
 
                 <DropdownRow
                   label="Scheme Type"
                   value={filters.schemeType}
-                  onChange={v => setFilters(prev => ({...prev, schemeType: v}))}
+                  onChange={v => setFilters(prev => ({ ...prev, schemeType: v }))}
                   options={SCHEME_OPTIONS}
                 />
 
@@ -1987,7 +2073,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     <FormRow
                       label="Date From (YYYY-MM-DD)"
                       value={filters.dateFrom}
-                      onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, dateFrom: v }))}
                       placeholder="2025-12-01"
                     />
                   </View>
@@ -1995,7 +2081,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     <FormRow
                       label="Date To (YYYY-MM-DD)"
                       value={filters.dateTo}
-                      onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, dateTo: v }))}
                       placeholder="2025-12-31"
                     />
                   </View>
@@ -2006,7 +2092,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     <FormRow
                       label="Avg KM From"
                       value={filters.avgFrom}
-                      onChangeText={v => setFilters(prev => ({...prev, avgFrom: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, avgFrom: v }))}
                       placeholder="e.g. 10"
                       keyboardType="numeric"
                     />
@@ -2015,7 +2101,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     <FormRow
                       label="Avg KM To"
                       value={filters.avgTo}
-                      onChangeText={v => setFilters(prev => ({...prev, avgTo: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, avgTo: v }))}
                       placeholder="e.g. 50"
                       keyboardType="numeric"
                     />
@@ -2155,7 +2241,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                     <Text style={styles.editModalSubtitle}>Record ID: {editingId}</Text>
                   )}
                   {isEdit && Array.isArray(existingPictures) && existingPictures.length > 0 && (
-                    <Text style={[styles.editModalSubtitle, {marginTop: 4}]}>
+                    <Text style={[styles.editModalSubtitle, { marginTop: 4 }]}>
                       Existing Images: {existingPictures.length}
                       {pictureUris?.length ? ` • New Selected: ${pictureUris.length}` : ''}
                     </Text>
@@ -2204,7 +2290,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 
                   {/* Per-species counts */}
                   {speciesIds.length > 0 && (
-                    <View style={{marginTop: 6}}>
+                    <View style={{ marginTop: 6 }}>
                       <Text
                         style={{
                           fontSize: 13,
@@ -2407,7 +2493,7 @@ export default function AfforestationRecordsScreen({navigation, route}) {
                       ]}>
                       <View style={styles.imagePreviewHeader}>
                         <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
-                        <Text style={[styles.imagePreviewTitle, {color: COLORS.secondary}]}>
+                        <Text style={[styles.imagePreviewTitle, { color: COLORS.secondary }]}>
                           Keeping existing images ({existingPictures.length})
                         </Text>
                       </View>
@@ -2456,9 +2542,9 @@ export default function AfforestationRecordsScreen({navigation, route}) {
 // Kept exactly as your base to avoid UI regressions.
 const styles = StyleSheet.create({
   // Base
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
-  contentContainer: {paddingBottom: 100},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
+  contentContainer: { paddingBottom: 100 },
 
   // Header
   header: {
@@ -2469,11 +2555,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  headerContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   backButton: {
     width: 44,
     height: 44,
@@ -2483,9 +2569,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 8, letterSpacing: 0.5},
-  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
+  headerContent: { flex: 1 },
+  headerTitle: { fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 8, letterSpacing: 0.5 },
+  headerInfo: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2495,8 +2581,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 4,
   },
-  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
-  siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3},
+  infoChipText: { fontSize: 12, fontWeight: '600', color: '#fff' },
+  siteId: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3 },
   headerAction: {
     width: 44,
     height: 44,
@@ -2519,10 +2605,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: COLORS.primary,
   },
-  headerBadgeText: {color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4},
+  headerBadgeText: { color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4 },
 
   // Search
-  searchSection: {paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16},
+  searchSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2533,14 +2619,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  searchIcon: {marginRight: 12},
-  searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
-  searchClear: {padding: 4},
+  searchIcon: { marginRight: 12 },
+  searchInput: { flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text },
+  searchClear: { padding: 4 },
 
   // Stats Card
   statsCard: {
@@ -2554,26 +2640,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  statItem: {flex: 1, alignItems: 'center'},
-  statValue: {fontSize: 24, fontWeight: '800', color: COLORS.primary, marginBottom: 4},
-  statLabel: {fontSize: 12, fontWeight: '600', color: COLORS.textLight},
-  statDivider: {width: 1, height: 40, backgroundColor: COLORS.border},
+  statItem: { flex: 1, alignItems: 'center' },
+  statValue: { fontSize: 24, fontWeight: '800', color: COLORS.primary, marginBottom: 4 },
+  statLabel: { fontSize: 12, fontWeight: '600', color: COLORS.textLight },
+  statDivider: { width: 1, height: 40, backgroundColor: COLORS.border },
 
   // Section
-  section: {marginHorizontal: 20, marginBottom: 20},
+  section: { marginHorizontal: 20, marginBottom: 20 },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
   },
-  sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
-  sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text },
+  sectionSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
 
   // Loading State
   loadingState: {
@@ -2584,7 +2670,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  loadingText: {fontSize: 14, color: COLORS.textLight, marginTop: 12, fontWeight: '600'},
+  loadingText: { fontSize: 14, color: COLORS.textLight, marginTop: 12, fontWeight: '600' },
 
   // Empty State
   emptyState: {
@@ -2596,13 +2682,13 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     borderStyle: 'dashed',
   },
-  emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
-  emptyText: {fontSize: 14, color: COLORS.textLight, textAlign: 'center', marginBottom: 20, lineHeight: 20},
-  emptyAction: {backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12},
-  emptyActionText: {color: '#fff', fontSize: 14, fontWeight: '700'},
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8 },
+  emptyText: { fontSize: 14, color: COLORS.textLight, textAlign: 'center', marginBottom: 20, lineHeight: 20 },
+  emptyAction: { backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 },
+  emptyActionText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 
   // Table
-  tableContainer: {borderRadius: 16, overflow: 'hidden'},
+  tableContainer: { borderRadius: 16, overflow: 'hidden' },
   table: {
     borderRadius: 16,
     overflow: 'hidden',
@@ -2610,7 +2696,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -2622,23 +2708,23 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     minHeight: 56,
   },
-  thCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  thText: {fontSize: 12, fontWeight: '800', color: COLORS.text, textTransform: 'uppercase', letterSpacing: 0.5},
-  tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
-  rowEven: {backgroundColor: '#fff'},
-  rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
-  rowRejected: {backgroundColor: 'rgba(239, 68, 68, 0.06)'},
-  tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
-  multiLineCell: {fontSize: 12, fontWeight: '700', color: COLORS.text, lineHeight: 18},
+  thCell: { paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border },
+  thText: { fontSize: 12, fontWeight: '800', color: COLORS.text, textTransform: 'uppercase', letterSpacing: 0.5 },
+  tableRow: { flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  rowEven: { backgroundColor: '#fff' },
+  rowOdd: { backgroundColor: 'rgba(5, 150, 105, 0.02)' },
+  rowRejected: { backgroundColor: 'rgba(239, 68, 68, 0.06)' },
+  tdCell: { paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border },
+  tdText: { fontSize: 13, fontWeight: '600', color: COLORS.text },
+  multiLineCell: { fontSize: 12, fontWeight: '700', color: COLORS.text, lineHeight: 18 },
   gpsText: {
     fontSize: 11,
     fontWeight: '600',
     color: COLORS.text,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  schemeBadge: {paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, alignSelf: 'flex-start'},
-  schemeText: {fontSize: 12, fontWeight: '800'},
+  schemeBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, alignSelf: 'flex-start' },
+  schemeText: { fontSize: 12, fontWeight: '800' },
 
   // Status Badge
   statusBadge: {
@@ -2651,10 +2737,10 @@ const styles = StyleSheet.create({
     gap: 6,
     maxWidth: 210,
   },
-  statusDot: {width: 8, height: 8, borderRadius: 4},
-  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1},
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusText: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1 },
 
-  actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
+  actionsCell: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2664,7 +2750,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 4,
   },
-  actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
+  actionButtonText: { fontSize: 12, fontWeight: '700', color: COLORS.secondary },
 
   // FAB
   fab: {
@@ -2672,7 +2758,7 @@ const styles = StyleSheet.create({
     right: 20,
     bottom: 30,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
@@ -2687,9 +2773,9 @@ const styles = StyleSheet.create({
   },
 
   // Modal
-  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  modalBackdrop: {...StyleSheet.absoluteFillObject},
-  modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
+  modalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalContainer: { flex: 1, justifyContent: 'center', padding: 20 },
   modalContent: {
     backgroundColor: '#fff',
     borderRadius: 24,
@@ -2698,7 +2784,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 10},
+    shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.15,
     shadowRadius: 20,
     elevation: 10,
@@ -2712,8 +2798,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  modalTitle: {fontSize: 20, fontWeight: '800', color: COLORS.text},
+  modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
   modalClose: {
     width: 40,
     height: 40,
@@ -2722,10 +2808,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalBody: {padding: 20},
-  filterRow: {flexDirection: 'row', gap: 12, marginBottom: 16},
-  filterColumn: {flex: 1},
-  modalActions: {flexDirection: 'row', gap: 12, marginTop: 8},
+  modalBody: { padding: 20 },
+  filterRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  filterColumn: { flex: 1 },
+  modalActions: { flexDirection: 'row', gap: 12, marginTop: 8 },
   modalButtonSecondary: {
     flex: 1,
     backgroundColor: 'rgba(31, 41, 55, 0.05)',
@@ -2733,7 +2819,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  modalButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  modalButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
   modalButtonPrimary: {
     flex: 2,
     backgroundColor: COLORS.primary,
@@ -2741,10 +2827,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  modalButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  modalButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
   // Species Modal
-  speciesList: {maxHeight: 400},
+  speciesList: { maxHeight: 400 },
   speciesItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2763,12 +2849,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  checkboxChecked: {backgroundColor: COLORS.primary, borderColor: COLORS.primary},
-  speciesInfo: {flex: 1},
-  speciesName: {fontSize: 16, fontWeight: '600', color: COLORS.text, marginBottom: 2},
-  speciesId: {fontSize: 12, color: COLORS.textLight, fontWeight: '500'},
-  selectedIndicator: {marginLeft: 8},
-  speciesFooter: {padding: 20, borderTopWidth: 1, borderTopColor: COLORS.border},
+  checkboxChecked: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  speciesInfo: { flex: 1 },
+  speciesName: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginBottom: 2 },
+  speciesId: { fontSize: 12, color: COLORS.textLight, fontWeight: '500' },
+  selectedIndicator: { marginLeft: 8 },
+  speciesFooter: { padding: 20, borderTopWidth: 1, borderTopColor: COLORS.border },
   speciesCountBadge: {
     backgroundColor: 'rgba(5, 150, 105, 0.1)',
     paddingHorizontal: 16,
@@ -2777,8 +2863,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  speciesCountText: {fontSize: 14, fontWeight: '700', color: COLORS.primary},
-  speciesActions: {flexDirection: 'row', gap: 12},
+  speciesCountText: { fontSize: 14, fontWeight: '700', color: COLORS.primary },
+  speciesActions: { flexDirection: 'row', gap: 12 },
   speciesActionButton: {
     flex: 1,
     backgroundColor: 'rgba(31, 41, 55, 0.05)',
@@ -2786,13 +2872,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
   },
-  speciesActionButtonText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
-  speciesActionButtonPrimary: {backgroundColor: COLORS.primary},
-  speciesActionButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  speciesActionButtonText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  speciesActionButtonPrimary: { backgroundColor: COLORS.primary },
+  speciesActionButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
   // Edit Modal
-  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
+  editModalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  editModalContainer: { flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20 },
   editModalContent: {
     flex: 1,
     backgroundColor: '#fff',
@@ -2812,8 +2898,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  editModalTitle: {fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4},
-  editModalSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  editModalTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  editModalSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
   editModalClose: {
     width: 40,
     height: 40,
@@ -2822,7 +2908,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
+  editModalBody: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20 },
   editModalFooter: {
     flexDirection: 'row',
     gap: 12,
@@ -2832,48 +2918,48 @@ const styles = StyleSheet.create({
     borderTopColor: COLORS.border,
   },
   // Form Section
-  formSection: {marginBottom: 24},
-  formSectionTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16, letterSpacing: 0.5},
-  fieldWithButton: {marginBottom: 16},
-  fieldLabel: {fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8},
-  multiSelectButton: {flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primary, paddingHorizontal: 16, paddingVertical: 14, borderRadius: 12, gap: 12},
-  multiSelectButtonText: {flex: 1, fontSize: 16, fontWeight: '700', color: '#fff'},
-  speciesHint: {fontSize: 12, color: COLORS.textLight, marginTop: 4, fontStyle: 'italic'},
+  formSection: { marginBottom: 24 },
+  formSectionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16, letterSpacing: 0.5 },
+  fieldWithButton: { marginBottom: 16 },
+  fieldLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
+  multiSelectButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primary, paddingHorizontal: 16, paddingVertical: 14, borderRadius: 12, gap: 12 },
+  multiSelectButtonText: { flex: 1, fontSize: 16, fontWeight: '700', color: '#fff' },
+  speciesHint: { fontSize: 12, color: COLORS.textLight, marginTop: 4, fontStyle: 'italic' },
 
   // GPS
-  gpsCard: {backgroundColor: 'rgba(5, 150, 105, 0.03)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.1)', marginBottom: 16, overflow: 'hidden'},
-  gpsCardHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'rgba(5, 150, 105, 0.05)', borderBottomWidth: 1, borderBottomColor: 'rgba(5, 150, 105, 0.1)'},
-  gpsCardTitle: {fontSize: 14, fontWeight: '700', color: COLORS.text},
-  gpsFetchButton: {flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, gap: 6},
-  gpsFetchButtonText: {fontSize: 12, fontWeight: '700', color: '#fff'},
-  gpsCardBody: {padding: 16},
-  gpsValue: {fontSize: 14, fontWeight: '700', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 8},
-  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  gpsLoadingText: {fontSize: 12, color: COLORS.textLight, fontWeight: '600'},
-  gpsActions: {flexDirection: 'row', gap: 8, marginBottom: 12},
-  gpsActionButton: {flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.secondary, paddingVertical: 12, borderRadius: 12, gap: 8},
-  gpsActionButtonSecondary: {backgroundColor: COLORS.primary},
-  gpsActionButtonTertiary: {backgroundColor: COLORS.success},
-  gpsActionButtonText: {fontSize: 14, fontWeight: '700', color: '#fff'},
-  gpsNote: {fontSize: 12, color: COLORS.textLight, marginBottom: 16, fontStyle: 'italic'},
-  coordinateRow: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12},
-  coordinateInputContainer: {flex: 1},
-  removeCoordinateButton: {padding: 8, marginTop: 24},
+  gpsCard: { backgroundColor: 'rgba(5, 150, 105, 0.03)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.1)', marginBottom: 16, overflow: 'hidden' },
+  gpsCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'rgba(5, 150, 105, 0.05)', borderBottomWidth: 1, borderBottomColor: 'rgba(5, 150, 105, 0.1)' },
+  gpsCardTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  gpsFetchButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, gap: 6 },
+  gpsFetchButtonText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+  gpsCardBody: { padding: 16 },
+  gpsValue: { fontSize: 14, fontWeight: '700', color: COLORS.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 8 },
+  gpsLoading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  gpsLoadingText: { fontSize: 12, color: COLORS.textLight, fontWeight: '600' },
+  gpsActions: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  gpsActionButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.secondary, paddingVertical: 12, borderRadius: 12, gap: 8 },
+  gpsActionButtonSecondary: { backgroundColor: COLORS.primary },
+  gpsActionButtonTertiary: { backgroundColor: COLORS.success },
+  gpsActionButtonText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  gpsNote: { fontSize: 12, color: COLORS.textLight, marginBottom: 16, fontStyle: 'italic' },
+  coordinateRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  coordinateInputContainer: { flex: 1 },
+  removeCoordinateButton: { padding: 8, marginTop: 24 },
 
   // Images
-  imageUploadButton: {backgroundColor: 'rgba(5, 150, 105, 0.05)', borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.2)', borderRadius: 16, padding: 16, marginBottom: 12},
-  imageUploadContent: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  imageUploadText: {flex: 1},
-  imageUploadTitle: {fontSize: 16, fontWeight: '700', color: COLORS.primary, marginBottom: 4},
-  imageUploadSubtitle: {fontSize: 12, color: COLORS.textLight},
-  imagePreview: {backgroundColor: 'rgba(22, 163, 74, 0.1)', borderWidth: 1, borderColor: 'rgba(22, 163, 74, 0.2)', borderRadius: 12, padding: 12},
-  imagePreviewHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4},
-  imagePreviewTitle: {fontSize: 14, fontWeight: '700', color: COLORS.success},
-  imagePreviewText: {fontSize: 12, color: COLORS.textLight, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'},
+  imageUploadButton: { backgroundColor: 'rgba(5, 150, 105, 0.05)', borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.2)', borderRadius: 16, padding: 16, marginBottom: 12 },
+  imageUploadContent: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  imageUploadText: { flex: 1 },
+  imageUploadTitle: { fontSize: 16, fontWeight: '700', color: COLORS.primary, marginBottom: 4 },
+  imageUploadSubtitle: { fontSize: 12, color: COLORS.textLight },
+  imagePreview: { backgroundColor: 'rgba(22, 163, 74, 0.1)', borderWidth: 1, borderColor: 'rgba(22, 163, 74, 0.2)', borderRadius: 12, padding: 12 },
+  imagePreviewHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  imagePreviewTitle: { fontSize: 14, fontWeight: '700', color: COLORS.success },
+  imagePreviewText: { fontSize: 12, color: COLORS.textLight, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
 
   // Footer Buttons
-  footerButtonSecondary: {flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center'},
-  footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
-  footerButtonPrimary: {flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8},
-  footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  footerButtonSecondary: { flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 16, borderRadius: 14, alignItems: 'center' },
+  footerButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  footerButtonPrimary: { flex: 2, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  footerButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 });

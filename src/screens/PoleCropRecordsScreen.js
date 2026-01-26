@@ -25,6 +25,9 @@ import Geolocation from '@react-native-community/geolocation';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import { useFocusEffect } from '@react-navigation/native';
 
+import { apiService } from '../services/ApiService';
+import { offlineService } from '../services/OfflineService';
+
 import FormRow from '../components/FormRow';
 import { DropdownRow } from '../components/SelectRows';
 
@@ -498,11 +501,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
-      const token = await getAuthToken();
-      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-
-      const res = await fetch(SPECIES_URL, { headers });
-      const json = await res.json().catch(() => null);
+      // Use ApiService.get for caching
+      const json = await apiService.get(SPECIES_URL);
       const rows = normalizeList(json);
 
       const normalized = rows
@@ -744,56 +744,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
   const pickImage = () => setImagePickerModal(true);
 
-  // ---------- AWS UPLOAD ----------
-  const uploadImagesToS3 = async (
-    localUris,
-    { uploadPath = AWS_UPLOAD_PATH, fileName = 'pole' } = {},
-  ) => {
-    if (!Array.isArray(localUris) || localUris.length === 0) return [];
+  // Manual AWS Upload Removed - handled by ApiService
 
-    const form = new FormData();
-    form.append('uploadPath', uploadPath);
-    form.append('isMulti', 'true');
-    form.append('fileName', fileName);
-
-    localUris.forEach((uri, idx) => {
-      const cleanUri = Platform.OS === 'ios' ? uri.replace('file://', '') : uri;
-      const extGuess = (uri || '').split('.').pop();
-      const ext = extGuess && extGuess.length <= 5 ? extGuess.toLowerCase() : 'jpg';
-      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-
-      form.append('files', {
-        uri: cleanUri,
-        type: mime,
-        name: `${fileName}_${idx}.${ext}`,
-      });
-    });
-
-    const res = await fetch(AWS_UPLOAD_URL, { method: 'POST', body: form });
-    const json = await res.json().catch(() => null);
-
-    if (!res.ok || !json?.status) {
-      const msg = json?.message || `Upload failed (HTTP ${res.status})`;
-      throw new Error(msg);
-    }
-
-    const items = Array.isArray(json?.data) ? json.data : [];
-    const finalUrls = [];
-
-    items.forEach(it => {
-      const img = it?.availableSizes?.image;
-      if (img) {
-        finalUrls.push(img);
-        return;
-      }
-      if (Array.isArray(it?.url) && it.url.length) {
-        finalUrls.push(it.url[it.url.length - 1]);
-        return;
-      }
-    });
-
-    return finalUrls.filter(Boolean);
-  };
 
   // ---------- NORMALIZE RECORD + SPECIES AUTO-SELECT ----------
   const normalizeApiRecord = raw => {
@@ -936,29 +888,89 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       try {
         refresh ? setServerRefreshing(true) : setListLoading(true);
 
-        const token = await getAuthToken();
-        if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
-
-        const res = await fetch(POLECROP_LIST_URL, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
-        const json = await res.json().catch(() => null);
-        if (!res.ok) {
-          const msg = json?.message || json?.error || `API Error (${res.status})`;
-          throw new Error(msg);
-        }
+        const json = await apiService.get(POLECROP_LIST_URL);
 
         const rows = normalizeList(json);
         const normalized = rows.map(normalizeApiRecord);
 
-        const filtered = nameOfSiteId
+        // Filter server list
+        const filteredServer = nameOfSiteId
           ? normalized.filter(x => Number(x?.nameOfSiteId) === Number(nameOfSiteId))
           : normalized;
 
-        setRecords(filtered);
-        console.log('📥 Loaded records:', normalized.length, 'Filtered:', filtered.length);
+        // ------------------------------------------------------------------
+        // Merge Pending Offline Items (POST to POLECROP_SUBMIT_URL)
+        // ------------------------------------------------------------------
+        const pendingItems = offlineService.getPendingItems(item => {
+          if (item.method !== 'POST') return false;
+          if (!item.url.includes('/enum/pole-crop')) return false;
+
+          const b = item.body || {};
+          if (nameOfSiteId != null && String(b.nameOfSiteId) !== String(nameOfSiteId)) return false;
+          return true;
+        });
+
+        const mappedPending = pendingItems.map(item => {
+          const b = item.body || {};
+
+          // Map body keys
+          // Body: nameOfSiteId, rds_from, rds_to, auto_lat, manual_lat, species_counts (array)
+
+          // Reconstruct species counts map from body.species_counts array
+          const species_ids = [];
+          const species_counts = {};
+          if (Array.isArray(b.species_counts)) {
+            b.species_counts.forEach(s => {
+              const sid = Number(s.species_id);
+              if (sid) {
+                species_ids.push(sid);
+                species_counts[String(sid)] = String(s.count);
+              }
+            });
+          }
+
+          // Calc total count
+          const totalCount = Object.values(species_counts).reduce((acc, val) => acc + (Number(val) || 0), 0);
+
+          return {
+            id: `offline_${item.id}`,
+            serverId: null,
+            isOffline: true,
+
+            nameOfSiteId: b.nameOfSiteId,
+            rds_from: b.rds_from,
+            rds_to: b.rds_to,
+            count: totalCount,
+
+            autoGpsLatLong: (b.auto_lat && b.auto_long) ? `${b.auto_lat}, ${b.auto_long}` : '',
+            gpsBoundingBox: (b.manual_lat && b.manual_long) ? [`${b.manual_lat}, ${b.manual_long}`] : [],
+
+            pictures: [],
+            picturePreview: null,
+            pictureUris: [],
+
+            species_ids,
+            species_counts,
+            species_names_map: {},
+
+            verification: [],
+            latestStatus: { action: 'Pending Sync', user_role: 'You', remarks: 'Saved offline' },
+
+            createdAt: new Date(item.createdAt).toISOString(),
+            serverRaw: b,
+
+            hasSuperdari: false,
+            superdariId: null,
+            superdarName: '',
+            isDisposed: false,
+            disposalId: null,
+            disposedAt: null
+          };
+        });
+
+        setRecords([...mappedPending, ...filteredServer]);
+
+        console.log('📥 Loaded records:', normalized.length, 'Filtered:', filteredServer.length, 'Pending:', mappedPending.length);
       } catch (e) {
         setRecords([]);
         Alert.alert('Load Failed', e?.message || 'Failed to load records from server.');
@@ -968,6 +980,14 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     },
     [nameOfSiteId],
   );
+
+  // Subscribe to update
+  useEffect(() => {
+    const unsub = offlineService.subscribe(() => {
+      fetchPoleCropList({ refresh: false });
+    });
+    return unsub;
+  }, [fetchPoleCropList]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1226,35 +1246,42 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : autoGps;
     const { lat: manualLat, lng: manualLng } = parseLatLng(lastManual || autoGps);
 
-    let uploadedUrls = [];
-    try {
-      if (pictureUris?.length) {
-        setUploading(true);
-        const safeFileName = `pole_${Number(nameOfSiteId || 0)}_${Date.now()}`;
-        uploadedUrls = await uploadImagesToS3(pictureUris, {
-          uploadPath: AWS_UPLOAD_PATH,
-          fileName: safeFileName,
-        });
-      }
-    } catch (e) {
-      setUploading(false);
-      Alert.alert('Upload Failed', e?.message || 'Image upload failed.');
-      return;
-    } finally {
-      setUploading(false);
+    // Prepare attachments
+    const safeFileName = `pole_${Number(nameOfSiteId || 0)}_${Date.now()}`;
+    const attachments = pictureUris.map((uri, idx) => ({
+      uri,
+      type: 'image/jpeg', // Simple assumption, can process ext if needed
+      name: `${safeFileName}_${idx}.jpg`,
+      uploadUrl: AWS_UPLOAD_URL,
+      uploadPath: AWS_UPLOAD_PATH,
+      targetFieldInBody: 'pictures'
+    }));
+
+    // If Editing and no new pics, keep existing. If new pics, ApiService appends them.
+    // However, existingPictures are strings (URLs). apiService attachments result in strings.
+    // We need to pass existing URLs in the body too if we want to keep them?
+    // Logic: 
+    // If we have new pictureUris, user intends to ADD/REPLACE? 
+    // The UI says: "Select new images only if you want to replace them" (line 2069 of original)
+    // Actually lines 1252-1257 logic says: 
+    // const finalPictures = isEdit && (!pictureUris || pictureUris.length === 0) ? existingPictures : uploadedUrls;
+    // So if new pics selected, we REPLACE completely.
+
+    // In ApiService, it appends uploaded URLs to `body[field]`.
+    // So we should initialize `pictures` in body as empty array if we are replacing.
+    // If not replacing (isEdit && empty new), we put existingPictures.
+
+    let initialPictures = [];
+    if (isEdit && (!pictureUris || pictureUris.length === 0)) {
+      initialPictures = Array.isArray(existingPictures) ? existingPictures : [];
     }
+    // If we have new pictureUris, initialPictures is [], and apiService appends new ones.
+    // If we do NOT have new pictureUris, attachments is [], initialPictures has existing.
 
     const speciesPayload = speciesIds.map(sid => ({
       species_id: Number(sid),
       count: Number(String(speciesCounts[String(sid)] || '').replace(/[^\d]/g, '')),
     }));
-
-    const finalPictures =
-      isEdit && (!pictureUris || pictureUris.length === 0)
-        ? Array.isArray(existingPictures)
-          ? existingPictures
-          : []
-        : uploadedUrls;
 
     const body = {
       nameOfSiteId: Number(nameOfSiteId || route?.params?.nameOfSiteId || 0),
@@ -1267,25 +1294,34 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       manual_lat: manualLat,
       manual_long: manualLng,
 
-      pictures: finalPictures,
+      pictures: initialPictures,
 
       species_counts: speciesPayload,
     };
 
     try {
+      setUploading(true);
+      let res;
       if (isEdit) {
-        if (!editingId) throw new Error('Edit ID missing. Cannot PATCH without record id.');
-        await submitPoleCropToApi(body, { isEditMode: true, editId: editingId });
-        Alert.alert('Success', 'Record updated and resubmitted successfully.');
+        if (!editingId) throw new Error('Edit ID missing.');
+        // Use PATCH or PUT
+        res = await apiService.patch(POLECROP_EDIT_URL(editingId), body, { attachments });
       } else {
-        await submitPoleCropToApi(body, { isEditMode: false });
-        Alert.alert('Success', 'Saved to server.');
+        res = await apiService.post(POLECROP_SUBMIT_URL, body, { attachments });
       }
 
       setModalVisible(false);
+      resetFormForAdd(); // Clear form
       fetchPoleCropList({ refresh: true });
+
+      Alert.alert(
+        res.offline ? 'Saved Offline' : 'Success',
+        res.message || 'Record saved successfully.'
+      );
     } catch (e) {
       Alert.alert('Submit Failed', e?.message || 'Server submit failed.');
+    } finally {
+      setUploading(false);
     }
   };
 

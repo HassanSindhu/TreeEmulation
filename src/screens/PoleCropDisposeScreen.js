@@ -27,6 +27,7 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import { apiService } from '../services/ApiService';
 import DateField from '../components/DateField';
 
 const { height } = Dimensions.get('window');
@@ -177,47 +178,8 @@ export default function PoleCropDisposeScreen({ navigation, route }) {
 
   const clearImages = () => setPickedAssets([]);
 
-  const uploadImagesIfAny = async () => {
-    if (!pickedAssets.length) return [];
+  // Image upload logic is now handled by apiService
 
-    setUploading(true);
-    try {
-      const form = new FormData();
-      pickedAssets.forEach(a => {
-        const f = toFormFile(a);
-        if (f) form.append('files', f);
-      });
-
-      form.append('uploadPath', BUCKET_UPLOAD_PATH);
-      form.append('isMulti', BUCKET_IS_MULTI);
-      form.append('fileName', BUCKET_FILE_NAME);
-
-      const res = await fetch(BUCKET_UPLOAD_URL, { method: 'POST', body: form });
-      const json = await res.json().catch(() => null);
-
-      if (!res.ok || !json?.status) {
-        const msg = json?.message || json?.error || `upload failed (${res.status})`;
-        throw new Error(msg);
-      }
-
-      const data = Array.isArray(json?.data) ? json.data : [];
-      const urls = [];
-
-      data.forEach(item => {
-        const img = item?.availableSizes?.image;
-        if (img) urls.push(img);
-
-        const arr = Array.isArray(item?.url) ? item.url : [];
-        arr.forEach(u => {
-          if (u && !urls.includes(u)) urls.push(u);
-        });
-      });
-
-      return urls;
-    } finally {
-      setUploading(false);
-    }
-  };
 
   // ====== VALIDATION ======
   const validate = () => {
@@ -261,10 +223,15 @@ export default function PoleCropDisposeScreen({ navigation, route }) {
 
     setSaving(true);
     try {
-      const token = await getToken();
-      if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
-
-      const pictureUrls = await uploadImagesIfAny();
+      // Prepare attachments for ApiService
+      const attachments = pickedAssets.map(a => ({
+        uri: a.uri,
+        type: a.type || 'image/jpeg',
+        name: a.fileName,
+        uploadUrl: BUCKET_UPLOAD_URL,
+        uploadPath: BUCKET_UPLOAD_PATH,
+        targetFieldInBody: 'pictures'
+      }));
 
       const body = {
         poleCropId: Number(poleCropId),
@@ -296,25 +263,16 @@ export default function PoleCropDisposeScreen({ navigation, route }) {
           : null,
         auction_remarks: auction ? (String(auctionRemarks || '').trim() || null) : null,
 
-        pictures: pictureUrls, // per curl: pictures: []
+        pictures: [], // ApiService will fill this
       };
 
-      const res = await fetch(DISPOSAL_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
-      });
+      const res = await apiService.post(DISPOSAL_URL, body, { attachments });
 
-      const json = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const msg = json?.message || json?.error || `API Error (${res.status})`;
-        throw new Error(msg);
-      }
-
-      Alert.alert('Success', 'Pole crop disposal submitted successfully.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      Alert.alert(
+        res.offline ? 'Saved Offline' : 'Success',
+        res.message || 'Pole crop disposal submitted successfully.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
     } catch (e) {
       Alert.alert('Error', e?.message || 'Failed to submit disposal');
     } finally {

@@ -1,5 +1,5 @@
 // /screens/AfforestationAuditScreen.js
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -21,9 +21,10 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { apiService } from '../services/ApiService';
 
-const {height} = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 const API_HOST = 'http://be.lte.gisforestry.com';
 
@@ -107,10 +108,10 @@ const fetchJsonOrText = async res => {
   } catch (_) {
     json = null;
   }
-  return {text, json};
+  return { text, json };
 };
 
-export default function AfforestationAuditScreen({navigation, route}) {
+export default function AfforestationAuditScreen({ navigation, route }) {
   /**
    * This screen MUST be opened from previous screen using:
    * navigation.navigate('AfforestationAudit', { afforestationId, record, speciesSnapshot })
@@ -171,11 +172,11 @@ export default function AfforestationAuditScreen({navigation, route}) {
       'Permission Required',
       'Please allow camera permission from Settings to take photos.',
       [
-        {text: 'Cancel', style: 'cancel'},
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Open Settings',
           onPress: () => {
-            Linking.openSettings().catch(() => {});
+            Linking.openSettings().catch(() => { });
           },
         },
       ],
@@ -226,7 +227,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
   const pickFromGallery = () => {
     setImagePickerModal(false);
     launchImageLibrary(
-      {mediaType: 'photo', quality: 0.7, selectionLimit: 0},
+      { mediaType: 'photo', quality: 0.7, selectionLimit: 0 },
       onImagePickerResult,
     );
   };
@@ -276,59 +277,15 @@ export default function AfforestationAuditScreen({navigation, route}) {
     const plantedTotal = perSpeciesMetrics.reduce((a, x) => a + safeNumber(x.plantedCount), 0);
     const successTotal = perSpeciesMetrics.reduce((a, x) => a + safeNumber(x.successCount), 0);
     const pctTotal = plantedTotal > 0 ? (successTotal / plantedTotal) * 100 : 0;
-    return {plantedTotal, successTotal, pctTotal};
+    return { plantedTotal, successTotal, pctTotal };
   }, [perSpeciesMetrics]);
 
-  // ---------- AWS UPLOAD ----------
-  const uploadImagesToS3 = async (localUris, {uploadPath, fileName} = {}) => {
-    if (!Array.isArray(localUris) || localUris.length === 0) return [];
+  // Manual AWS Upload Removed - handled by ApiService
 
-    const form = new FormData();
-    form.append('uploadPath', uploadPath || AWS_UPLOAD_PATH);
-    form.append('isMulti', 'true');
-    form.append('fileName', fileName || `audit_${Date.now()}`);
-
-    localUris.forEach((uri, idx) => {
-      const cleanUri = Platform.OS === 'ios' ? uri.replace('file://', '') : uri;
-      const extGuess = (uri || '').split('.').pop();
-      const ext = extGuess && extGuess.length <= 5 ? extGuess.toLowerCase() : 'jpg';
-      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-
-      form.append('files', {
-        uri: cleanUri,
-        type: mime,
-        name: `${fileName || 'audit'}_${idx}.${ext}`,
-      });
-    });
-
-    const res = await fetch(AWS_UPLOAD_URL, {method: 'POST', body: form});
-    const json = await res.json().catch(() => null);
-
-    if (!res.ok || !json?.status) {
-      const msg = json?.message || `Upload failed (HTTP ${res.status})`;
-      throw new Error(msg);
-    }
-
-    const items = Array.isArray(json?.data) ? json.data : [];
-    const finalUrls = [];
-
-    items.forEach(it => {
-      const img = it?.availableSizes?.image;
-      if (img) {
-        finalUrls.push(img);
-        return;
-      }
-      if (Array.isArray(it?.url) && it.url.length) {
-        finalUrls.push(it.url[it.url.length - 1]);
-      }
-    });
-
-    return finalUrls.filter(Boolean);
-  };
 
   // ---------- API ----------
   const fetchAudits = useCallback(
-    async ({refresh = false} = {}) => {
+    async ({ refresh = false } = {}) => {
       if (!afforestationId) {
         setAudits([]);
         return;
@@ -336,21 +293,9 @@ export default function AfforestationAuditScreen({navigation, route}) {
       try {
         refresh ? setRefreshing(true) : setLoadingList(true);
 
-        const token = await getAuthToken();
-        if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
+        const rowsRaw = await apiService.get(AFF_AUDIT_LIST_URL(afforestationId));
+        const rows = normalizeList(rowsRaw);
 
-        const res = await fetch(AFF_AUDIT_LIST_URL(afforestationId), {
-          method: 'GET',
-          headers: {Authorization: `Bearer ${token}`},
-        });
-
-        const {json, text} = await fetchJsonOrText(res);
-        if (!res.ok) {
-          const msg = json?.message || json?.error || text || `API Error (${res.status})`;
-          throw new Error(msg);
-        }
-
-        const rows = normalizeList(json);
         const normalized = rows
           .map(a => ({
             ...a,
@@ -370,7 +315,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
   );
 
   useEffect(() => {
-    fetchAudits({refresh: true});
+    fetchAudits({ refresh: true });
   }, [fetchAudits]);
 
   const resetForm = () => {
@@ -452,42 +397,44 @@ export default function AfforestationAuditScreen({navigation, route}) {
     try {
       setSubmitting(true);
 
-      const token = await getAuthToken();
-      if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
-
+      // Prepare attachments for all 3 categories
+      const attachments = [];
       const baseName = `aff_audit_${afforestationId}_${Date.now()}`;
 
-      let picturesUrls = [];
-      let drEvidenceUrls = [];
-      let firEvidenceUrls = [];
-
-      if (picturesUris.length) {
-        picturesUrls = await uploadImagesToS3(picturesUris, {
+      // 1. Audit Pics
+      picturesUris.forEach((uri, idx) => {
+        attachments.push({
+          uri, type: 'image/jpeg', name: `${baseName}_pics_${idx}.jpg`,
+          uploadUrl: AWS_UPLOAD_URL,
           uploadPath: AWS_UPLOAD_PATH,
-          fileName: `${baseName}_pics`,
+          targetFieldInBody: 'pictures',
+          storeBasename: true
         });
-      }
-      if (drEvidenceUris.length) {
-        drEvidenceUrls = await uploadImagesToS3(drEvidenceUris, {
-          uploadPath: AWS_UPLOAD_PATH,
-          fileName: `${baseName}_dr`,
-        });
-      }
-      if (firEvidenceUris.length) {
-        firEvidenceUrls = await uploadImagesToS3(firEvidenceUris, {
-          uploadPath: AWS_UPLOAD_PATH,
-          fileName: `${baseName}_fir`,
-        });
-      }
+      });
 
-      // ✅ IMPORTANT FIX:
-      // Backend appears to accept filenames in arrays (like your curl).
-      // Convert returned URLs to basenames to match backend expectation.
-      const picturesFinal = picturesUrls.map(toBasename).filter(Boolean);
-      const drEvidenceFinal = drEvidenceUrls.map(toBasename).filter(Boolean);
-      const firEvidenceFinal = firEvidenceUrls.map(toBasename).filter(Boolean);
+      // 2. DR Evidence
+      drEvidenceUris.forEach((uri, idx) => {
+        attachments.push({
+          uri, type: 'image/jpeg', name: `${baseName}_dr_${idx}.jpg`,
+          uploadUrl: AWS_UPLOAD_URL,
+          uploadPath: AWS_UPLOAD_PATH,
+          targetFieldInBody: 'drEvidence',
+          storeBasename: true
+        });
+      });
 
-      // ✅ Payload: omit empty optional fields (match Postman behavior)
+      // 3. FIR Evidence
+      firEvidenceUris.forEach((uri, idx) => {
+        attachments.push({
+          uri, type: 'image/jpeg', name: `${baseName}_fir_${idx}.jpg`,
+          uploadUrl: AWS_UPLOAD_URL,
+          uploadPath: AWS_UPLOAD_PATH,
+          targetFieldInBody: 'firEvidence',
+          storeBasename: true
+        });
+      });
+
+      // ✅ Payload: omit empty optional fields
       const payload = cleanPayload({
         afforestationId: Number(afforestationId),
         dateOfAudit: String(dateOfAudit || isoNow()),
@@ -501,13 +448,13 @@ export default function AfforestationAuditScreen({navigation, route}) {
         additionalRemarks: additionalRemarks?.trim() ? additionalRemarks.trim() : undefined,
         drNo: drNo?.trim() ? drNo.trim() : undefined,
 
-        // Dates: omit if empty (or backend may prefer null; omit is safest)
+        // Dates
         drDate: drDate?.trim() ? drDate.trim() : undefined,
 
-        // Evidence arrays: omit if empty
-        drEvidence: drEvidenceFinal.length ? drEvidenceFinal : undefined,
-        firEvidence: firEvidenceFinal.length ? firEvidenceFinal : undefined,
-        pictures: picturesFinal.length ? picturesFinal : undefined,
+        // Evidence arrays: ApiService will fill if attachments
+        drEvidence: [],
+        firEvidence: [],
+        pictures: [],
 
         // Booleans can remain (safe)
         fineImposed: !!fineImposed,
@@ -518,28 +465,11 @@ export default function AfforestationAuditScreen({navigation, route}) {
         firNumber: firRegistered ? (firNumber?.trim() ? firNumber.trim() : undefined) : undefined,
       });
 
-      // ✅ Debug: see exact payload going to backend
-      console.log('AFF AUDIT payload:', JSON.stringify(payload, null, 2));
+      const res = await apiService.post(AFF_AUDIT_CREATE_URL, payload, { attachments });
 
-      const res = await fetch(AFF_AUDIT_CREATE_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const {json, text} = await fetchJsonOrText(res);
-      if (!res.ok) {
-        console.log('AFF AUDIT HTTP', res.status, text);
-        const msg = json?.message || json?.error || text || `API Error (${res.status})`;
-        throw new Error(msg);
-      }
-
-      Alert.alert('Success', 'Audit saved successfully.');
+      Alert.alert(res.offline ? 'Saved Offline' : 'Success', res.message || 'Audit saved successfully.');
       setModalVisible(false);
-      fetchAudits({refresh: true});
+      fetchAudits({ refresh: true });
     } catch (e) {
       Alert.alert('Submit Failed', e?.message || 'Failed to submit audit.');
     } finally {
@@ -586,11 +516,11 @@ export default function AfforestationAuditScreen({navigation, route}) {
 
       <ScrollView
         style={styles.container}
-        contentContainerStyle={{paddingBottom: 110}}
+        contentContainerStyle={{ paddingBottom: 110 }}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => fetchAudits({refresh: true})}
+            onRefresh={() => fetchAudits({ refresh: true })}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
@@ -609,7 +539,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
 
             {perSpeciesMetrics.map(row => (
               <View key={`snap-${row.species_id}`} style={styles.row}>
-                <View style={{flex: 1}}>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle} numberOfLines={1}>
                     {row.name || `Species ${row.species_id}`}
                   </Text>
@@ -650,7 +580,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
             <Text style={styles.emptyText}>Tap + to create first audit for this record.</Text>
           </View>
         ) : (
-          <View style={{paddingHorizontal: 20}}>
+          <View style={{ paddingHorizontal: 20 }}>
             {audits.map((a, idx) => {
               const k = String(a?.id ?? `${a?.dateOfAudit || 'na'}_${a?.drNo || 'dr'}_${idx}`);
               const dateLabel = a?.dateOfAudit ? new Date(a.dateOfAudit).toLocaleString() : '—';
@@ -666,8 +596,8 @@ export default function AfforestationAuditScreen({navigation, route}) {
 
               return (
                 <View key={k} style={styles.auditCard}>
-                  <View style={{flexDirection: 'row', justifyContent: 'space-between', gap: 10}}>
-                    <View style={{flex: 1}}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10 }}>
+                    <View style={{ flex: 1 }}>
                       <Text style={styles.auditTitle} numberOfLines={1}>
                         {a?.drNo ? `DR: ${a.drNo}` : `Audit #${idx + 1}`}
                       </Text>
@@ -676,8 +606,8 @@ export default function AfforestationAuditScreen({navigation, route}) {
                       </Text>
                     </View>
 
-                    <View style={[styles.pill, {backgroundColor: 'rgba(5,150,105,0.12)'}]}>
-                      <Text style={[styles.pillText, {color: COLORS.primary}]}>
+                    <View style={[styles.pill, { backgroundColor: 'rgba(5,150,105,0.12)' }]}>
+                      <Text style={[styles.pillText, { color: COLORS.primary }]}>
                         Success: {totalSuccess}
                       </Text>
                     </View>
@@ -712,7 +642,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
           </TouchableWithoutFeedback>
 
           <View style={styles.modalContainer}>
-            <View style={[styles.modalContent, {maxHeight: height * 0.35}]}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.35 }]}>
               <View style={styles.modalHeader}>
                 <View style={styles.modalTitleRow}>
                   <Ionicons name="image-outline" size={24} color={COLORS.primary} />
@@ -726,7 +656,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{padding: 20, gap: 12}}>
+              <View style={{ padding: 20, gap: 12 }}>
                 <TouchableOpacity style={styles.primaryBtn} onPress={takePhotoFromCamera} activeOpacity={0.8}>
                   <Ionicons name="camera-outline" size={20} color="#fff" />
                   <Text style={styles.primaryBtnText}>Take Photo</Text>
@@ -738,10 +668,10 @@ export default function AfforestationAuditScreen({navigation, route}) {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={{paddingVertical: 10, borderRadius: 14, alignItems: 'center'}}
+                  style={{ paddingVertical: 10, borderRadius: 14, alignItems: 'center' }}
                   onPress={() => setImagePickerModal(false)}
                   activeOpacity={0.8}>
-                  <Text style={{color: COLORS.textLight, fontWeight: '800'}}>Cancel</Text>
+                  <Text style={{ color: COLORS.textLight, fontWeight: '800' }}>Cancel</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -761,7 +691,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
             style={styles.editModalContainer}>
             <View style={styles.editModalContent}>
               <View style={styles.editModalHeader}>
-                <View style={{flex: 1}}>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.editModalTitle}>Create Afforestation Audit</Text>
                   <Text style={styles.editModalSubtitle} numberOfLines={2}>
                     Planted counts auto-filled. Enter success counts to calculate %.
@@ -810,7 +740,7 @@ export default function AfforestationAuditScreen({navigation, route}) {
 
                   {perSpeciesMetrics.map(row => (
                     <View key={`succ-${row.species_id}`} style={styles.speciesBox}>
-                      <View style={{flex: 1}}>
+                      <View style={{ flex: 1 }}>
                         <Text style={styles.speciesName} numberOfLines={1}>
                           {row.name || `Species ${row.species_id}`}
                         </Text>
@@ -930,10 +860,10 @@ export default function AfforestationAuditScreen({navigation, route}) {
 
 /** ---------- UI Helpers ---------- */
 
-function FormRowLite({label, value, onChangeText, placeholder, keyboardType, multiline}) {
+function FormRowLite({ label, value, onChangeText, placeholder, keyboardType, multiline }) {
   return (
-    <View style={{marginBottom: 14}}>
-      <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight, marginBottom: 8}}>
+    <View style={{ marginBottom: 14 }}>
+      <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textLight, marginBottom: 8 }}>
         {label}
       </Text>
       <TextInput
@@ -960,7 +890,7 @@ function FormRowLite({label, value, onChangeText, placeholder, keyboardType, mul
   );
 }
 
-function ToggleLite({label, value, onChange}) {
+function ToggleLite({ label, value, onChange }) {
   return (
     <TouchableOpacity
       activeOpacity={0.8}
@@ -977,7 +907,7 @@ function ToggleLite({label, value, onChange}) {
         paddingVertical: 14,
         marginBottom: 12,
       }}>
-      <Text style={{fontSize: 14, fontWeight: '800', color: COLORS.text}}>{label}</Text>
+      <Text style={{ fontSize: 14, fontWeight: '800', color: COLORS.text }}>{label}</Text>
       <View
         style={{
           width: 56,
@@ -987,13 +917,13 @@ function ToggleLite({label, value, onChange}) {
           padding: 4,
           alignItems: value ? 'flex-end' : 'flex-start',
         }}>
-        <View style={{width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff'}} />
+        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff' }} />
       </View>
     </TouchableOpacity>
   );
 }
 
-function UploadBox({title, subtitle, count, onPress}) {
+function UploadBox({ title, subtitle, count, onPress }) {
   return (
     <TouchableOpacity
       activeOpacity={0.85}
@@ -1010,9 +940,9 @@ function UploadBox({title, subtitle, count, onPress}) {
         gap: 12,
       }}>
       <Ionicons name="cloud-upload-outline" size={24} color={COLORS.primary} />
-      <View style={{flex: 1}}>
-        <Text style={{fontSize: 15, fontWeight: '900', color: COLORS.primary}}>{title}</Text>
-        <Text style={{fontSize: 12, fontWeight: '700', color: COLORS.textLight}}>{subtitle}</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontSize: 15, fontWeight: '900', color: COLORS.primary }}>{title}</Text>
+        <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.textLight }}>{subtitle}</Text>
       </View>
       <View
         style={{
@@ -1021,7 +951,7 @@ function UploadBox({title, subtitle, count, onPress}) {
           paddingVertical: 6,
           borderRadius: 999,
         }}>
-        <Text style={{fontWeight: '900', color: COLORS.primary}}>{count || 0}</Text>
+        <Text style={{ fontWeight: '900', color: COLORS.primary }}>{count || 0}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -1029,8 +959,8 @@ function UploadBox({title, subtitle, count, onPress}) {
 
 /** ---------- Styles ---------- */
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
 
   header: {
     backgroundColor: COLORS.primary,
@@ -1040,7 +970,7 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
   },
-  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18},
+  headerContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18 },
   backButton: {
     width: 44,
     height: 44,
@@ -1050,9 +980,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 18, fontWeight: '900', color: '#fff'},
-  headerSub: {marginTop: 6, fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.9)'},
+  headerContent: { flex: 1 },
+  headerTitle: { fontSize: 18, fontWeight: '900', color: '#fff' },
+  headerSub: { marginTop: 6, fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.9)' },
   headerAction: {
     width: 44,
     height: 44,
@@ -1071,21 +1001,21 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     padding: 16,
   },
-  cardTitle: {fontSize: 15, fontWeight: '900', color: COLORS.text, marginBottom: 12},
-  row: {flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10},
-  rowTitle: {fontSize: 14, fontWeight: '900', color: COLORS.text},
-  rowSub: {marginTop: 3, fontSize: 12, fontWeight: '700', color: COLORS.textLight},
+  cardTitle: { fontSize: 15, fontWeight: '900', color: COLORS.text, marginBottom: 12 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  rowTitle: { fontSize: 14, fontWeight: '900', color: COLORS.text },
+  rowSub: { marginTop: 3, fontSize: 12, fontWeight: '700', color: COLORS.textLight },
   pill: {
     backgroundColor: 'rgba(31,41,55,0.06)',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
   },
-  pillText: {fontSize: 12, fontWeight: '900', color: COLORS.text},
-  divider: {height: 1, backgroundColor: COLORS.border, marginTop: 8},
-  totalRow: {flexDirection: 'row', justifyContent: 'space-between', marginTop: 12},
-  totalLabel: {fontSize: 13, fontWeight: '900', color: COLORS.text},
-  totalValue: {fontSize: 13, fontWeight: '900', color: COLORS.primary},
+  pillText: { fontSize: 12, fontWeight: '900', color: COLORS.text },
+  divider: { height: 1, backgroundColor: COLORS.border, marginTop: 8 },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
+  totalLabel: { fontSize: 13, fontWeight: '900', color: COLORS.text },
+  totalValue: { fontSize: 13, fontWeight: '900', color: COLORS.primary },
 
   sectionHeader: {
     marginTop: 18,
@@ -1094,8 +1024,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-end',
   },
-  sectionTitle: {fontSize: 16, fontWeight: '900', color: COLORS.text},
-  sectionSub: {fontSize: 12, fontWeight: '800', color: COLORS.textLight},
+  sectionTitle: { fontSize: 16, fontWeight: '900', color: COLORS.text },
+  sectionSub: { fontSize: 12, fontWeight: '800', color: COLORS.textLight },
 
   loadingBox: {
     backgroundColor: '#fff',
@@ -1107,7 +1037,7 @@ const styles = StyleSheet.create({
     padding: 30,
     alignItems: 'center',
   },
-  loadingText: {marginTop: 10, fontSize: 13, fontWeight: '800', color: COLORS.textLight},
+  loadingText: { marginTop: 10, fontSize: 13, fontWeight: '800', color: COLORS.textLight },
 
   emptyBox: {
     backgroundColor: '#fff',
@@ -1120,8 +1050,8 @@ const styles = StyleSheet.create({
     padding: 30,
     alignItems: 'center',
   },
-  emptyTitle: {marginTop: 10, fontSize: 16, fontWeight: '900', color: COLORS.text},
-  emptyText: {marginTop: 6, fontSize: 12, fontWeight: '700', color: COLORS.textLight, textAlign: 'center'},
+  emptyTitle: { marginTop: 10, fontSize: 16, fontWeight: '900', color: COLORS.text },
+  emptyText: { marginTop: 6, fontSize: 12, fontWeight: '700', color: COLORS.textLight, textAlign: 'center' },
 
   auditCard: {
     backgroundColor: '#fff',
@@ -1131,13 +1061,13 @@ const styles = StyleSheet.create({
     padding: 14,
     marginTop: 12,
   },
-  auditTitle: {fontSize: 14, fontWeight: '900', color: COLORS.text},
-  auditSub: {marginTop: 4, fontSize: 12, fontWeight: '700', color: COLORS.textLight},
-  auditNote: {marginTop: 8, fontSize: 12, fontWeight: '700', color: COLORS.text},
+  auditTitle: { fontSize: 14, fontWeight: '900', color: COLORS.text },
+  auditSub: { marginTop: 4, fontSize: 12, fontWeight: '700', color: COLORS.textLight },
+  auditNote: { marginTop: 8, fontSize: 12, fontWeight: '700', color: COLORS.text },
 
-  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  modalBackdrop: {...StyleSheet.absoluteFillObject},
-  modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
+  modalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalContainer: { flex: 1, justifyContent: 'center', padding: 20 },
   modalContent: {
     backgroundColor: '#fff',
     borderRadius: 24,
@@ -1154,8 +1084,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 10},
-  modalTitle: {fontSize: 18, fontWeight: '900', color: COLORS.text},
+  modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  modalTitle: { fontSize: 18, fontWeight: '900', color: COLORS.text },
   modalClose: {
     width: 40,
     height: 40,
@@ -1174,7 +1104,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
   },
-  primaryBtnText: {color: '#fff', fontWeight: '900', fontSize: 15},
+  primaryBtnText: { color: '#fff', fontWeight: '900', fontSize: 15 },
   secondaryBtn: {
     backgroundColor: 'rgba(5,150,105,0.10)',
     borderWidth: 1,
@@ -1186,10 +1116,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
   },
-  secondaryBtnText: {color: COLORS.primary, fontWeight: '900', fontSize: 15},
+  secondaryBtnText: { color: COLORS.primary, fontWeight: '900', fontSize: 15 },
 
-  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
+  editModalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  editModalContainer: { flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20 },
   editModalContent: {
     flex: 1,
     backgroundColor: '#fff',
@@ -1209,8 +1139,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  editModalTitle: {fontSize: 20, fontWeight: '900', color: COLORS.text},
-  editModalSubtitle: {marginTop: 6, fontSize: 12, fontWeight: '700', color: COLORS.textLight},
+  editModalTitle: { fontSize: 20, fontWeight: '900', color: COLORS.text },
+  editModalSubtitle: { marginTop: 6, fontSize: 12, fontWeight: '700', color: COLORS.textLight },
   editModalClose: {
     width: 40,
     height: 40,
@@ -1219,7 +1149,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  editModalBody: {paddingHorizontal: 20, paddingTop: 16, paddingBottom: 16},
+  editModalBody: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 16 },
   editModalFooter: {
     flexDirection: 'row',
     gap: 12,
@@ -1229,8 +1159,8 @@ const styles = StyleSheet.create({
     borderTopColor: COLORS.border,
   },
 
-  formSection: {marginBottom: 18},
-  formSectionTitle: {fontSize: 14, fontWeight: '900', color: COLORS.text, marginBottom: 12},
+  formSection: { marginBottom: 18 },
+  formSectionTitle: { fontSize: 14, fontWeight: '900', color: COLORS.text, marginBottom: 12 },
 
   speciesBox: {
     flexDirection: 'row',
@@ -1243,8 +1173,8 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     backgroundColor: 'rgba(5,150,105,0.03)',
   },
-  speciesName: {fontSize: 14, fontWeight: '900', color: COLORS.text},
-  speciesMeta: {marginTop: 4, fontSize: 12, fontWeight: '700', color: COLORS.textLight},
+  speciesName: { fontSize: 14, fontWeight: '900', color: COLORS.text },
+  speciesMeta: { marginTop: 4, fontSize: 12, fontWeight: '700', color: COLORS.textLight },
   successInput: {
     width: 90,
     height: 44,
@@ -1277,7 +1207,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  footerButtonSecondaryText: {fontSize: 15, fontWeight: '900', color: COLORS.text},
+  footerButtonSecondaryText: { fontSize: 15, fontWeight: '900', color: COLORS.text },
   footerButtonPrimary: {
     flex: 2,
     backgroundColor: COLORS.primary,
@@ -1288,5 +1218,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
   },
-  footerButtonPrimaryText: {fontSize: 15, fontWeight: '900', color: '#fff'},
+  footerButtonPrimaryText: { fontSize: 15, fontWeight: '900', color: '#fff' },
 });

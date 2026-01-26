@@ -5,7 +5,7 @@
 // ✅ Supports location (auto + manual) + pictures upload to AWS bucket
 // ✅ disposalId is optional (null allowed) as per curl
 
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -27,9 +27,10 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
-import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import { apiService } from '../services/ApiService';
 
-const {height} = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 const COLORS = {
   primary: '#059669',
@@ -63,16 +64,16 @@ const formatLatLng = (lat, lng) => `${Number(lat).toFixed(6)}, ${Number(lng).toF
 
 const parseLatLng = str => {
   const s = String(str || '').trim();
-  if (!s) return {lat: null, lng: null};
+  if (!s) return { lat: null, lng: null };
   const parts = s
     .split(/,|\s+/)
     .map(p => p.trim())
     .filter(Boolean);
-  if (parts.length < 2) return {lat: null, lng: null};
+  if (parts.length < 2) return { lat: null, lng: null };
   const lat = Number(parts[0]);
   const lng = Number(parts[1]);
-  if (Number.isNaN(lat) || Number.isNaN(lng)) return {lat: null, lng: null};
-  return {lat, lng};
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return { lat: null, lng: null };
+  return { lat, lng };
 };
 
 const toFormFile = asset => {
@@ -82,10 +83,10 @@ const toFormFile = asset => {
     asset?.fileName ||
     `polecrop_superdari_${Date.now()}${asset?.type?.includes('png') ? '.png' : '.jpg'}`;
   const type = asset?.type || 'image/jpeg';
-  return {uri, name, type};
+  return { uri, name, type };
 };
 
-export default function PoleCropSuperdariScreen({navigation, route}) {
+export default function PoleCropSuperdariScreen({ navigation, route }) {
   const poleCrop = route?.params?.poleCrop;
   const poleCropId = useMemo(() => poleCrop?.id ?? null, [poleCrop]);
 
@@ -150,7 +151,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
     lastPickAtRef.current = now;
 
     launchImageLibrary(
-      {mediaType: 'photo', quality: 0.85, selectionLimit: 0},
+      { mediaType: 'photo', quality: 0.85, selectionLimit: 0 },
       res => {
         if (res?.didCancel) return;
         if (res?.errorCode) {
@@ -185,7 +186,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
     }
 
     launchCamera(
-      {mediaType: 'photo', quality: 0.85, saveToPhotos: false, cameraType: 'back'},
+      { mediaType: 'photo', quality: 0.85, saveToPhotos: false, cameraType: 'back' },
       res => {
         if (res?.didCancel) return;
         if (res?.errorCode) {
@@ -199,47 +200,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
 
   const clearImages = () => setPickedAssets([]);
 
-  const uploadImagesIfAny = async () => {
-    if (!pickedAssets.length) return [];
-
-    setUploading(true);
-    try {
-      const form = new FormData();
-      pickedAssets.forEach(a => {
-        const f = toFormFile(a);
-        if (f) form.append('files', f);
-      });
-
-      form.append('uploadPath', BUCKET_UPLOAD_PATH);
-      form.append('isMulti', BUCKET_IS_MULTI);
-      form.append('fileName', BUCKET_FILE_NAME);
-
-      const res = await fetch(BUCKET_UPLOAD_URL, {method: 'POST', body: form});
-      const json = await res.json().catch(() => null);
-
-      if (!res.ok || !json?.status) {
-        const msg = json?.message || json?.error || `upload failed (${res.status})`;
-        throw new Error(msg);
-      }
-
-      const data = Array.isArray(json?.data) ? json.data : [];
-      const urls = [];
-
-      data.forEach(item => {
-        const img = item?.availableSizes?.image;
-        if (img) urls.push(img);
-
-        const arr = Array.isArray(item?.url) ? item.url : [];
-        arr.forEach(u => {
-          if (u && !urls.includes(u)) urls.push(u);
-        });
-      });
-
-      return urls;
-    } finally {
-      setUploading(false);
-    }
-  };
+  // Manual upload removed - handled by ApiService
 
   /* ===================== LOCATION PERMISSION + GPS ===================== */
   const openSettingsSafe = useCallback(() => {
@@ -252,9 +213,9 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
     if (Platform.OS === 'ios') {
       try {
         Geolocation.requestAuthorization?.('whenInUse');
-        return {ok: true, blocked: false};
+        return { ok: true, blocked: false };
       } catch (e) {
-        return {ok: false, blocked: false};
+        return { ok: false, blocked: false };
       }
     }
 
@@ -275,9 +236,9 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
         fine === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
         coarse === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
 
-      return {ok, blocked};
+      return { ok, blocked };
     } catch (e) {
-      return {ok: false, blocked: false};
+      return { ok: false, blocked: false };
     }
   }, []);
 
@@ -296,10 +257,10 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
           : 'Location permission is required to fetch GPS coordinates.',
         perm.blocked
           ? [
-              {text: 'Cancel', style: 'cancel'},
-              {text: 'Open Settings', onPress: openSettingsSafe},
-            ]
-          : [{text: 'OK'}],
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: openSettingsSafe },
+          ]
+          : [{ text: 'OK' }],
       );
       return;
     }
@@ -308,7 +269,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
 
     Geolocation.getCurrentPosition(
       pos => {
-        const {latitude, longitude} = pos.coords;
+        const { latitude, longitude } = pos.coords;
         const nextAuto = formatLatLng(latitude, longitude);
         setAutoGps(nextAuto);
 
@@ -327,7 +288,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
         setGpsLoading(false);
         Alert.alert('Location Error', err?.message || 'Unable to fetch location.');
       },
-      {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
     );
   }, [ensureLocationPermission, openSettingsSafe]);
 
@@ -379,7 +340,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
     // GPS: optional but recommended; if provided must parse
     const finalGps = resolveFinalGps();
     if (String(finalGps).trim()) {
-      const {lat, lng} = parseLatLng(finalGps);
+      const { lat, lng } = parseLatLng(finalGps);
       if (lat == null || lng == null) {
         Alert.alert('Invalid', 'Manual GPS must be like "31.3333, 74.4444".');
         return false;
@@ -389,20 +350,25 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
     return true;
   };
 
-  /* ===================== SUBMIT ===================== */
+  // ====== SUBMIT ======
   const submit = async () => {
     if (!validate()) return;
 
     setSaving(true);
     try {
-      const token = await getToken();
-      if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
+      // Prepare attachments
+      const attachments = pickedAssets.map(a => ({
+        uri: a.uri,
+        type: a.type || 'image/jpeg',
+        name: a.fileName,
+        uploadUrl: BUCKET_UPLOAD_URL,
+        uploadPath: BUCKET_UPLOAD_PATH,
+        targetFieldInBody: 'pictures'
+      }));
 
-      const pictureUrls = await uploadImagesIfAny();
-
-      const {lat: autoLat, lng: autoLng} = parseLatLng(autoGps);
+      const { lat: autoLat, lng: autoLng } = parseLatLng(autoGps);
       const finalGps = resolveFinalGps();
-      const {lat: manualLat, lng: manualLng} = parseLatLng(finalGps);
+      const { lat: manualLat, lng: manualLng } = parseLatLng(finalGps);
 
       const body = {
         poleCropId: Number(poleCropId),
@@ -419,25 +385,16 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
         manual_lat: manualLat,
         manual_long: manualLng,
 
-        pictures: pictureUrls, // curl shows array of URLs
+        pictures: [], // ApiService will fill this
       };
 
-      const res = await fetch(SUPERDARI_URL, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
-        body: JSON.stringify(body),
-      });
+      const res = await apiService.post(SUPERDARI_URL, body, { attachments });
 
-      const json = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const msg = json?.message || json?.error || `API Error (${res.status})`;
-        throw new Error(msg);
-      }
-
-      Alert.alert('Success', 'Pole crop superdari submitted successfully.', [
-        {text: 'OK', onPress: () => navigation.goBack()},
-      ]);
+      Alert.alert(
+        res.offline ? 'Saved Offline' : 'Success',
+        res.message || 'Pole crop superdari submitted successfully.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
     } catch (e) {
       Alert.alert('Error', e?.message || 'Failed to submit superdari');
     } finally {
@@ -454,7 +411,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
-        <View style={{flex: 1}}>
+        <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Pole Crop Superdari</Text>
           <Text style={styles.headerSub}>
             PoleCrop ID: {String(poleCropId ?? '—')} | RDS: {String(poleCrop?.rds_from ?? '—')} -{' '}
@@ -464,7 +421,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
       </View>
 
       <KeyboardAvoidingView
-        style={{flex: 1}}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
           {/* Superdar */}
@@ -492,7 +449,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
                 onChangeText={setCnicNo}
                 placeholder="35201-9876543-2"
               />
-              <View style={{flex: 1}} />
+              <View style={{ flex: 1 }} />
             </Row>
 
             <Field
@@ -590,10 +547,10 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
                   {pickedAssets.length} image(s) selected. Upload Path: {BUCKET_UPLOAD_PATH}
                 </Text>
 
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 12}}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
                   {pickedAssets.map((a, i) => (
                     <View key={a?.uri || i} style={styles.thumbWrap}>
-                      <Image source={{uri: a?.uri}} style={styles.thumb} />
+                      <Image source={{ uri: a?.uri }} style={styles.thumb} />
                     </View>
                   ))}
                 </ScrollView>
@@ -606,7 +563,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
           </Card>
 
           {/* Submit */}
-          <View style={{height: 14}} />
+          <View style={{ height: 14 }} />
 
           <TouchableOpacity
             style={[styles.submitBtn, (saving || uploading) && styles.submitBtnDisabled]}
@@ -628,7 +585,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
             )}
           </TouchableOpacity>
 
-          <View style={{height: 26}} />
+          <View style={{ height: 26 }} />
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -637,7 +594,7 @@ export default function PoleCropSuperdariScreen({navigation, route}) {
 
 /* ===================== SMALL UI COMPONENTS ===================== */
 
-function Card({title, children}) {
+function Card({ title, children }) {
   return (
     <View style={styles.card}>
       <View style={styles.cardHead}>
@@ -648,7 +605,7 @@ function Card({title, children}) {
   );
 }
 
-function Row({children}) {
+function Row({ children }) {
   return <View style={styles.row}>{children}</View>;
 }
 
@@ -676,7 +633,7 @@ function Field({
   );
 }
 
-function SwitchRow({label, value, onValueChange}) {
+function SwitchRow({ label, value, onValueChange }) {
   return (
     <View style={styles.switchRow}>
       <Text style={styles.switchLabel}>{label}</Text>
@@ -688,7 +645,7 @@ function SwitchRow({label, value, onValueChange}) {
 /* ===================== STYLES ===================== */
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.bg},
+  screen: { flex: 1, backgroundColor: COLORS.bg },
 
   header: {
     backgroundColor: COLORS.primary,
@@ -702,7 +659,7 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 22,
     elevation: 8,
     shadowColor: COLORS.primaryDark,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
     shadowRadius: 10,
   },
@@ -714,10 +671,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {color: '#fff', fontSize: 20, fontWeight: '900'},
-  headerSub: {color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700', marginTop: 4},
+  headerTitle: { color: '#fff', fontSize: 20, fontWeight: '900' },
+  headerSub: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700', marginTop: 4 },
 
-  body: {padding: 16, paddingBottom: 28},
+  body: { padding: 16, paddingBottom: 28 },
 
   card: {
     backgroundColor: COLORS.card,
@@ -734,12 +691,12 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     backgroundColor: 'rgba(5,150,105,0.06)',
   },
-  cardTitle: {fontSize: 13, fontWeight: '900', color: COLORS.text},
-  cardBody: {padding: 14},
+  cardTitle: { fontSize: 13, fontWeight: '900', color: COLORS.text },
+  cardBody: { padding: 14 },
 
-  row: {flexDirection: 'row', gap: 12},
-  field: {flex: 1, marginBottom: 12},
-  label: {fontSize: 12, fontWeight: '800', color: COLORS.text, marginBottom: 6},
+  row: { flexDirection: 'row', gap: 12 },
+  field: { flex: 1, marginBottom: 12 },
+  label: { fontSize: 12, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
   input: {
     height: 46,
     borderWidth: 1,
@@ -751,9 +708,9 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     backgroundColor: '#fff',
   },
-  inputMulti: {height: 88, paddingTop: 12, textAlignVertical: 'top'},
+  inputMulti: { height: 88, paddingTop: 12, textAlignVertical: 'top' },
 
-  muted: {fontSize: 12, fontWeight: '700', color: COLORS.textLight, marginTop: 6},
+  muted: { fontSize: 12, fontWeight: '700', color: COLORS.textLight, marginTop: 6 },
 
   switchRow: {
     flexDirection: 'row',
@@ -762,10 +719,10 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     marginBottom: 10,
   },
-  switchLabel: {fontSize: 13, fontWeight: '900', color: COLORS.text},
+  switchLabel: { fontSize: 13, fontWeight: '900', color: COLORS.text },
 
-  gpsHead: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10},
-  gpsTitle: {fontSize: 13, fontWeight: '900', color: COLORS.text},
+  gpsHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  gpsTitle: { fontSize: 13, fontWeight: '900', color: COLORS.text },
   gpsBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -775,7 +732,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  gpsBtnText: {color: '#fff', fontSize: 12, fontWeight: '900'},
+  gpsBtnText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   gpsBox: {
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -790,8 +747,8 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8},
-  gpsLoadingText: {fontSize: 12, fontWeight: '800', color: COLORS.textLight},
+  gpsLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  gpsLoadingText: { fontSize: 12, fontWeight: '800', color: COLORS.textLight },
 
   settingsBtn: {
     marginTop: 6,
@@ -806,9 +763,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  settingsBtnText: {fontSize: 12, fontWeight: '900', color: COLORS.primary},
+  settingsBtnText: { fontSize: 12, fontWeight: '900', color: COLORS.primary },
 
-  picActions: {flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap'},
+  picActions: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   picBtn: {
     backgroundColor: COLORS.secondary,
     borderRadius: 12,
@@ -827,7 +784,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  picBtnText: {color: '#fff', fontSize: 12, fontWeight: '900'},
+  picBtnText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   picClear: {
     backgroundColor: 'rgba(220,38,38,0.06)',
     borderWidth: 1,
@@ -839,8 +796,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  picClearText: {color: COLORS.danger, fontSize: 12, fontWeight: '900'},
-  picHint: {marginTop: 10, fontSize: 12, fontWeight: '800', color: COLORS.textLight},
+  picClearText: { color: COLORS.danger, fontSize: 12, fontWeight: '900' },
+  picHint: { marginTop: 10, fontSize: 12, fontWeight: '800', color: COLORS.textLight },
 
   thumbWrap: {
     width: 92,
@@ -852,7 +809,7 @@ const styles = StyleSheet.create({
     marginRight: 10,
     backgroundColor: '#fff',
   },
-  thumb: {width: '100%', height: '100%'},
+  thumb: { width: '100%', height: '100%' },
 
   submitBtn: {
     backgroundColor: COLORS.primary,
@@ -861,7 +818,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submitBtnDisabled: {opacity: 0.7},
-  submitRow: {flexDirection: 'row', alignItems: 'center', gap: 10},
-  submitText: {color: '#fff', fontSize: 14, fontWeight: '900'},
+  submitBtnDisabled: { opacity: 0.7 },
+  submitRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  submitText: { color: '#fff', fontSize: 14, fontWeight: '900' },
 });

@@ -1,5 +1,5 @@
 
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -21,7 +21,8 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import colors from '../theme/colors';
-import {useAuth} from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
+import { apiService } from '../services/ApiService';
 
 const COLORS = {
   primary: '#059669',
@@ -40,7 +41,7 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
-const {width} = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 const STORAGE_TOKEN = 'AUTH_TOKEN';
 const API_BASE = 'http://be.lte.gisforestry.com';
@@ -55,9 +56,9 @@ const VERIFY_URL = `${API_BASE}/enum/verification`;
 
 // Modules (same)
 const MODULES = [
-  {key: 'enumeration', label: 'Enumeration'},
-  {key: 'polecrop', label: 'PoleCrop'},
-  {key: 'afforestation', label: 'Afforestation'},
+  { key: 'enumeration', label: 'Enumeration' },
+  { key: 'polecrop', label: 'PoleCrop' },
+  { key: 'afforestation', label: 'Afforestation' },
 ];
 
 // Roles allowed
@@ -131,8 +132,8 @@ function tableNameForModule(moduleKey) {
   return '';
 }
 
-export default function VerificationScreen({navigation}) {
-  const {user} = useAuth();
+export default function VerificationScreen({ navigation }) {
+  const { user } = useAuth();
   const role = useMemo(() => normalizeLower(user?.role), [user]);
   const canUse = OFFICER_ROLES.includes(role);
 
@@ -183,7 +184,7 @@ export default function VerificationScreen({navigation}) {
     if (!token) throw new Error('Token missing, please login again.');
 
     const res = await fetch(url, {
-      headers: {Authorization: `Bearer ${token}`},
+      headers: { Authorization: `Bearer ${token}` },
     });
 
     const json = await safeJson(res);
@@ -195,9 +196,18 @@ export default function VerificationScreen({navigation}) {
   /* ------------------------------
      FETCH LISTS
   ------------------------------*/
-  const fetchEnumeration = useCallback(async () => apiGet(ENUM_LIST_URL), []);
-  const fetchAfforestation = useCallback(async () => apiGet(AFF_LIST_URL), []);
-  const fetchPoleCrop = useCallback(async () => apiGet(POLECROP_LIST_URL), []);
+  const fetchEnumeration = useCallback(async () => {
+    const json = await apiService.get(ENUM_LIST_URL);
+    return Array.isArray(json?.data) ? json.data : [];
+  }, []);
+  const fetchAfforestation = useCallback(async () => {
+    const json = await apiService.get(AFF_LIST_URL);
+    return Array.isArray(json?.data) ? json.data : [];
+  }, []);
+  const fetchPoleCrop = useCallback(async () => {
+    const json = await apiService.get(POLECROP_LIST_URL);
+    return Array.isArray(json?.data) ? json.data : [];
+  }, []);
 
   const fetchForModule = useCallback(
     async moduleKey => {
@@ -210,10 +220,10 @@ export default function VerificationScreen({navigation}) {
         else if (moduleKey === 'afforestation') list = await fetchAfforestation();
         else if (moduleKey === 'polecrop') list = await fetchPoleCrop();
 
-        setDataByModule(prev => ({...prev, [moduleKey]: Array.isArray(list) ? list : []}));
+        setDataByModule(prev => ({ ...prev, [moduleKey]: Array.isArray(list) ? list : [] }));
       } catch (e) {
         Alert.alert('Error', e?.message || 'Unable to load list');
-        setDataByModule(prev => ({...prev, [moduleKey]: []}));
+        setDataByModule(prev => ({ ...prev, [moduleKey]: [] }));
       } finally {
         setLoading(false);
       }
@@ -237,29 +247,16 @@ export default function VerificationScreen({navigation}) {
   /* ------------------------------
      VERIFY ACTION
   ------------------------------*/
-  const postVerification = useCallback(async ({module, tableId, action, remarks}) => {
-    const token = await getToken();
-    if (!token) throw new Error('Token missing, please login again.');
-
+  const postVerification = useCallback(async ({ module, tableId, action, remarks }) => {
     const table_name = tableNameForModule(module);
     if (!table_name) throw new Error('This module verification is not configured yet.');
 
-    const res = await fetch(VERIFY_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        table_name,
-        table_id: Number(tableId),
-        action, // "Verified" | "Rejected"
-        remarks: remarks || '',
-      }),
+    const json = await apiService.post(VERIFY_URL, {
+      table_name,
+      table_id: Number(tableId),
+      action, // "Verified" | "Rejected"
+      remarks: remarks || '',
     });
-
-    const json = await safeJson(res);
-    if (!res.ok) throw new Error(json?.message || `Verification failed (HTTP ${res.status})`);
     return json;
   }, []);
 
@@ -296,7 +293,7 @@ export default function VerificationScreen({navigation}) {
     }
 
     try {
-      setDetailsModal(s => ({...s, submitting: true}));
+      setDetailsModal(s => ({ ...s, submitting: true }));
       await postVerification({
         module: detailsModal.module,
         tableId: item.id,
@@ -308,7 +305,7 @@ export default function VerificationScreen({navigation}) {
       fetchForModule(activeModule);
     } catch (e) {
       Alert.alert('Error', e?.message || 'Approve failed');
-      setDetailsModal(s => ({...s, submitting: false}));
+      setDetailsModal(s => ({ ...s, submitting: false }));
     }
   }, [detailsModal, postVerification, closeDetails, fetchForModule, activeModule]);
 
@@ -329,7 +326,7 @@ export default function VerificationScreen({navigation}) {
     }
 
     try {
-      setDetailsModal(s => ({...s, submitting: true}));
+      setDetailsModal(s => ({ ...s, submitting: true }));
       await postVerification({
         module: detailsModal.module,
         tableId: item.id,
@@ -341,7 +338,7 @@ export default function VerificationScreen({navigation}) {
       fetchForModule(activeModule);
     } catch (e) {
       Alert.alert('Error', e?.message || 'Reject failed');
-      setDetailsModal(s => ({...s, submitting: false}));
+      setDetailsModal(s => ({ ...s, submitting: false }));
     }
   }, [detailsModal, postVerification, closeDetails, fetchForModule, activeModule]);
 
@@ -369,7 +366,7 @@ export default function VerificationScreen({navigation}) {
       else pending += 1;
     }
 
-    return {all, pending, verified, rejected};
+    return { all, pending, verified, rejected };
   }, [rawList]);
 
   const activeFilterCount = useMemo(() => {
@@ -404,7 +401,7 @@ export default function VerificationScreen({navigation}) {
     return 'time';
   }, []);
 
-  const TabPill = ({title, icon, isActive, onPress}) => (
+  const TabPill = ({ title, icon, isActive, onPress }) => (
     <TouchableOpacity
       activeOpacity={0.85}
       onPress={onPress}
@@ -413,13 +410,13 @@ export default function VerificationScreen({navigation}) {
         name={icon}
         size={14}
         color={isActive ? '#fff' : COLORS.primaryDark}
-        style={{marginRight: 6}}
+        style={{ marginRight: 6 }}
       />
       <Text style={[styles.tabPillText, isActive && styles.tabPillTextActive]}>{title}</Text>
     </TouchableOpacity>
   );
 
-  const renderItem = ({item}) => {
+  const renderItem = ({ item }) => {
     const id = getDisplayId(item);
     const site = getSiteName(item);
     const action = getLatestAction(item); // null/Rejected/Verified...
@@ -436,7 +433,7 @@ export default function VerificationScreen({navigation}) {
       <TouchableOpacity activeOpacity={0.85} onPress={() => openDetails(activeModule, item)}>
         <View style={styles.card}>
           <View style={styles.cardTop}>
-            <View style={{flex: 1}}>
+            <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>#{id} • {site}</Text>
               <Text style={styles.cardSub}>RD (km): {String(rd)}</Text>
               <Text style={styles.cardSub}>Condition: {condition}</Text>
@@ -445,10 +442,10 @@ export default function VerificationScreen({navigation}) {
             <View
               style={[
                 styles.statusPillMini,
-                {borderColor: `${badgeC}55`, backgroundColor: `${badgeC}15`},
+                { borderColor: `${badgeC}55`, backgroundColor: `${badgeC}15` },
               ]}>
               <Ionicons name={badgeI} size={14} color={badgeC} />
-              <Text style={[styles.statusPillMiniText, {color: badgeC}]}>
+              <Text style={[styles.statusPillMiniText, { color: badgeC }]}>
                 {String(badgeText).toUpperCase()}
               </Text>
             </View>
@@ -475,8 +472,8 @@ export default function VerificationScreen({navigation}) {
         <View style={styles.loadingContainer}>
           <View style={styles.loadingCard}>
             <Ionicons name="lock-closed" size={28} color={COLORS.textLight} />
-            <Text style={[styles.loadingText, {marginTop: 10}]}>Not allowed</Text>
-            <Text style={{marginTop: 6, color: COLORS.textLight, textAlign: 'center', fontWeight: '700'}}>
+            <Text style={[styles.loadingText, { marginTop: 10 }]}>Not allowed</Text>
+            <Text style={{ marginTop: 6, color: COLORS.textLight, textAlign: 'center', fontWeight: '700' }}>
               یہ screen صرف officers کے لیے ہے۔
             </Text>
           </View>
@@ -511,7 +508,7 @@ export default function VerificationScreen({navigation}) {
   };
 
   const resetFilters = () => {
-    setPendingFilters({module: activeModule, status: 'All'});
+    setPendingFilters({ module: activeModule, status: 'All' });
   };
 
   const clearAll = () => {
@@ -658,7 +655,7 @@ export default function VerificationScreen({navigation}) {
               data={filteredList}
               keyExtractor={(item, idx) => String(item?.id ?? idx)}
               renderItem={renderItem}
-              contentContainerStyle={{padding: 12, paddingBottom: 24}}
+              contentContainerStyle={{ padding: 12, paddingBottom: 24 }}
               refreshControl={
                 <RefreshControl
                   refreshing={refreshing}
@@ -716,7 +713,7 @@ export default function VerificationScreen({navigation}) {
                       <TouchableOpacity
                         key={m.key}
                         style={[styles.optPill, active && styles.optPillActive]}
-                        onPress={() => setPendingFilters(prev => ({...prev, module: m.key}))}
+                        onPress={() => setPendingFilters(prev => ({ ...prev, module: m.key }))}
                         activeOpacity={0.85}>
                         <Text style={[styles.optPillText, active && styles.optPillTextActive]}>
                           {m.label}
@@ -736,7 +733,7 @@ export default function VerificationScreen({navigation}) {
                       <TouchableOpacity
                         key={s}
                         style={[styles.optPill, active && styles.optPillActive]}
-                        onPress={() => setPendingFilters(prev => ({...prev, status: s}))}
+                        onPress={() => setPendingFilters(prev => ({ ...prev, status: s }))}
                         activeOpacity={0.85}>
                         <Text style={[styles.optPillText, active && styles.optPillTextActive]}>
                           {s}
@@ -772,8 +769,8 @@ export default function VerificationScreen({navigation}) {
                 Details • {detailsModal.module === 'enumeration'
                   ? 'Enumeration'
                   : detailsModal.module === 'afforestation'
-                  ? 'Afforestation'
-                  : 'PoleCrop'}
+                    ? 'Afforestation'
+                    : 'PoleCrop'}
               </Text>
               <TouchableOpacity onPress={closeDetails} disabled={detailsModal.submitting} activeOpacity={0.75}>
                 <Ionicons name="close" size={22} color={COLORS.text} />
@@ -781,11 +778,11 @@ export default function VerificationScreen({navigation}) {
             </View>
 
             {!detailsItem ? (
-              <View style={{padding: 16}}>
-                <Text style={{color: COLORS.textLight}}>No details</Text>
+              <View style={{ padding: 16 }}>
+                <Text style={{ color: COLORS.textLight }}>No details</Text>
               </View>
             ) : (
-              <ScrollView style={{maxHeight: 520}} contentContainerStyle={{paddingBottom: 10}}>
+              <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ paddingBottom: 10 }}>
                 {/* Basic Fields */}
                 <View style={styles.kvRow}>
                   <Text style={styles.kvKey}>ID</Text>
@@ -817,14 +814,14 @@ export default function VerificationScreen({navigation}) {
                 {!!detailsItem?.latestStatus?.remarks && (
                   <View style={styles.kvBlock}>
                     <Text style={styles.kvKey}>Latest Remarks</Text>
-                    <Text style={[styles.kvVal, {textAlign: 'left', maxWidth: '100%'}]}>
+                    <Text style={[styles.kvVal, { textAlign: 'left', maxWidth: '100%' }]}>
                       {String(detailsItem.latestStatus.remarks)}
                     </Text>
                   </View>
                 )}
 
                 {/* Images */}
-                <View style={{marginTop: 10}}>
+                <View style={{ marginTop: 10 }}>
                   <Text style={styles.sectionTitle}>Pictures</Text>
 
                   {detailsPics.length === 0 ? (
@@ -835,10 +832,10 @@ export default function VerificationScreen({navigation}) {
                       keyExtractor={(u, idx) => `${idx}-${u}`}
                       horizontal
                       showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={{gap: 10, paddingVertical: 8}}
-                      renderItem={({item: url}) => (
+                      contentContainerStyle={{ gap: 10, paddingVertical: 8 }}
+                      renderItem={({ item: url }) => (
                         <View style={styles.imageWrap}>
-                          <Image source={{uri: url}} style={styles.image} resizeMode="cover" />
+                          <Image source={{ uri: url }} style={styles.image} resizeMode="cover" />
                         </View>
                       )}
                     />
@@ -847,7 +844,7 @@ export default function VerificationScreen({navigation}) {
 
                 {/* Verification History */}
                 {Array.isArray(detailsItem?.verification) && detailsItem.verification.length > 0 && (
-                  <View style={{marginTop: 10}}>
+                  <View style={{ marginTop: 10 }}>
                     <Text style={styles.sectionTitle}>Verification History</Text>
                     {detailsItem.verification.slice(0, 5).map((v, idx) => (
                       <View key={idx} style={styles.historyRow}>
@@ -862,11 +859,11 @@ export default function VerificationScreen({navigation}) {
 
                 {/* Reject Mode input */}
                 {detailsModal.rejectMode && !detailsFinal && (
-                  <View style={{marginTop: 12}}>
+                  <View style={{ marginTop: 12 }}>
                     <Text style={styles.sectionTitle}>Rejection Remarks (Required)</Text>
                     <TextInput
                       value={detailsModal.remarks}
-                      onChangeText={t => setDetailsModal(s => ({...s, remarks: t}))}
+                      onChangeText={t => setDetailsModal(s => ({ ...s, remarks: t }))}
                       placeholder="Enter remarks…"
                       placeholderTextColor={COLORS.textLight}
                       style={styles.remarksInput}
@@ -890,7 +887,7 @@ export default function VerificationScreen({navigation}) {
             {/* Actions */}
             <View style={styles.detailsActions}>
               <TouchableOpacity
-                style={[styles.actionBtn, styles.approveBtn, detailsFinal && {opacity: 0.45}]}
+                style={[styles.actionBtn, styles.approveBtn, detailsFinal && { opacity: 0.45 }]}
                 onPress={approveFromDetails}
                 disabled={detailsModal.submitting || !detailsItem || detailsFinal}
                 activeOpacity={0.85}>
@@ -906,8 +903,8 @@ export default function VerificationScreen({navigation}) {
 
               {!detailsModal.rejectMode ? (
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.rejectBtn, detailsFinal && {opacity: 0.45}]}
-                  onPress={() => setDetailsModal(s => ({...s, rejectMode: true}))}
+                  style={[styles.actionBtn, styles.rejectBtn, detailsFinal && { opacity: 0.45 }]}
+                  onPress={() => setDetailsModal(s => ({ ...s, rejectMode: true }))}
                   disabled={detailsModal.submitting || !detailsItem || detailsFinal}
                   activeOpacity={0.85}>
                   <Ionicons name="close-circle" size={18} color="#fff" />
@@ -915,7 +912,7 @@ export default function VerificationScreen({navigation}) {
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.rejectBtn, detailsFinal && {opacity: 0.45}]}
+                  style={[styles.actionBtn, styles.rejectBtn, detailsFinal && { opacity: 0.45 }]}
                   onPress={rejectFromDetails}
                   disabled={detailsModal.submitting || !detailsItem || detailsFinal}
                   activeOpacity={0.85}>
@@ -933,7 +930,7 @@ export default function VerificationScreen({navigation}) {
 
             {detailsModal.rejectMode && !detailsFinal && (
               <TouchableOpacity
-                onPress={() => setDetailsModal(s => ({...s, rejectMode: false, remarks: ''}))}
+                onPress={() => setDetailsModal(s => ({ ...s, rejectMode: false, remarks: '' }))}
                 style={styles.rejectCancelLink}
                 disabled={detailsModal.submitting}
                 activeOpacity={0.85}>
@@ -949,7 +946,7 @@ export default function VerificationScreen({navigation}) {
 
 /* ===================== STYLES (Registers-like) ===================== */
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
+  screen: { flex: 1, backgroundColor: COLORS.background },
 
   header: {
     backgroundColor: COLORS.primary,
@@ -959,11 +956,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  headerContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   backButton: {
     width: 44,
     height: 44,
@@ -973,9 +970,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 20, fontWeight: '800', color: '#fff', marginBottom: 8, letterSpacing: 0.2},
-  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
+  headerContent: { flex: 1 },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: '#fff', marginBottom: 8, letterSpacing: 0.2 },
+  headerInfo: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -985,8 +982,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 4,
   },
-  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
-  siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3},
+  infoChipText: { fontSize: 12, fontWeight: '600', color: '#fff' },
+  siteId: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3 },
   headerIconBtn: {
     width: 46,
     height: 46,
@@ -1011,11 +1008,11 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: COLORS.primary,
   },
-  badgeText: {color: '#fff', fontSize: 11, fontWeight: '900'},
+  badgeText: { color: '#fff', fontSize: 11, fontWeight: '900' },
 
-  content: {flex: 1, paddingHorizontal: 20, paddingTop: 20},
+  content: { flex: 1, paddingHorizontal: 20, paddingTop: 20 },
 
-  searchContainer: {marginBottom: 16},
+  searchContainer: { marginBottom: 16 },
   searchCard: {
     backgroundColor: COLORS.card,
     borderRadius: 16,
@@ -1023,7 +1020,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -1044,7 +1041,7 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontWeight: '500',
   },
-  clearSearchBtn: {padding: 4},
+  clearSearchBtn: { padding: 4 },
 
   tabsContainer: {
     marginBottom: 12,
@@ -1054,12 +1051,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  tabBarContent: {alignItems: 'center', paddingRight: 4},
+  tabBarContent: { alignItems: 'center', paddingRight: 4 },
   tabPill: {
     height: 40,
     paddingHorizontal: 18,
@@ -1071,10 +1068,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: COLORS.card,
   },
-  tabPillIdle: {backgroundColor: COLORS.card, borderColor: COLORS.border},
-  tabPillActive: {backgroundColor: COLORS.primary, borderColor: COLORS.primary},
-  tabPillText: {fontSize: 13, fontWeight: '700', color: COLORS.primaryDark},
-  tabPillTextActive: {color: '#ffffff'},
+  tabPillIdle: { backgroundColor: COLORS.card, borderColor: COLORS.border },
+  tabPillActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  tabPillText: { fontSize: 13, fontWeight: '700', color: COLORS.primaryDark },
+  tabPillTextActive: { color: '#ffffff' },
 
   resultsHeader: {
     marginBottom: 12,
@@ -1083,8 +1080,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 4,
   },
-  resultsLeft: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  resultsText: {fontSize: 14, color: COLORS.primaryDark, fontWeight: '700'},
+  resultsLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  resultsText: { fontSize: 14, color: COLORS.primaryDark, fontWeight: '700' },
   clearBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1094,7 +1091,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  clearBtnText: {color: '#fff', fontWeight: '700', fontSize: 13},
+  clearBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
 
   listContainer: {
     flex: 1,
@@ -1104,7 +1101,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -1118,11 +1115,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  cardTop: {flexDirection: 'row', alignItems: 'flex-start', gap: 10},
-  cardTitle: {fontSize: 14, fontWeight: '800', color: COLORS.text},
-  cardSub: {marginTop: 2, fontSize: 12, color: COLORS.textLight},
-  remarkLine: {marginTop: 8, fontSize: 12, color: '#374151', fontWeight: '700'},
-  tapHint: {marginTop: 8, fontSize: 11, color: '#9ca3af', fontWeight: '800'},
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  cardTitle: { fontSize: 14, fontWeight: '800', color: COLORS.text },
+  cardSub: { marginTop: 2, fontSize: 12, color: COLORS.textLight },
+  remarkLine: { marginTop: 8, fontSize: 12, color: '#374151', fontWeight: '700' },
+  tapHint: { marginTop: 8, fontSize: 11, color: '#9ca3af', fontWeight: '800' },
 
   statusPillMini: {
     flexDirection: 'row',
@@ -1135,10 +1132,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 36,
   },
-  statusPillMiniText: {fontSize: 11, fontWeight: '900'},
+  statusPillMiniText: { fontSize: 11, fontWeight: '900' },
 
   // Loading / empty
-  loadingContainer: {flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background},
+  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background },
   loadingCard: {
     backgroundColor: COLORS.card,
     padding: 40,
@@ -1148,14 +1145,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
     shadowRadius: 12,
     elevation: 5,
   },
-  loadingText: {marginTop: 16, color: COLORS.primaryDark, fontSize: 16, fontWeight: '700'},
+  loadingText: { marginTop: 16, color: COLORS.primaryDark, fontSize: 16, fontWeight: '700' },
 
-  loadingContainerInline: {alignItems: 'center', justifyContent: 'center', paddingVertical: 30},
+  loadingContainerInline: { alignItems: 'center', justifyContent: 'center', paddingVertical: 30 },
   loadingCardInline: {
     backgroundColor: COLORS.card,
     padding: 24,
@@ -1165,9 +1162,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  loadingTextInline: {marginTop: 12, color: COLORS.primaryDark, fontSize: 14, fontWeight: '700'},
+  loadingTextInline: { marginTop: 12, color: COLORS.primaryDark, fontSize: 14, fontWeight: '700' },
 
-  emptyState: {alignItems: 'center', justifyContent: 'center', padding: 60, width: width - 40},
+  emptyState: { alignItems: 'center', justifyContent: 'center', padding: 60, width: width - 40 },
   emptyIconContainer: {
     width: 100,
     height: 100,
@@ -1179,7 +1176,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'rgba(5, 150, 105, 0.2)',
   },
-  emptyText: {fontSize: 18, fontWeight: '800', color: COLORS.primaryDark, marginBottom: 8},
+  emptyText: { fontSize: 18, fontWeight: '800', color: COLORS.primaryDark, marginBottom: 8 },
   emptySubtext: {
     fontSize: 14,
     color: COLORS.textLight,
@@ -1196,11 +1193,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(5, 150, 105, 0.2)',
   },
-  emptyActionText: {color: COLORS.primaryDark, fontWeight: '800', fontSize: 14},
+  emptyActionText: { color: COLORS.primaryDark, fontWeight: '800', fontSize: 14 },
 
   // Filter modal (Registers-like)
-  modalContainer: {flex: 1, justifyContent: 'flex-end'},
-  modalOverlay: {...StyleSheet.absoluteFillObject, backgroundColor: COLORS.overlay},
+  modalContainer: { flex: 1, justifyContent: 'flex-end' },
+  modalOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: COLORS.overlay },
   modalCard: {
     backgroundColor: COLORS.card,
     borderTopLeftRadius: 20,
@@ -1210,7 +1207,7 @@ const styles = StyleSheet.create({
     maxHeight: '85%',
     paddingBottom: Platform.OS === 'ios' ? 34 : 16,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: -4},
+    shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.15,
     shadowRadius: 20,
     elevation: 20,
@@ -1224,8 +1221,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  modalTitleContainer: {flexDirection: 'row', alignItems: 'center', gap: 10},
-  modalTitle: {fontSize: 18, fontWeight: '800', color: COLORS.text},
+  modalTitleContainer: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: COLORS.text },
   modalCloseBtn: {
     width: 40,
     height: 40,
@@ -1234,10 +1231,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalScrollContent: {paddingHorizontal: 20, paddingVertical: 16},
-  filterSection: {marginBottom: 20},
-  modalLabel: {fontSize: 13, fontWeight: '800', color: COLORS.text, marginBottom: 12, textTransform: 'uppercase'},
-  filterOptions: {paddingBottom: 8},
+  modalScrollContent: { paddingHorizontal: 20, paddingVertical: 16 },
+  filterSection: { marginBottom: 20 },
+  modalLabel: { fontSize: 13, fontWeight: '800', color: COLORS.text, marginBottom: 12, textTransform: 'uppercase' },
+  filterOptions: { paddingBottom: 8 },
   optPill: {
     paddingHorizontal: 18,
     paddingVertical: 10,
@@ -1247,10 +1244,10 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
     marginRight: 10,
   },
-  optPillActive: {backgroundColor: COLORS.primary, borderColor: COLORS.primary},
-  optPillText: {fontSize: 13, fontWeight: '700', color: COLORS.text},
-  optPillTextActive: {color: '#fff'},
-  modalActionsRow: {flexDirection: 'row', gap: 12, marginTop: 16, marginBottom: 8},
+  optPillActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  optPillText: { fontSize: 13, fontWeight: '700', color: COLORS.text },
+  optPillTextActive: { color: '#fff' },
+  modalActionsRow: { flexDirection: 'row', gap: 12, marginTop: 16, marginBottom: 8 },
   modalResetBtn: {
     flex: 1,
     backgroundColor: 'rgba(5, 150, 105, 0.1)',
@@ -1263,7 +1260,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  modalResetText: {color: COLORS.primary, fontWeight: '800', fontSize: 15},
+  modalResetText: { color: COLORS.primary, fontWeight: '800', fontSize: 15 },
   modalApplyBtn: {
     flex: 2,
     backgroundColor: COLORS.primary,
@@ -1274,7 +1271,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
   },
-  modalApplyText: {color: '#fff', fontWeight: '900', fontSize: 15},
+  modalApplyText: { color: '#fff', fontWeight: '900', fontSize: 15 },
 
   // Details modal
   detailsOverlay: {
@@ -1293,8 +1290,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  detailsHeader: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
-  detailsTitle: {fontSize: 16, fontWeight: '900', color: COLORS.text},
+  detailsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  detailsTitle: { fontSize: 16, fontWeight: '900', color: COLORS.text },
 
   kvRow: {
     marginTop: 10,
@@ -1311,11 +1308,11 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f3f4f6',
     paddingBottom: 8,
   },
-  kvKey: {fontSize: 12, fontWeight: '900', color: COLORS.textLight},
-  kvVal: {fontSize: 12, fontWeight: '800', color: COLORS.text, maxWidth: '70%', textAlign: 'right'},
+  kvKey: { fontSize: 12, fontWeight: '900', color: COLORS.textLight },
+  kvVal: { fontSize: 12, fontWeight: '800', color: COLORS.text, maxWidth: '70%', textAlign: 'right' },
 
-  sectionTitle: {marginTop: 8, fontSize: 13, fontWeight: '900', color: COLORS.text},
-  emptyTextSmall: {marginTop: 6, fontSize: 12, color: COLORS.textLight, fontWeight: '700'},
+  sectionTitle: { marginTop: 8, fontSize: 13, fontWeight: '900', color: COLORS.text },
+  emptyTextSmall: { marginTop: 6, fontSize: 12, color: COLORS.textLight, fontWeight: '700' },
 
   imageWrap: {
     width: 160,
@@ -1326,7 +1323,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#f3f4f6',
   },
-  image: {width: '100%', height: '100%'},
+  image: { width: '100%', height: '100%' },
   historyRow: {
     marginTop: 8,
     padding: 10,
@@ -1335,8 +1332,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  historyLine: {fontSize: 12, fontWeight: '800', color: COLORS.text},
-  historyRemark: {marginTop: 4, fontSize: 12, color: '#374151', fontWeight: '700'},
+  historyLine: { fontSize: 12, fontWeight: '800', color: COLORS.text },
+  historyRemark: { marginTop: 4, fontSize: 12, color: '#374151', fontWeight: '700' },
 
   remarksInput: {
     marginTop: 8,
@@ -1361,9 +1358,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  finalInfoText: {fontSize: 12, color: COLORS.textLight, fontWeight: '800', flex: 1},
+  finalInfoText: { fontSize: 12, color: COLORS.textLight, fontWeight: '800', flex: 1 },
 
-  detailsActions: {flexDirection: 'row', gap: 10, marginTop: 12},
+  detailsActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   actionBtn: {
     flex: 1,
     paddingVertical: 12,
@@ -1373,12 +1370,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
   },
-  approveBtn: {backgroundColor: COLORS.primary},
-  rejectBtn: {backgroundColor: COLORS.danger},
-  actionBtnText: {color: '#fff', fontWeight: '900', fontSize: 13},
+  approveBtn: { backgroundColor: COLORS.primary },
+  rejectBtn: { backgroundColor: COLORS.danger },
+  actionBtnText: { color: '#fff', fontWeight: '900', fontSize: 13 },
 
-  rejectCancelLink: {marginTop: 10, alignItems: 'center', paddingVertical: 6},
-  rejectCancelText: {fontSize: 12, fontWeight: '900', color: COLORS.text},
+  rejectCancelLink: { marginTop: 10, alignItems: 'center', paddingVertical: 6 },
+  rejectCancelText: { fontSize: 12, fontWeight: '900', color: COLORS.text },
 });
 
 

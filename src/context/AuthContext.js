@@ -1,6 +1,7 @@
 // /context/AuthContext.js
-import React, {createContext, useContext, useEffect, useMemo, useState} from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { apiService } from '../services/ApiService';
 
 const AuthContext = createContext(null);
 
@@ -46,7 +47,7 @@ function pickFirst(obj, keys = []) {
  * - flat: user.zoneId + user.zoneName
  * - string: user.zone = "Lahore"
  */
-function pickEntity(user, {objKeys = [], idKeys = [], nameKeys = []}) {
+function pickEntity(user, { objKeys = [], idKeys = [], nameKeys = [] }) {
   const objVal = pickFirst(user, objKeys);
   const flatId = pickFirst(user, idKeys);
   const flatName = pickFirst(user, nameKeys);
@@ -54,7 +55,7 @@ function pickEntity(user, {objKeys = [], idKeys = [], nameKeys = []}) {
   const id = pickId(objVal) || (flatId ? String(flatId) : null);
   const name = pickName(objVal) || (flatName ? String(flatName) : '');
 
-  return {id, name};
+  return { id, name };
 }
 
 function normalizeRole(roleRaw) {
@@ -155,51 +156,74 @@ function normalizeUserProfile(rawUser) {
 }
 
 /* ===================== API ===================== */
+/* ===================== API ===================== */
 async function postLogin(email, password) {
-  const res = await fetch(`${API_BASE}/auth`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email, password}),
-  });
+  // Use ApiService.post WITHOUT generic offline options since login is critical
+  // and we probably don't want to queue it if offline (or maybe we do? No, login needs immediate feedback).
+  // But ApiService.post usually checks connectivity.
+  // Actually, ApiService.post will queue if offline IF we pass headers that might imply it, but by default it tries to fetch.
+  // If it's offline (res.offline), it returns {offline: true} which might not have the token.
+  // Login must be online.
 
-  const json = await safeJson(res);
+  // ApiService handles token internally for *most* calls, but login *gets* the token.
 
-  if (!res.ok) {
-    throw new Error(json?.message || `Login failed (HTTP ${res.status})`);
+  // We can just use the underlying fetch logic or just use apiService.
+  // ApiService expects token to be in AsyncStorage for auth headers.
+  // Login doesn't need auth headers.
+
+  // Let's use apiService.post but handle the case where it might be offline.
+  // But wait, ApiService appends Authorization header if a token exists. Login endpoint shouldn't care if extra header is there or not.
+  // However, ApiService logic:
+  // const token = await AsyncStorage.getItem('AUTH_TOKEN');
+  // if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await apiService.post(`${API_BASE}/auth`, { email, password });
+
+  if (res.offline) {
+    throw new Error('No internet connection. Login requires internet.');
   }
 
-  if (json?.statusCode !== 200 || !json?.data?.token) {
-    throw new Error(json?.message || 'Token not received from server');
+  // apiService.post returns json directly (res.json()). The original code checks for statusCode 200.
+  // The original code: json.data.token
+
+  if (res.statusCode !== 200 || !res.data?.token) {
+    throw new Error(res.message || 'Token not received from server');
   }
 
   // data: { token, user, expiresIn }
-  return json.data;
+  return res.data;
 }
 
 async function getMe(token) {
-  const res = await fetch(`${API_BASE}/auth`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  // ApiService.get automatically adds token from storage if present.
+  // But here we are passing token explicitly because we just got it and it might not be in storage yet (or we want to verify THIS token).
+  // Wait, `getMe` is called right after `postLogin` in `login` function.
+  // At that point, `AsyncStorage` has NOT definitely been updated with the NEW token (because `login` function saves it later).
+  // So ApiService will use the OLD token if any.
+  // We should pass headers explicitly to override.
 
-  const json = await safeJson(res);
+  // Actually, ApiService: "headers" argument merges with default headers.
+  // If we pass Authorization, it should overwrite the one ApiService adds.
 
-  if (!res.ok) {
-    throw new Error(json?.message || `Profile fetch failed (HTTP ${res.status})`);
+  const headers = {
+    Authorization: `Bearer ${token}`
+  };
+
+  const res = await apiService.get(`${API_BASE}/auth`, headers);
+
+  if (res.offline) {
+    throw new Error('Offline check failed.');
   }
 
-  if (json?.statusCode !== 200 || !json?.data) {
-    throw new Error(json?.message || 'Invalid profile response');
+  if (res.statusCode !== 200 || !res.data) {
+    throw new Error(res.message || 'Invalid profile response');
   }
 
-  return json.data;
+  return res.data;
 }
 
 /* ===================== CONTEXT ===================== */
-export function AuthProvider({children}) {
+export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
   const [booting, setBooting] = useState(true);
@@ -243,7 +267,7 @@ export function AuthProvider({children}) {
    * 2) GET  /auth (Bearer token) -> profile
    * 3) Save token + normalized profile (remember flag)
    */
-  const login = async ({email, password, remember = true}) => {
+  const login = async ({ email, password, remember = true }) => {
     // Step 1: POST auth
     const loginData = await postLogin(email, password);
     const t = loginData.token;
@@ -272,7 +296,7 @@ export function AuthProvider({children}) {
       await AsyncStorage.multiRemove([STORAGE_TOKEN, STORAGE_USER]);
     }
 
-    return {token: t, user: profile};
+    return { token: t, user: profile };
   };
 
   const logout = async () => {

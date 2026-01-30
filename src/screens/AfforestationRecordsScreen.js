@@ -134,6 +134,8 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
   // additional API field
   const [replenishmentDetails, setReplenishmentDetails] = useState('');
+  const [pageNo, setPageNo] = useState('');
+  const [registerNo, setRegisterNo] = useState('');
 
   // species master + selection + per-species counts
   const [speciesRows, setSpeciesRows] = useState([]);
@@ -853,7 +855,10 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     setSchemeType('');
     setProjectName('');
     setNonDevScheme('');
+    setNonDevScheme('');
     setReplenishmentDetails('');
+    setPageNo('');
+    setRegisterNo('');
 
     setSpeciesIds([]);
     setSpeciesCounts({});
@@ -918,6 +923,8 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     setProjectName(record.projectName || '');
     setNonDevScheme(record.nonDevScheme || '');
     setReplenishmentDetails(record?.replenishment_details || '');
+    setPageNo(record?.page_no || record?.pageNo || '');
+    setRegisterNo(record?.register_no || record?.registerNo || '');
 
     // ✅ keep existing server pictures so PATCH doesn't wipe them
     const serverPics = Array.isArray(record?.pictures) ? record.pictures : [];
@@ -1307,6 +1314,8 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       project_name:
         schemeType === 'Development' ? String(projectName || '') : String(nonDevScheme || ''),
       replenishment_details: String(replenishmentDetails || ''),
+      page_no: String(pageNo || '').trim(),
+      register_no: String(registerNo || '').trim(),
 
       auto_lat: autoLat,
       auto_long: autoLng,
@@ -2370,6 +2379,27 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                     onChangeText={setReplenishmentDetails}
                     placeholder="e.g. Initial plantation completed"
                   />
+
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Page No (Optional)"
+                        value={pageNo}
+                        onChangeText={setPageNo}
+                        placeholder="PG-123"
+                        icon="document-text"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Register No (Optional)"
+                        value={registerNo}
+                        onChangeText={setRegisterNo}
+                        placeholder="REG-456"
+                        icon="book"
+                      />
+                    </View>
+                  </View>
                 </View>
 
                 <View style={styles.formSection}>

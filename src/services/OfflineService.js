@@ -11,7 +11,7 @@ const generateId = () => Math.random().toString(36).substr(2, 9);
 class OfflineService {
     constructor() {
         this.queue = [];
-        this.isOnline = false;
+        this.isOnline = true;
         this.subscribers = [];
 
         // Initialize NetInfo listener

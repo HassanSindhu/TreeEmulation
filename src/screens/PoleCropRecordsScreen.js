@@ -95,6 +95,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
   // Form fields
   const [rdsFrom, setRdsFrom] = useState('');
   const [rdsTo, setRdsTo] = useState('');
+  const [pageNo, setPageNo] = useState('');
+  const [registerNo, setRegisterNo] = useState('');
 
   // Species master + selection (multi) + counts
   const [speciesRows, setSpeciesRows] = useState([]);
@@ -1003,7 +1005,10 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     editRecordRef.current = null;
 
     setRdsFrom('');
+    setRdsFrom('');
     setRdsTo('');
+    setPageNo('');
+    setRegisterNo('');
 
     setSpeciesIds([]);
     setSpeciesCounts({});
@@ -1089,6 +1094,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       record?.rds_from !== null && record?.rds_from !== undefined ? String(record.rds_from) : '',
     );
     setRdsTo(record?.rds_to !== null && record?.rds_to !== undefined ? String(record.rds_to) : '');
+    setPageNo(record?.page_no || record?.pageNo || '');
+    setRegisterNo(record?.register_no || record?.registerNo || '');
 
     const serverPics = Array.isArray(record?.pictures) ? record.pictures : [];
     setExistingPictures(serverPics);
@@ -1288,6 +1295,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
       rds_from: Number(String(rdsFrom).replace(/[^\d.]+/g, '')) || 0,
       rds_to: Number(String(rdsTo).replace(/[^\d.]+/g, '')) || 0,
+      page_no: String(pageNo || '').trim(),
+      register_no: String(registerNo || '').trim(),
 
       auto_lat: autoLat,
       auto_long: autoLng,
@@ -1952,6 +1961,27 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                     required
                     placeholder="e.g. 15"
                   />
+
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Page No (Optional)"
+                        value={pageNo}
+                        onChangeText={setPageNo}
+                        placeholder="PG-123"
+                        icon="document-text"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Register No (Optional)"
+                        value={registerNo}
+                        onChangeText={setRegisterNo}
+                        placeholder="REG-456"
+                        icon="book"
+                      />
+                    </View>
+                  </View>
 
                   <View style={styles.fieldWithButton}>
                     <Text style={styles.fieldLabel}>Species Selection</Text>

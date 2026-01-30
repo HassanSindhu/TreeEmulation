@@ -1,5 +1,5 @@
 // /screens/LoginScreen.js
-import React, {useState} from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -13,12 +13,12 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import {BlurView} from '@react-native-community/blur';
-import {useAuth} from '../context/AuthContext';
+
+import { useAuth } from '../context/AuthContext';
 import colors from '../theme/colors';
 
-export default function LoginScreen({navigation}) {
-  const {login} = useAuth();
+export default function LoginScreen({ navigation }) {
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [secure, setSecure] = useState(true);
@@ -48,7 +48,7 @@ export default function LoginScreen({navigation}) {
 
     try {
       setLoading(true);
-      await login({email, password, remember});
+      await login({ email, password, remember });
     } catch (e) {
       setErr(e?.message || 'Invalid credentials');
     } finally {
@@ -62,7 +62,7 @@ export default function LoginScreen({navigation}) {
 
   return (
     <KeyboardAvoidingView
-      style={{flex: 1}}
+      style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
       <ImageBackground
@@ -83,11 +83,11 @@ export default function LoginScreen({navigation}) {
           </View>
 
           <View style={styles.glassOuter}>
-            <BlurView
-              style={StyleSheet.absoluteFill}
-              blurType="light"
-              blurAmount={18}
-              reducedTransparencyFallbackColor="rgba(255,255,255,0.35)"
+            <View
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: 'rgba(255, 255, 255, 0.85)' },
+              ]}
             />
 
             <View style={styles.glassInner}>
@@ -169,7 +169,7 @@ export default function LoginScreen({navigation}) {
                   onPress={() => setRemember(r => !r)}
                   accessibilityLabel="Remember me checkbox"
                   accessibilityRole="checkbox"
-                  accessibilityState={{checked: remember}}>
+                  accessibilityState={{ checked: remember }}>
                   <View style={[styles.checkbox, remember && styles.checkboxChecked]}>
                     {remember && <Ionicons name="checkmark" size={14} color="#fff" />}
                   </View>
@@ -189,7 +189,7 @@ export default function LoginScreen({navigation}) {
                 disabled={loading}
                 accessibilityLabel={loading ? "Signing in" : "Sign in button"}
                 accessibilityRole="button"
-                accessibilityState={{disabled: loading}}>
+                accessibilityState={{ disabled: loading }}>
                 {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
@@ -199,7 +199,7 @@ export default function LoginScreen({navigation}) {
                       name="arrow-forward"
                       size={18}
                       color="#fff"
-                      style={{marginLeft: 8}}
+                      style={{ marginLeft: 8 }}
                     />
                   </>
                 )}
@@ -236,7 +236,7 @@ export default function LoginScreen({navigation}) {
 }
 
 const styles = StyleSheet.create({
-  bg: {flex: 1},
+  bg: { flex: 1 },
   bgOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.40)',
@@ -259,7 +259,7 @@ const styles = StyleSheet.create({
     height: 130,
     marginBottom: 10,
     shadowColor: '#ffffff',
-    shadowOffset: {width: 0, height: 0},
+    shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.9,
     shadowRadius: 12,
     elevation: 10,
@@ -337,7 +337,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     height: 52,
   },
-  inputIcon: {marginRight: 8},
+  inputIcon: { marginRight: 8 },
   input: {
     flex: 1,
     color: '#111827',

@@ -366,75 +366,7 @@ export default function DashboardScreen() {
           </View>
         </View>
 
-        {/* Quick Actions (keep as-is) */}
-        <View style={styles.actionsSection}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="flash" size={20} color={COLORS.text} />
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
-          </View>
 
-          <View style={styles.actionsGrid}>
-            <QuickAction
-              icon="add-circle-outline"
-              title="New Entry"
-              color={COLORS.primary}
-              onPress={() => console.log('New Entry')}
-            />
-            <QuickAction
-              icon="search-outline"
-              title="Search"
-              color={COLORS.secondary}
-              onPress={() => console.log('Search')}
-            />
-            <QuickAction
-              icon="document-text-outline"
-              title="Reports"
-              color={COLORS.info}
-              onPress={() => console.log('Reports')}
-            />
-            <QuickAction
-              icon="map-outline"
-              title="Map View"
-              color={COLORS.warning}
-              onPress={() => console.log('Map View')}
-            />
-          </View>
-        </View>
-
-        {/* Recent Activity (keep as-is) */}
-        <View style={styles.activitySection}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="time-outline" size={20} color={COLORS.text} />
-            <Text style={styles.sectionTitle}>Recent Activity</Text>
-          </View>
-
-          <View style={styles.activityCard}>
-            <ActivityItem
-              icon="checkmark-circle"
-              title="Tree #1234 verified"
-              time="2 hours ago"
-              color={COLORS.success}
-            />
-            <ActivityItem
-              icon="document-text"
-              title="Disposal record added"
-              time="4 hours ago"
-              color={COLORS.secondary}
-            />
-            <ActivityItem
-              icon="person-add"
-              title="New user registered"
-              time="1 day ago"
-              color={COLORS.info}
-            />
-            <ActivityItem
-              icon="warning"
-              title="3 pending records"
-              time="2 days ago"
-              color={COLORS.warning}
-            />
-          </View>
-        </View>
       </ScrollView>
 
       {/* Picker Modals */}
@@ -500,30 +432,9 @@ function SelectField({ label, value, placeholder, onPress, disabled }) {
   );
 }
 
-function QuickAction({ icon, title, color, onPress }) {
-  return (
-    <TouchableOpacity style={styles.quickAction} onPress={onPress} activeOpacity={0.7}>
-      <View style={[styles.actionIcon, { backgroundColor: `${color}15` }]}>
-        <Ionicons name={icon} size={24} color={color} />
-      </View>
-      <Text style={styles.actionTitle}>{title}</Text>
-    </TouchableOpacity>
-  );
-}
 
-function ActivityItem({ icon, title, time, color }) {
-  return (
-    <View style={styles.activityItem}>
-      <View style={[styles.activityIcon, { backgroundColor: `${color}15` }]}>
-        <Ionicons name={icon} size={16} color={color} />
-      </View>
-      <View style={styles.activityContent}>
-        <Text style={styles.activityTitle}>{title}</Text>
-        <Text style={styles.activityTime}>{time}</Text>
-      </View>
-    </View>
-  );
-}
+
+
 
 function PickerModal({ visible, title, data, onClose, onSelect }) {
   return (
@@ -760,8 +671,7 @@ const styles = StyleSheet.create({
 
   // Sections
   statsSection: { marginHorizontal: 20, marginTop: 12 },
-  actionsSection: { marginHorizontal: 20, marginTop: 12 },
-  activitySection: { marginHorizontal: 20, marginTop: 12 },
+
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
 
@@ -870,63 +780,7 @@ const styles = StyleSheet.create({
   roleLabel: { width: 90, fontSize: 12, color: COLORS.text, fontWeight: '700' },
   roleValue: { width: 42, textAlign: 'right', fontSize: 12, color: COLORS.text, fontWeight: '800' },
 
-  // Quick Actions
-  actionsGrid: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
-  quickAction: {
-    flex: 1,
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 16,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  actionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  actionTitle: { fontSize: 12, fontWeight: '600', color: COLORS.text, textAlign: 'center' },
 
-  // Activity
-  activityCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  activityItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(31, 41, 55, 0.05)',
-  },
-  activityIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  activityContent: { flex: 1 },
-  activityTitle: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 2 },
-  activityTime: { fontSize: 12, color: COLORS.textLight },
 
   // Modal
   modalOverlay: {

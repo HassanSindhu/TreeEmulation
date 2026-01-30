@@ -130,6 +130,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
   // Extra fields (snake_case align)
   const [takkiNumber, setTakkiNumber] = useState('');
+  const [pageNo, setPageNo] = useState('');
+  const [registerNo, setRegisterNo] = useState('');
   const [additionalRemarks, setAdditionalRemarks] = useState('');
   const [isDisputed, setIsDisputed] = useState(false);
   const [side, setSide] = useState(''); // "Left" | "Right"
@@ -893,6 +895,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     setConditionId(null);
 
     setTakkiNumber('');
+    setPageNo('');
+    setRegisterNo('');
     setAdditionalRemarks('');
     setIsDisputed(false);
 
@@ -934,7 +938,11 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       row?.takki ??
       row?.takkiNum ??
       '';
+    '';
     setTakkiNumber(t != null ? String(t) : '');
+
+    setPageNo(row?.page_no || row?.pageNo || '');
+    setRegisterNo(row?.register_no || row?.registerNo || '');
 
     setAdditionalRemarks(
       String(row?.additional_remarks ?? row?.additionalRemarks ?? '').trim(),
@@ -1100,6 +1108,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       additional_remarks: String(additionalRemarks || '').trim(),
       ...(takkiNumberValue != null ? { takki_number: takkiNumberValue } : {}),
       ...(finalSide ? { side: finalSide } : {}),
+      page_no: String(pageNo || '').trim(),
+      register_no: String(registerNo || '').trim(),
 
       pictures: [], // filled by ApiService attachments or preserved existing
       auto_lat: autoLat,
@@ -1835,6 +1845,22 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                   onChangeText={setTakkiNumber}
                   placeholder="e.g. 123"
                   keyboardType="numeric"
+                />
+
+                <FormRow
+                  label="Page No (Optional)"
+                  value={pageNo}
+                  onChangeText={setPageNo}
+                  placeholder="PG-123"
+                  icon="document-text"
+                />
+
+                <FormRow
+                  label="Register No (Optional)"
+                  value={registerNo}
+                  onChangeText={setRegisterNo}
+                  placeholder="REG-456"
+                  icon="book"
                 />
 
                 {showSideDropdown && (

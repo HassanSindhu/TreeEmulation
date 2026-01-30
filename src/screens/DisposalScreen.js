@@ -1,4 +1,4 @@
-import React, {useEffect, useState, useMemo} from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,11 +16,12 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
-import {Calendar} from 'react-native-calendars';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import { Calendar } from 'react-native-calendars';
 
 import FormRow from '../components/FormRow';
-import {DropdownRow} from '../components/SelectRows';
+import { DropdownRow } from '../components/SelectRows';
+import { apiService } from '../services/ApiService';
 
 // Theme Colors
 const COLORS = {
@@ -45,8 +46,8 @@ const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 const API_BASE = 'http://be.lte.gisforestry.com';
 const DISPOSAL_POST_URL = `${API_BASE}/enum/disposal`;
 
-export default function DisposalScreen({navigation, route}) {
-  const {treeId, enumeration} = route.params || {};
+export default function DisposalScreen({ navigation, route }) {
+  const { treeId, enumeration } = route.params || {};
 
   const [record, setRecord] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -163,7 +164,7 @@ export default function DisposalScreen({navigation, route}) {
       'Permission Required',
       'Camera permission is required to take photos. Please allow it from Settings.',
       [
-        {text: 'Cancel', style: 'cancel'},
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Open Settings',
           onPress: async () => {
@@ -187,7 +188,7 @@ export default function DisposalScreen({navigation, route}) {
 
   const pickFromGallery = setter => {
     launchImageLibrary(
-      {mediaType: 'photo', selectionLimit: 0, quality: 0.7},
+      { mediaType: 'photo', selectionLimit: 0, quality: 0.7 },
       res => {
         if (res?.didCancel) return;
         if (res?.errorCode) {
@@ -260,9 +261,9 @@ export default function DisposalScreen({navigation, route}) {
 
   const showImageSourcePicker = setter => {
     Alert.alert('Add Photo', 'Choose a source', [
-      {text: 'Camera', onPress: () => takeFromCamera(setter)},
-      {text: 'Gallery', onPress: () => pickFromGallery(setter)},
-      {text: 'Cancel', style: 'cancel'},
+      { text: 'Camera', onPress: () => takeFromCamera(setter) },
+      { text: 'Gallery', onPress: () => pickFromGallery(setter) },
+      { text: 'Cancel', style: 'cancel' },
     ]);
   };
 
@@ -345,7 +346,7 @@ export default function DisposalScreen({navigation, route}) {
       (auctionImages?.length || 0);
 
     const n = Math.max(1, Math.min(count || 2, 10));
-    return Array.from({length: n}).map((_, i) => `https://example.com/pic${i + 1}.jpg`);
+    return Array.from({ length: n }).map((_, i) => `https://example.com/pic${i + 1}.jpg`);
   };
 
   const enumerationIdResolved = useMemo(() => {
@@ -355,27 +356,6 @@ export default function DisposalScreen({navigation, route}) {
     );
   }, [enumeration?.id, record?.enumerationId]);
 
-  const submitToApi = async body => {
-    const token = await getAuthToken();
-    if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
-
-    const res = await fetch(DISPOSAL_POST_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const json = await res.json().catch(() => null);
-    if (!res.ok) {
-      const msg = json?.message || json?.error || `API Error (${res.status})`;
-      throw new Error(msg);
-    }
-    return json;
-  };
-
   const saveDisposal = async () => {
     if (!treeId) return Alert.alert('Error', 'treeId missing.');
     if (!enumerationIdResolved) return Alert.alert('Error', 'enumerationId missing.');
@@ -384,6 +364,24 @@ export default function DisposalScreen({navigation, route}) {
     if (firChecked && !firNo.trim()) {
       return Alert.alert('Missing', 'FIR No is required (because FIR is selected).');
     }
+
+    // Aggregate all images for upload
+    const allImages = [
+      ...drImages.map((uri, i) => ({ uri, type: 'dr', idx: i })),
+      ...firImages.map((uri, i) => ({ uri, type: 'fir', idx: i })),
+      ...peedaImages.map((uri, i) => ({ uri, type: 'peeda', idx: i })),
+      ...auctionImages.map((uri, i) => ({ uri, type: 'auction', idx: i })),
+    ];
+
+    const attachments = allImages.map(img => ({
+      uri: img.uri,
+      type: 'image/jpeg',
+      name: `disp_${treeId}_${img.type}_${img.idx}_${Date.now()}.jpg`,
+      uploadUrl: 'https://app.eco.gisforestry.com/aws-bucket/tree-enum', // Using standard upload URL
+      uploadPath: 'Disposal', // Or specific path
+      targetFieldInBody: 'pictures',
+      storeBasename: false
+    }));
 
     // Build payload exactly per your curl
     const apiBody = {
@@ -415,63 +413,40 @@ export default function DisposalScreen({navigation, route}) {
       auction_authority_designation: auctionChecked ? (auctionAuthorityDesignation?.trim() || '') : null,
       auction_remarks: auctionChecked ? (auctionRemarks?.trim() || '') : null,
 
-      pictures: buildPicturesPayload(),
+      pictures: [], // Filled by ApiService
     };
 
     try {
       setSaving(true);
 
       // 1) POST to API
-      await submitToApi(apiBody);
+      const json = await apiService.post(DISPOSAL_POST_URL, apiBody, { attachments });
 
-      // 2) Save locally for your UI status
-      const json = await AsyncStorage.getItem(STORAGE_KEY);
-      const arr = json ? JSON.parse(json) : [];
+      // 2) Save locally for your UI status (Optional, but good for offline feel if strictly needed, otherwise skip)
+      // Replicating local save for consistency with original code
+      try {
+        const oldJson = await AsyncStorage.getItem(STORAGE_KEY);
+        const arr = oldJson ? JSON.parse(oldJson) : [];
+        const updated = arr.map(r => {
+          if (String(r.id) !== String(treeId)) return r;
+          return {
+            ...r,
+            disposal: {
+              // UI fields (keep yours)
+              drNo, drDate, fcNo, dpcNo, dpcDate,
+              firChecked, firNo: firChecked ? firNo : '', firDate: firChecked ? firDate : '',
+              remarks,
+              peedaChecked, peedaAct: peedaChecked ? peedaAct : '', authorityOO: peedaChecked ? authorityOO : '', officerName: peedaChecked ? officerName : '', officerDesignation: peedaChecked ? officerDesignation : '', actDate: peedaChecked ? actDate : '', actRemarks: peedaChecked ? actRemarks : '',
+              auctionChecked, auctionDetails: auctionChecked ? auctionDetails : '', auctionDate: auctionChecked ? auctionDate : '', auctionAuthorityName: auctionChecked ? auctionAuthorityName : '', auctionAuthorityDesignation: auctionChecked ? auctionAuthorityDesignation : '', auctionRemarks: auctionChecked ? auctionRemarks : '',
+              drImages, firImages, peedaImages, auctionImages,
+              savedAt: new Date().toISOString(),
+            },
+          };
+        });
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      } catch (innerE) { }
 
-      const updated = arr.map(r => {
-        if (String(r.id) !== String(treeId)) return r;
-        return {
-          ...r,
-          disposal: {
-            // UI fields (keep yours)
-            drNo,
-            drDate,
-            fcNo,
-            dpcNo,
-            dpcDate,
-            firChecked,
-            firNo: firChecked ? firNo : '',
-            firDate: firChecked ? firDate : '',
-            remarks,
-
-            peedaChecked,
-            peedaAct: peedaChecked ? peedaAct : '',
-            authorityOO: peedaChecked ? authorityOO : '',
-            officerName: peedaChecked ? officerName : '',
-            officerDesignation: peedaChecked ? officerDesignation : '',
-            actDate: peedaChecked ? actDate : '',
-            actRemarks: peedaChecked ? actRemarks : '',
-
-            auctionChecked,
-            auctionDetails: auctionChecked ? auctionDetails : '',
-            auctionDate: auctionChecked ? auctionDate : '',
-            auctionAuthorityName: auctionChecked ? auctionAuthorityName : '',
-            auctionAuthorityDesignation: auctionChecked ? auctionAuthorityDesignation : '',
-            auctionRemarks: auctionChecked ? auctionRemarks : '',
-
-            drImages,
-            firImages,
-            peedaImages,
-            auctionImages,
-
-            savedAt: new Date().toISOString(),
-          },
-        };
-      });
-
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-
-      Alert.alert('Success', 'Disposal saved to server.');
+      Alert.alert(json.offline ? 'Saved Offline' : 'Success', json.message || 'Disposal saved to server.');
       navigation.goBack();
     } catch (e) {
       Alert.alert('Error', e?.message || 'Failed to save disposal.');
@@ -481,7 +456,7 @@ export default function DisposalScreen({navigation, route}) {
   };
 
   // Date Input Component
-  const DateInput = ({label, value, onPress, placeholder = 'Select date'}) => (
+  const DateInput = ({ label, value, onPress, placeholder = 'Select date' }) => (
     <View style={styles.dateInputContainer}>
       <Text style={styles.dateLabel}>{label}</Text>
       <TouchableOpacity style={styles.dateInput} onPress={onPress} activeOpacity={0.7}>
@@ -585,7 +560,7 @@ export default function DisposalScreen({navigation, route}) {
               style={styles.imagesContainer}>
               {drImages.map(uri => (
                 <View key={uri} style={styles.thumbWrap}>
-                  <Image source={{uri}} style={styles.thumb} />
+                  <Image source={{ uri }} style={styles.thumb} />
                   <TouchableOpacity
                     style={styles.thumbClose}
                     onPress={() => removeImage(setDrImages, uri)}
@@ -651,7 +626,7 @@ export default function DisposalScreen({navigation, route}) {
                   style={styles.imagesContainer}>
                   {firImages.map(uri => (
                     <View key={uri} style={styles.thumbWrap}>
-                      <Image source={{uri}} style={styles.thumb} />
+                      <Image source={{ uri }} style={styles.thumb} />
                       <TouchableOpacity
                         style={styles.thumbClose}
                         onPress={() => removeImage(setFirImages, uri)}
@@ -736,7 +711,7 @@ export default function DisposalScreen({navigation, route}) {
                   style={styles.imagesContainer}>
                   {peedaImages.map(uri => (
                     <View key={uri} style={styles.thumbWrap}>
-                      <Image source={{uri}} style={styles.thumb} />
+                      <Image source={{ uri }} style={styles.thumb} />
                       <TouchableOpacity
                         style={styles.thumbClose}
                         onPress={() => removeImage(setPeedaImages, uri)}
@@ -814,7 +789,7 @@ export default function DisposalScreen({navigation, route}) {
                   style={styles.imagesContainer}>
                   {auctionImages.map(uri => (
                     <View key={uri} style={styles.thumbWrap}>
-                      <Image source={{uri}} style={styles.thumb} />
+                      <Image source={{ uri }} style={styles.thumb} />
                       <TouchableOpacity
                         style={styles.thumbClose}
                         onPress={() => removeImage(setAuctionImages, uri)}
@@ -831,7 +806,7 @@ export default function DisposalScreen({navigation, route}) {
 
         {/* Save Button */}
         <TouchableOpacity
-          style={[styles.saveBtn, {opacity: saving ? 0.7 : 1}]}
+          style={[styles.saveBtn, { opacity: saving ? 0.7 : 1 }]}
           disabled={saving}
           onPress={saveDisposal}
           activeOpacity={0.7}>
@@ -927,7 +902,7 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
@@ -992,7 +967,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -1043,7 +1018,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -1153,7 +1128,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#fff',
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 2,
@@ -1184,7 +1159,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,

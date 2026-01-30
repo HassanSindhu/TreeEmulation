@@ -1,5 +1,5 @@
 // /screens/MatureTreeRecordsScreen.js
-import React, {useCallback, useMemo, useState, useEffect} from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -24,14 +24,17 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
 import NetInfo from '@react-native-community/netinfo';
-import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
-import {useFocusEffect} from '@react-navigation/native';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 
-import FormRow from '../components/FormRow';
-import {DropdownRow} from '../components/SelectRows';
+import { apiService } from '../services/ApiService';
+import { offlineService } from '../services/OfflineService';
 
-const {height} = Dimensions.get('window');
+import FormRow from '../components/FormRow';
+import { DropdownRow } from '../components/SelectRows';
+
+const { height } = Dimensions.get('window');
 
 const API_BASE = 'http://be.lte.gisforestry.com';
 
@@ -81,7 +84,7 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
-export default function MatureTreeRecordsScreen({navigation, route}) {
+export default function MatureTreeRecordsScreen({ navigation, route }) {
   const enumeration = route?.params?.enumeration;
 
   // ---------- STATE ----------
@@ -202,16 +205,16 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
   const parseLatLng = str => {
     const s = String(str || '').trim();
-    if (!s) return {lat: null, lng: null};
+    if (!s) return { lat: null, lng: null };
     const parts = s
       .split(/,|\s+/)
       .map(p => p.trim())
       .filter(Boolean);
-    if (parts.length < 2) return {lat: null, lng: null};
+    if (parts.length < 2) return { lat: null, lng: null };
     const lat = Number(parts[0]);
     const lng = Number(parts[1]);
-    if (Number.isNaN(lat) || Number.isNaN(lng)) return {lat: null, lng: null};
-    return {lat, lng};
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return { lat: null, lng: null };
+    return { lat, lng };
   };
 
   const safeJson = async res => {
@@ -229,14 +232,14 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       try {
         navigation.navigate(screenName, params);
         return;
-      } catch (e) {}
+      } catch (e) { }
 
       const parentNav = navigation.getParent?.();
       if (parentNav) {
         try {
           parentNav.navigate(screenName, params);
           return;
-        } catch (e) {}
+        } catch (e) { }
       }
 
       Alert.alert(
@@ -434,7 +437,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   };
 
   const closeRejectionPopup = () => {
-    setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
+    setRejectionModal({ visible: false, rejectedBy: '', remarks: '' });
   };
 
   // ---------- CAMERA PERMISSION ----------
@@ -463,8 +466,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         'Camera Permission Required',
         'Camera permission is not allowed. Please enable it from Settings to take a photo.',
         [
-          {text: 'Cancel', style: 'cancel'},
-          {text: 'Open Settings', onPress: openAppSettings},
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: openAppSettings },
         ],
       );
       return false;
@@ -487,7 +490,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
 
     Alert.alert('Add Images', `Choose source (Remaining: ${remaining})`, [
-      {text: 'Cancel', style: 'cancel'},
+      { text: 'Cancel', style: 'cancel' },
       {
         text: 'Take Photo',
         onPress: async () => {
@@ -511,8 +514,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     'Camera Permission Required',
                     'Camera permission is not allowed. Please enable it from Settings.',
                     [
-                      {text: 'Cancel', style: 'cancel'},
-                      {text: 'Open Settings', onPress: openAppSettings},
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Open Settings', onPress: openAppSettings },
                     ],
                   );
                   return;
@@ -576,36 +579,73 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
   // ---------- API CALLS ----------
   const fetchServerEnumerations = useCallback(
-    async ({refresh = false} = {}) => {
+    async ({ refresh = false } = {}) => {
       const siteId = getNameOfSiteId();
       try {
         refresh ? setServerRefreshing(true) : setServerLoading(true);
         setServerError('');
 
-        const token = await getAuthToken();
-        if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
-
-        const res = await fetch(ENUMERATION_LIST_URL, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        const json = await safeJson(res);
-
-        if (!res.ok) {
-          const msg = json?.message || json?.error || `API Error (${res.status})`;
-          throw new Error(msg);
-        }
+        const json = await apiService.get(ENUMERATION_LIST_URL);
 
         const rows = Array.isArray(json?.data) ? json.data : normalizeList(json);
         const list = Array.isArray(rows) ? rows : [];
 
-        const filtered =
+        // Filter server list
+        const filteredServer =
           siteId != null ? list.filter(x => String(x?.name_of_site_id) === String(siteId)) : list;
 
-        setServerRecords(filtered);
+        // -----------------------------------------------------
+        // Merge Pending Offline Items
+        // -----------------------------------------------------
+        const pendingItems = offlineService.getPendingItems(item => {
+          // check method & url
+          if (item.method !== 'POST') return false;
+          if (!item.url.includes('/enum/enumeration')) return false;
+          // check site id in body
+          const body = item.body || {};
+          if (siteId != null && String(body.name_of_site_id) !== String(siteId)) return false;
+          return true;
+        });
+
+        const mappedPending = pendingItems.map(item => {
+          const b = item.body;
+          // Convert body to record shape
+          // Note: API returns snake_case usually, UI expects specific structure.
+          // API GET response has: id, rd_km, takki_number, species_id, condition_id, auto_lat, ...
+          // Body has: same snake_case keys usually.
+          return {
+            id: `offline_${item.id}`, // temp id
+            isOffline: true,
+
+            // Fields
+            name_of_site_id: b.name_of_site_id,
+            rd_km: b.rd_km,
+            species_id: b.species_id,
+            // we won't have species_name unless we look it up, but the decorator handles species_id lookup!
+
+            condition_id: b.condition_id,
+            girth: b.girth,
+            takkiNumber: b.takki_number, // body often uses snake_case, but UI mapper handles variations
+            takki_number: b.takki_number,
+
+            additional_remarks: b.additional_remarks,
+            is_disputed: b.is_disputed,
+            side: b.side,
+
+            auto_lat: b.auto_lat,
+            auto_long: b.auto_long,
+            manual_lat: b.manual_lat,
+            manual_long: b.manual_long,
+
+            pictures: [], // raw pictures array might be empty or valid, but local assets logic handles it separately if needed
+            created_at: new Date(item.createdAt).toISOString(),
+
+            latestStatus: { action: 'Pending Sync', user_role: 'You', remarks: 'Saved offline' }
+          };
+        });
+
+        setServerRecords([...mappedPending, ...filteredServer]);
+
       } catch (e) {
         setServerRecords([]);
         setServerError(e?.message || 'Failed to fetch server records');
@@ -616,20 +656,27 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     [enumeration],
   );
 
+  // Subscribe to offline sync to refresh list
+  useEffect(() => {
+    const unsub = offlineService.subscribe(() => {
+      // When sync happens (or queue changes), refresh the list
+      fetchServerEnumerations({ refresh: false });
+    });
+    return unsub;
+  }, [fetchServerEnumerations]);
+
   const fetchSpecies = useCallback(async () => {
     try {
       setSpeciesLoading(true);
 
-      const token = await getAuthToken();
-      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+      // Use ApiService.get for caching
+      const json = await apiService.get(SPECIES_URL);
 
-      const res = await fetch(SPECIES_URL, {headers});
-      const json = await safeJson(res);
       const rows = normalizeList(json);
 
       const normalized = rows
         .map(x => {
-          if (typeof x === 'string') return {id: null, name: x};
+          if (typeof x === 'string') return { id: null, name: x };
           return {
             id: x?.id ?? x?.species_id ?? null,
             name: x?.name ?? x?.species_name ?? '',
@@ -653,16 +700,13 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   const fetchConditions = useCallback(async () => {
     try {
       setConditionLoading(true);
-      const token = await getAuthToken();
-      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
-
-      const res = await fetch(CONDITIONS_URL, {headers});
-      const json = await safeJson(res);
+      // Use ApiService.get for caching
+      const json = await apiService.get(CONDITIONS_URL);
       const rows = normalizeList(json);
 
       const normalized = rows
         .map(x => {
-          if (typeof x === 'string') return {id: null, name: x};
+          if (typeof x === 'string') return { id: null, name: x };
           return {
             id: x?.id ?? x?.condition_id ?? null,
             name: x?.name ?? x?.condition_name ?? '',
@@ -680,7 +724,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
     }
   }, []);
 
-  const fetchLocationSmart = useCallback(async ({silent = false} = {}) => {
+  const fetchLocationSmart = useCallback(async ({ silent = false } = {}) => {
     try {
       setGpsFetching(true);
 
@@ -688,12 +732,12 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       const online = !!net.isConnected && (net.isInternetReachable ?? true);
 
       const options = online
-        ? {enableHighAccuracy: false, timeout: 12000, maximumAge: 30000}
-        : {enableHighAccuracy: true, timeout: 18000, maximumAge: 5000};
+        ? { enableHighAccuracy: false, timeout: 12000, maximumAge: 30000 }
+        : { enableHighAccuracy: true, timeout: 18000, maximumAge: 5000 };
 
       Geolocation.getCurrentPosition(
         pos => {
-          const {latitude, longitude} = pos.coords;
+          const { latitude, longitude } = pos.coords;
           const val = formatLatLng(latitude, longitude);
 
           setGpsAuto(val);
@@ -742,7 +786,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({name}),
+        body: JSON.stringify({ name }),
       });
 
       const json = await safeJson(res);
@@ -751,7 +795,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         const createdId = json?.data?.id ?? json?.id;
         const createdName = json?.data?.name ?? json?.name ?? name;
 
-        const created = {id: createdId, name: createdName};
+        const created = { id: createdId, name: createdName };
 
         setSpeciesRows(prev => {
           const base = Array.isArray(prev) ? prev : [];
@@ -798,50 +842,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   }, [customSpeciesName, fetchSpecies, getAuthToken, speciesRows]);
 
   // Image upload
-  const uploadTreeEnumImages = useCallback(async (assets = []) => {
-    if (!assets?.length) return [];
+  // Manual AWS Upload Removed - handled by ApiService
 
-    const net = await NetInfo.fetch();
-    const online = !!net.isConnected && (net.isInternetReachable ?? true);
-    if (!online)
-      throw new Error('No internet connection. Please connect to internet to upload images.');
-
-    const fd = new FormData();
-
-    assets.forEach((a, idx) => {
-      const uri = a?.uri;
-      if (!uri) return;
-
-      const name =
-        a?.fileName ||
-        a?.name ||
-        `tree_${Date.now()}_${idx}.${
-          String(a?.type || 'image/jpeg').includes('png') ? 'png' : 'jpg'
-        }`;
-
-      const type = a?.type || 'image/jpeg';
-
-      fd.append('files', {uri, type, name});
-    });
-
-    fd.append('uploadPath', TREE_ENUM_UPLOAD_PATH);
-    fd.append('isMulti', TREE_ENUM_IS_MULTI);
-    fd.append('fileName', TREE_ENUM_FILE_NAME);
-
-    const res = await fetch(TREE_ENUM_UPLOAD_URL, {
-      method: 'POST',
-      body: fd,
-    });
-
-    const json = await safeJson(res);
-
-    if (!res.ok) {
-      const msg = json?.message || json?.error || `Upload API Error (${res.status})`;
-      throw new Error(msg);
-    }
-
-    return extractUploadUrls(json);
-  }, []);
 
   // ---------- EFFECTS ----------
   useEffect(() => {
@@ -852,7 +854,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchServerEnumerations({refresh: true});
+      fetchServerEnumerations({ refresh: true });
     }, [fetchServerEnumerations]),
   );
 
@@ -873,7 +875,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
   useEffect(() => {
     if (!modalVisible) return;
     if (isEdit) return;
-    fetchLocationSmart({silent: true});
+    fetchLocationSmart({ silent: true });
   }, [modalVisible, isEdit, fetchLocationSmart]);
 
   // ---------- FORM HANDLERS ----------
@@ -1054,8 +1056,8 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       conditionId ?? (conditionRows.find(x => x.name === condition)?.id ?? null);
     if (!finalConditionId) return Alert.alert('Missing', 'Condition is required');
 
-    const {lat: autoLat, lng: autoLng} = parseLatLng(gpsAuto);
-    const {lat: manualLat, lng: manualLng} = parseLatLng(gpsManual);
+    const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
+    const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
 
     const chosenCount =
       (pictureAssets?.length || 0) > 0
@@ -1069,40 +1071,20 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       return Alert.alert('Too Many Images', `You can add maximum ${MAX_IMAGES} images.`);
     }
 
-    // 1) Upload images (if newly selected)
-    let pictures = [];
-    try {
-      if (pictureAssets?.length) {
-        const assetsToUpload = pictureAssets.slice(0, MAX_IMAGES);
-
-        setUploadingImages(true);
-        const urls = await uploadTreeEnumImages(assetsToUpload);
-
-        const safeUrls = Array.isArray(urls) ? urls.slice(0, MAX_IMAGES) : [];
-        setUploadedImageUrls(safeUrls);
-
-        if (!safeUrls?.length) {
-          Alert.alert(
-            'Upload Response',
-            'Images uploaded, but server did not return readable URLs. Saving without picture URLs.',
-          );
-        } else {
-          pictures = safeUrls;
-        }
-      } else {
-        if (Array.isArray(uploadedImageUrls) && uploadedImageUrls.length) {
-          pictures = uploadedImageUrls.slice(0, MAX_IMAGES);
-        }
+    // 1) Upload images (handled by ApiService via attachments)
+    // We only need to prepare the "existing" pictures (if any)
+    let initialPictures = [];
+    if (!pictureAssets || pictureAssets.length === 0) {
+      if (Array.isArray(uploadedImageUrls) && uploadedImageUrls.length) {
+        initialPictures = uploadedImageUrls.slice(0, MAX_IMAGES);
       }
-    } catch (e) {
-      setUploadingImages(false);
-      return Alert.alert('Upload Failed', e?.message || 'Failed to upload images');
-    } finally {
-      setUploadingImages(false);
     }
 
-    if (!pictures?.length) {
-      return Alert.alert('Images Required', 'Image upload did not return URLs. Please try again.');
+    // We can skip the manual upload check since ApiService will handle it.
+    // However, if we demand min images:
+    if (chosenCount < MIN_IMAGES) { // Re-check logic
+      // logic above already checked chosenCount.
+      // If chosenCount >= 1, we are good.
     }
 
     // Build body aligned to latest API style (snake_case)
@@ -1116,35 +1098,59 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
       // extras (snake_case)
       is_disputed: !!isDisputed,
       additional_remarks: String(additionalRemarks || '').trim(),
-      ...(takkiNumberValue != null ? {takki_number: takkiNumberValue} : {}),
-      ...(finalSide ? {side: finalSide} : {}),
+      ...(takkiNumberValue != null ? { takki_number: takkiNumberValue } : {}),
+      ...(finalSide ? { side: finalSide } : {}),
 
-      pictures,
+      pictures: [], // filled by ApiService attachments or preserved existing
       auto_lat: autoLat,
       auto_long: autoLng,
       manual_lat: manualLat,
       manual_long: manualLng,
     };
 
-    if (isEdit) {
-      try {
-        await patchToApi(editingServerId, apiBody);
-        setModalVisible(false);
-        fetchServerEnumerations({refresh: true});
-        Alert.alert('Success', 'Record updated and resubmitted successfully.');
-      } catch (e) {
-        Alert.alert('Update Failed', e?.message || 'Failed to update');
-      }
-      return;
-    }
+    // Attachments for ApiService
+    const attachments = (pictureAssets || []).map((a, idx) => ({
+      uri: a.uri, type: a.type || 'image/jpeg',
+      name: a?.fileName || `tree_${Date.now()}_${idx}.jpg`,
+      uploadUrl: TREE_ENUM_UPLOAD_URL,
+      uploadPath: TREE_ENUM_UPLOAD_PATH,
+      targetFieldInBody: 'pictures',
+      storeBasename: false // Enumerations might expect URLs, let ApiService handle
+    }));
+
+    // Existing pictures on edit?
+    // If editing and user has NOT added new pictures, we keep existing ones.
+    // If user added new pictures, we replace? (Logic in upload block was: if pictureAssets.length > 0, upload and use result. Else use uploadedImageUrls)
+    // Actually Logic line 1092: if pictureAssets.length else if uploadedImageUrls.length -> pictures = uploadedImageUrls.
+    // So if editing and NO new pics, `pictures` will be `uploadedImageUrls` (existing).
+    // If Editing and NEW pics, `pictures` will be new URLs.
+
+    // ApiService logic:
+    // If `attachments` present, they are uploaded and appended to `pictures`.
+    // So if we want to KEEP existing, we pass them in `pictures`.
+    // If we want to REPLACE them, we pass empty `pictures` and let attachments fill it?
+    // But `pictureAssets` implies NEW pictures.
+
+    // ApiService will append new uploaded URLs to this array
+    apiBody.pictures = initialPictures;
 
     try {
-      await submitToApi(apiBody);
+      setUploadingImages(true); // show loader
+      let res;
+      if (isEdit) {
+        if (!editingServerId) throw new Error('Edit ID missing.');
+        res = await apiService.patch(ENUMERATION_UPDATE_URL(editingServerId), apiBody, { attachments });
+      } else {
+        res = await apiService.post(ENUMERATION_SUBMIT_URL, apiBody, { attachments });
+      }
+
       setModalVisible(false);
-      fetchServerEnumerations({refresh: true});
-      Alert.alert('Success', 'Saved to server.');
+      fetchServerEnumerations({ refresh: true });
+      Alert.alert(res.offline ? 'Saved Offline' : 'Success', res.message || 'Saved successfully.');
     } catch (e) {
       Alert.alert('Error', e?.message || 'Failed to save');
+    } finally {
+      setUploadingImages(false);
     }
   };
 
@@ -1341,7 +1347,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
         refreshControl={
           <RefreshControl
             refreshing={serverRefreshing}
-            onRefresh={() => fetchServerEnumerations({refresh: true})}
+            onRefresh={() => fetchServerEnumerations({ refresh: true })}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
@@ -1397,7 +1403,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
             <Text style={styles.errorMessage}>{serverError}</Text>
             <TouchableOpacity
               style={styles.errorButton}
-              onPress={() => fetchServerEnumerations({refresh: true})}>
+              onPress={() => fetchServerEnumerations({ refresh: true })}>
               <Text style={styles.errorButtonText}>Retry Connection</Text>
             </TouchableOpacity>
           </View>
@@ -1433,18 +1439,18 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 {/* Table Header */}
                 <View style={styles.tableHeader}>
                   {[
-                    {label: 'ID', width: 80},
-                    {label: 'RD/KM', width: 90},
-                    {label: 'Takki #', width: 100},
-                    {label: 'Species', width: 140},
-                    {label: 'Condition', width: 140},
-                    {label: 'Girth', width: 100},
-                    {label: 'Auto GPS', width: 180},
-                    {label: 'Manual GPS', width: 180},
-                    {label: 'Status', width: 220},
-                    {label: 'Actions', width: 420},
+                    { label: 'ID', width: 80 },
+                    { label: 'RD/KM', width: 90 },
+                    { label: 'Takki #', width: 100 },
+                    { label: 'Species', width: 140 },
+                    { label: 'Condition', width: 140 },
+                    { label: 'Girth', width: 100 },
+                    { label: 'Auto GPS', width: 180 },
+                    { label: 'Manual GPS', width: 180 },
+                    { label: 'Status', width: 220 },
+                    { label: 'Actions', width: 420 },
                   ].map((col, idx) => (
-                    <View key={idx} style={[styles.thCell, {width: col.width}]}>
+                    <View key={idx} style={[styles.thCell, { width: col.width }]}>
                       <Text style={styles.thText}>{col.label}</Text>
                     </View>
                   ))}
@@ -1462,19 +1468,19 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 
                   return (
                     <View key={String(r.id ?? idx)} style={rowStyle}>
-                      <View style={[styles.tdCell, {width: 80}]}>
+                      <View style={[styles.tdCell, { width: 80 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.id ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 90}]}>
+                      <View style={[styles.tdCell, { width: 90 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.rd_km ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 100}]}>
+                      <View style={[styles.tdCell, { width: 100 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {r?.takkiNumber != null && String(r.takkiNumber).trim() !== ''
                             ? String(r.takkiNumber)
@@ -1482,57 +1488,57 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 140}]}>
+                      <View style={[styles.tdCell, { width: 140 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r._speciesLabel ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 140}]}>
+                      <View style={[styles.tdCell, { width: 140 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r._conditionLabel ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 100}]}>
+                      <View style={[styles.tdCell, { width: 100 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r.girth ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 180}]}>
+                      <View style={[styles.tdCell, { width: 180 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r._autoGps ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 180}]}>
+                      <View style={[styles.tdCell, { width: 180 }]}>
                         <Text style={styles.tdText} numberOfLines={1}>
                           {String(r._manualGps ?? '—')}
                         </Text>
                       </View>
 
-                      <View style={[styles.tdCell, {width: 220}]}>
+                      <View style={[styles.tdCell, { width: 220 }]}>
                         {ui.isRejected ? (
                           <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
-                            <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                              <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                              <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                            <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+                              <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+                              <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
                                 {ui.statusText}
                               </Text>
                             </View>
                           </TouchableOpacity>
                         ) : (
-                          <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                            <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                            <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                          <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+                            <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+                            <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
                               {ui.statusText}
                             </Text>
                           </View>
                         )}
                       </View>
 
-                      <View style={[styles.tdCell, styles.actionsCell, {width: 320}]}>
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 320 }]}>
                         {ui.showEdit && (
                           <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
                             <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
@@ -1541,31 +1547,31 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         )}
 
                         {/* ✅ NEW: Audit */}
-                            <TouchableOpacity
-                              style={[styles.actionPill, {backgroundColor: COLORS.secondary}]}
-                              onPress={() =>
-                                navigateSafe(AUDIT_ROUTE, {
-                                  enumerationId: r.id,      // <-- used by audit api payload
-                                  enumeration: r,           // <-- for auto takki + defaults
-                                })
-                              }>
-                              <Text style={styles.actionPillText}>Audit</Text>
-                            </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.actionPill, { backgroundColor: COLORS.secondary }]}
+                          onPress={() =>
+                            navigateSafe(AUDIT_ROUTE, {
+                              enumerationId: r.id,      // <-- used by audit api payload
+                              enumeration: r,           // <-- for auto takki + defaults
+                            })
+                          }>
+                          <Text style={styles.actionPillText}>Audit</Text>
+                        </TouchableOpacity>
 
                         {ui.showPills && (
                           <>
                             {ui.canDispose && (
                               <TouchableOpacity
-                                style={[styles.actionPill, {backgroundColor: COLORS.primaryDark}]}
-                                onPress={() => navigateSafe(DISPOSAL_ROUTE, {treeId: r.id, enumeration})}>
+                                style={[styles.actionPill, { backgroundColor: COLORS.primaryDark }]}
+                                onPress={() => navigateSafe(DISPOSAL_ROUTE, { treeId: r.id, enumeration })}>
                                 <Text style={styles.actionPillText}>Dispose</Text>
                               </TouchableOpacity>
                             )}
 
                             {ui.canSuperdari && (
                               <TouchableOpacity
-                                style={[styles.actionPill, {backgroundColor: COLORS.info}]}
-                                onPress={() => navigateSafe(SUPERDARI_ROUTE, {treeId: r.id, enumeration})}>
+                                style={[styles.actionPill, { backgroundColor: COLORS.info }]}
+                                onPress={() => navigateSafe(SUPERDARI_ROUTE, { treeId: r.id, enumeration })}>
                                 <Text style={styles.actionPillText}>Superdari</Text>
                               </TouchableOpacity>
                             )}
@@ -1618,7 +1624,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 <DropdownRow
                   label={speciesLoading ? 'Species (Loading...)' : 'Species'}
                   value={filters.species}
-                  onChange={v => setFilters(prev => ({...prev, species: v}))}
+                  onChange={v => setFilters(prev => ({ ...prev, species: v }))}
                   options={speciesOptions}
                   disabled={speciesLoading}
                   searchable
@@ -1628,7 +1634,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 <DropdownRow
                   label={conditionLoading ? 'Condition (Loading...)' : 'Condition'}
                   value={filters.condition}
-                  onChange={v => setFilters(prev => ({...prev, condition: v}))}
+                  onChange={v => setFilters(prev => ({ ...prev, condition: v }))}
                   options={conditionOptions}
                   disabled={conditionLoading}
                   searchable
@@ -1640,7 +1646,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     <FormRow
                       label="Date From (YYYY-MM-DD)"
                       value={filters.dateFrom}
-                      onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, dateFrom: v }))}
                       placeholder="2025-12-01"
                     />
                   </View>
@@ -1648,7 +1654,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     <FormRow
                       label="Date To (YYYY-MM-DD)"
                       value={filters.dateTo}
-                      onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, dateTo: v }))}
                       placeholder="2025-12-31"
                     />
                   </View>
@@ -1659,7 +1665,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     <FormRow
                       label="RD/KM From"
                       value={filters.kmFrom}
-                      onChangeText={v => setFilters(prev => ({...prev, kmFrom: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, kmFrom: v }))}
                       placeholder="e.g. 10"
                       keyboardType="numeric"
                     />
@@ -1668,7 +1674,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     <FormRow
                       label="RD/KM To"
                       value={filters.kmTo}
-                      onChangeText={v => setFilters(prev => ({...prev, kmTo: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, kmTo: v }))}
                       placeholder="e.g. 50"
                       keyboardType="numeric"
                     />
@@ -1680,7 +1686,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     <FormRow
                       label="Takki Number From"
                       value={filters.takkiFrom}
-                      onChangeText={v => setFilters(prev => ({...prev, takkiFrom: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, takkiFrom: v }))}
                       placeholder="e.g. 1"
                       keyboardType="numeric"
                     />
@@ -1689,7 +1695,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     <FormRow
                       label="Takki Number To"
                       value={filters.takkiTo}
-                      onChangeText={v => setFilters(prev => ({...prev, takkiTo: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, takkiTo: v }))}
                       placeholder="e.g. 500"
                       keyboardType="numeric"
                     />
@@ -1738,7 +1744,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
           </TouchableWithoutFeedback>
 
           <View style={styles.modalContainer}>
-            <View style={[styles.modalContent, {maxHeight: height * 0.5}]}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.5 }]}>
               <View style={styles.modalHeader}>
                 <View style={styles.modalTitleRow}>
                   <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
@@ -1749,15 +1755,15 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{padding: 20}}>
-                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+              <View style={{ padding: 20 }}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textLight }}>
                   Rejected By
                 </Text>
-                <Text style={{fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 14}}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 14 }}>
                   {rejectionModal.rejectedBy || 'Officer'}
                 </Text>
 
-                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textLight }}>
                   Remarks
                 </Text>
                 <View
@@ -1769,7 +1775,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     borderRadius: 14,
                     padding: 14,
                   }}>
-                  <Text style={{fontSize: 14, fontWeight: '600', color: COLORS.text, lineHeight: 20}}>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text, lineHeight: 20 }}>
                     {rejectionModal.remarks}
                   </Text>
                 </View>
@@ -1783,7 +1789,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                     alignItems: 'center',
                   }}
                   onPress={closeRejectionPopup}>
-                  <Text style={{color: '#fff', fontWeight: '800'}}>Close</Text>
+                  <Text style={{ color: '#fff', fontWeight: '800' }}>Close</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1877,12 +1883,12 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 />
 
                 {species === SPECIES_OTHER && (
-                  <View style={{marginHorizontal: 4, marginBottom: 12}}>
-                    <Text style={{fontSize: 14, color: '#374151', marginBottom: 6, fontWeight: '600'}}>
-                      Enter new species name <Text style={{color: '#dc2626'}}>*</Text>
+                  <View style={{ marginHorizontal: 4, marginBottom: 12 }}>
+                    <Text style={{ fontSize: 14, color: '#374151', marginBottom: 6, fontWeight: '600' }}>
+                      Enter new species name <Text style={{ color: '#dc2626' }}>*</Text>
                     </Text>
 
-                    <View style={{position: 'relative'}}>
+                    <View style={{ position: 'relative' }}>
                       <TextInput
                         value={customSpeciesName}
                         onChangeText={setCustomSpeciesName}
@@ -1900,13 +1906,13 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         }}
                       />
                       {creatingSpecies && (
-                        <View style={{position: 'absolute', right: 12, top: 12}}>
+                        <View style={{ position: 'absolute', right: 12, top: 12 }}>
                           <ActivityIndicator size="small" color={COLORS.primary} />
                         </View>
                       )}
                     </View>
 
-                    <Text style={{marginTop: 6, fontSize: 12, color: COLORS.textLight}}>
+                    <Text style={{ marginTop: 6, fontSize: 12, color: COLORS.textLight }}>
                       It will be added to dropdown on Save.
                     </Text>
                   </View>
@@ -1942,7 +1948,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 />
 
                 <View style={styles.switchRow}>
-                  <View style={{flex: 1}}>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.switchLabel}>Is Disputed</Text>
                     <Text style={styles.switchHint}>Turn on if the tree is disputed.</Text>
                   </View>
@@ -1988,7 +1994,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                           setGpsFetching(true);
                           Geolocation.getCurrentPosition(
                             pos => {
-                              const {latitude, longitude} = pos.coords;
+                              const { latitude, longitude } = pos.coords;
                               const val = formatLatLng(latitude, longitude);
                               setGpsAuto(val);
                               setGpsManual(prev => (String(prev || '').trim() ? prev : val));
@@ -1999,7 +2005,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                               setGpsFetching(false);
                               Alert.alert('Location Error', err.message);
                             },
-                            {enableHighAccuracy: true, timeout: 18000, maximumAge: 5000},
+                            { enableHighAccuracy: true, timeout: 18000, maximumAge: 5000 },
                           );
                         }}>
                         <Ionicons name="navigate" size={16} color="#fff" />
@@ -2058,11 +2064,11 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                         </Text>
                       </View>
 
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginTop: 10}}>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
                         {pictureAssets.map((a, idx) => (
                           <View key={`${a?.uri || 'img'}_${idx}`} style={styles.thumbWrap}>
                             <View style={styles.thumbInner}>
-                              <Text style={{fontSize: 11, fontWeight: '800', color: COLORS.text}}>
+                              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.text }}>
                                 Img {idx + 1}
                               </Text>
                             </View>
@@ -2120,7 +2126,7 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.footerButtonPrimary, (uploadingImages || creatingSpecies) && {opacity: 0.7}]}
+                  style={[styles.footerButtonPrimary, (uploadingImages || creatingSpecies) && { opacity: 0.7 }]}
                   disabled={uploadingImages || creatingSpecies}
                   onPress={saveRecord}>
                   <LinearGradient
@@ -2158,9 +2164,9 @@ export default function MatureTreeRecordsScreen({navigation, route}) {
 /* ✅ styles unchanged (your original styles below) */
 const styles = StyleSheet.create({
   // Base
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
-  contentContainer: {paddingBottom: 100},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
+  contentContainer: { paddingBottom: 100 },
 
   // Header
   headerGradient: {
@@ -2170,11 +2176,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  header: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   backButton: {
     width: 44,
     height: 44,
@@ -2184,7 +2190,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
+  headerContent: { flex: 1 },
   headerTitle: {
     fontSize: 24,
     fontWeight: '800',
@@ -2192,7 +2198,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     letterSpacing: 0.5,
   },
-  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
+  headerInfo: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2202,7 +2208,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 4,
   },
-  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
+  infoChipText: { fontSize: 12, fontWeight: '600', color: '#fff' },
   siteId: {
     fontSize: 13,
     fontWeight: '700',
@@ -2231,10 +2237,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: COLORS.primary,
   },
-  headerBadgeText: {color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4},
+  headerBadgeText: { color: '#fff', fontSize: 10, fontWeight: '900', paddingHorizontal: 4 },
 
   // Search
-  searchSection: {paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16},
+  searchSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2245,14 +2251,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  searchIcon: {marginRight: 12},
-  searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
-  searchClear: {padding: 4},
+  searchIcon: { marginRight: 12 },
+  searchInput: { flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text },
+  searchClear: { padding: 4 },
 
   // Stats Card
   statsCard: {
@@ -2266,15 +2272,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  statItem: {flex: 1, alignItems: 'center'},
-  statValue: {fontSize: 24, fontWeight: '800', color: COLORS.primary, marginBottom: 4},
-  statLabel: {fontSize: 12, fontWeight: '600', color: COLORS.textLight},
-  statDivider: {width: 1, height: 40, backgroundColor: COLORS.border},
+  statItem: { flex: 1, alignItems: 'center' },
+  statValue: { fontSize: 24, fontWeight: '800', color: COLORS.primary, marginBottom: 4 },
+  statLabel: { fontSize: 12, fontWeight: '600', color: COLORS.textLight },
+  statDivider: { width: 1, height: 40, backgroundColor: COLORS.border },
 
   // Error Card
   errorCard: {
@@ -2286,27 +2292,27 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
   },
-  errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
-  errorTitle: {fontSize: 16, fontWeight: '700', color: COLORS.danger},
-  errorMessage: {fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: 12},
+  errorHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  errorTitle: { fontSize: 16, fontWeight: '700', color: COLORS.danger },
+  errorMessage: { fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: 12 },
   errorButton: {
     backgroundColor: COLORS.danger,
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
   },
-  errorButtonText: {color: '#fff', fontSize: 14, fontWeight: '700'},
+  errorButtonText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 
   // Section
-  section: {marginHorizontal: 20, marginBottom: 20},
+  section: { marginHorizontal: 20, marginBottom: 20 },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
   },
-  sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
-  sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text },
+  sectionSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
 
   // Empty State
   emptyState: {
@@ -2318,7 +2324,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     borderStyle: 'dashed',
   },
-  emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8 },
   emptyText: {
     fontSize: 14,
     color: COLORS.textLight,
@@ -2326,11 +2332,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     lineHeight: 20,
   },
-  emptyAction: {backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12},
-  emptyActionText: {color: '#fff', fontSize: 14, fontWeight: '700'},
+  emptyAction: { backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 },
+  emptyActionText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 
   // Table
-  tableContainer: {borderRadius: 16, overflow: 'hidden'},
+  tableContainer: { borderRadius: 16, overflow: 'hidden' },
   table: {
     borderRadius: 16,
     overflow: 'hidden',
@@ -2338,7 +2344,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -2363,12 +2369,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
-  rowEven: {backgroundColor: '#fff'},
-  rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
-  rowRejected: {backgroundColor: 'rgba(239, 68, 68, 0.06)'},
-  tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
+  tableRow: { flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  rowEven: { backgroundColor: '#fff' },
+  rowOdd: { backgroundColor: 'rgba(5, 150, 105, 0.02)' },
+  rowRejected: { backgroundColor: 'rgba(239, 68, 68, 0.06)' },
+  tdCell: { paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border },
+  tdText: { fontSize: 13, fontWeight: '600', color: COLORS.text },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2379,7 +2385,7 @@ const styles = StyleSheet.create({
     gap: 6,
     maxWidth: 210,
   },
-  statusDot: {width: 8, height: 8, borderRadius: 4},
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusText: {
     fontSize: 12,
     fontWeight: '700',
@@ -2387,7 +2393,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     flexShrink: 1,
   },
-  actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
+  actionsCell: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2397,9 +2403,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 4,
   },
-  actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
-  actionPill: {paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20},
-  actionPillText: {fontSize: 12, fontWeight: '700', color: '#fff'},
+  actionButtonText: { fontSize: 12, fontWeight: '700', color: COLORS.secondary },
+  actionPill: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  actionPillText: { fontSize: 12, fontWeight: '700', color: '#fff' },
 
   // FAB
   fab: {
@@ -2407,24 +2413,24 @@ const styles = StyleSheet.create({
     right: 20,
     bottom: 30,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
   },
-  fabGradient: {width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center'},
+  fabGradient: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
 
   // Shared modal styles
-  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  modalBackdrop: {...StyleSheet.absoluteFillObject},
-  modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
+  modalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalContainer: { flex: 1, justifyContent: 'center', padding: 20 },
   modalContent: {
     borderRadius: 24,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 10},
+    shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.15,
     shadowRadius: 20,
     elevation: 10,
@@ -2439,8 +2445,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  modalTitle: {fontSize: 20, fontWeight: '800', color: COLORS.text},
+  modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
   modalClose: {
     width: 40,
     height: 40,
@@ -2449,10 +2455,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalBody: {padding: 20},
-  filterRow: {flexDirection: 'row', gap: 12, marginBottom: 16},
-  filterColumn: {flex: 1},
-  modalActions: {flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 20},
+  modalBody: { padding: 20 },
+  filterRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  filterColumn: { flex: 1 },
+  modalActions: { flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 20 },
   modalButtonSecondary: {
     flex: 1,
     backgroundColor: 'rgba(31, 41, 55, 0.05)',
@@ -2460,7 +2466,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  modalButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  modalButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
   modalButtonPrimary: {
     flex: 2,
     backgroundColor: COLORS.primary,
@@ -2468,11 +2474,11 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  modalButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  modalButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
   // Edit Modal
-  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
+  editModalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  editModalContainer: { flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20 },
   editModalContent: {
     flex: 1,
     borderTopLeftRadius: 28,
@@ -2491,8 +2497,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  editModalTitle: {fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4},
-  editModalSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  editModalTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  editModalSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
   editModalClose: {
     width: 40,
     height: 40,
@@ -2501,7 +2507,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
+  editModalBody: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20 },
   editModalFooter: {
     flexDirection: 'row',
     gap: 12,
@@ -2517,8 +2523,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
-  footerButtonPrimary: {flex: 2, borderRadius: 14, overflow: 'hidden'},
+  footerButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  footerButtonPrimary: { flex: 2, borderRadius: 14, overflow: 'hidden' },
   footerButtonGradient: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2526,7 +2532,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     gap: 8,
   },
-  footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  footerButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
   // Switch row
   switchRow: {
@@ -2540,11 +2546,11 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#fff',
   },
-  switchLabel: {fontSize: 14, fontWeight: '800', color: COLORS.text},
-  switchHint: {fontSize: 12, color: COLORS.textLight, marginTop: 2},
+  switchLabel: { fontSize: 14, fontWeight: '800', color: COLORS.text },
+  switchHint: { fontSize: 12, color: COLORS.textLight, marginTop: 2 },
 
   // GPS Section
-  gpsSection: {marginTop: 20},
+  gpsSection: { marginTop: 20 },
   sectionLabel: {
     fontSize: 14,
     fontWeight: '700',
@@ -2561,13 +2567,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(5, 150, 105, 0.1)',
     marginBottom: 16,
   },
-  gpsHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8},
-  gpsLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text},
-  gpsStatus: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  gpsSource: {backgroundColor: 'rgba(5, 150, 105, 0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12},
-  gpsSourceText: {fontSize: 12, fontWeight: '800', color: COLORS.primary},
-  gpsLoading: {flexDirection: 'row', alignItems: 'center', gap: 4},
-  gpsLoadingText: {fontSize: 12, fontWeight: '600', color: COLORS.warning},
+  gpsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  gpsLabel: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  gpsStatus: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  gpsSource: { backgroundColor: 'rgba(5, 150, 105, 0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  gpsSourceText: { fontSize: 12, fontWeight: '800', color: COLORS.primary },
+  gpsLoading: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  gpsLoadingText: { fontSize: 12, fontWeight: '600', color: COLORS.warning },
   gpsValue: {
     fontSize: 16,
     fontWeight: '700',
@@ -2575,7 +2581,7 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     marginBottom: 12,
   },
-  gpsButtons: {flexDirection: 'row', gap: 12},
+  gpsButtons: { flexDirection: 'row', gap: 12 },
   gpsButton: {
     flex: 1,
     flexDirection: 'row',
@@ -2586,9 +2592,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 8,
   },
-  gpsButtonDisabled: {opacity: 0.6},
-  gpsButtonText: {fontSize: 14, fontWeight: '700', color: '#fff'},
-  gpsButtonAlt: {backgroundColor: COLORS.text},
+  gpsButtonDisabled: { opacity: 0.6 },
+  gpsButtonText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  gpsButtonAlt: { backgroundColor: COLORS.text },
   finalGpsPreview: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2599,7 +2605,7 @@ const styles = StyleSheet.create({
     padding: 12,
     marginTop: 16,
   },
-  finalGpsLabel: {fontSize: 14, fontWeight: '700', color: COLORS.text, marginRight: 8},
+  finalGpsLabel: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginRight: 8 },
   finalGpsValue: {
     flex: 1,
     fontSize: 14,
@@ -2609,7 +2615,7 @@ const styles = StyleSheet.create({
   },
 
   // Image Section
-  imageSection: {marginTop: 20},
+  imageSection: { marginTop: 20 },
   imageButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2620,10 +2626,10 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
-  imageButtonContent: {flex: 1},
-  imageButtonTitle: {fontSize: 16, fontWeight: '700', color: COLORS.primary, marginBottom: 4},
-  imageButtonSubtitle: {fontSize: 12, color: COLORS.textLight},
-  inlineLoader: {paddingLeft: 8},
+  imageButtonContent: { flex: 1 },
+  imageButtonTitle: { fontSize: 16, fontWeight: '700', color: COLORS.primary, marginBottom: 4 },
+  imageButtonSubtitle: { fontSize: 12, color: COLORS.textLight },
+  inlineLoader: { paddingLeft: 8 },
   imagePreview: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2653,7 +2659,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     gap: 8,
   },
-  uploadedPreviewText: {flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.info},
+  uploadedPreviewText: { flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.info },
   imageHint: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2665,7 +2671,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#fff',
   },
-  imageHintText: {flex: 1, fontSize: 12, color: COLORS.textLight, lineHeight: 16},
+  imageHintText: { flex: 1, fontSize: 12, color: COLORS.textLight, lineHeight: 16 },
 
   // Thumb placeholders
   thumbWrap: {

@@ -1,5 +1,5 @@
 // /screens/AddTreeScreen.js
-import React, {useMemo, useState, useEffect, useCallback} from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   ScrollView,
   Text,
@@ -17,10 +17,11 @@ import {
   Dimensions,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import {useFocusEffect} from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import FormRow from '../components/FormRow';
 import colors from '../theme/colors';
-import {useAuth} from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
+import { apiService } from '../services/ApiService';
 
 /* ===================== API ===================== */
 const API_BASE = 'http://be.lte.gisforestry.com';
@@ -59,7 +60,7 @@ const DropdownRow = ({
       </Text>
 
       <TouchableOpacity
-        style={[styles.dropdownSelected, isDisabled && {opacity: 0.65}]}
+        style={[styles.dropdownSelected, isDisabled && { opacity: 0.65 }]}
         onPress={() => !isDisabled && setOpen(true)}
         activeOpacity={0.8}>
         <Text
@@ -93,7 +94,7 @@ const DropdownRow = ({
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={{maxHeight: 260}} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
               {options?.length ? (
                 options.map(opt => (
                   <TouchableOpacity
@@ -123,11 +124,11 @@ const DropdownRow = ({
   );
 };
 
-const {width} = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - 48) / 2; // 2 cards with padding
 
-export default function AddTreeScreen({navigation}) {
-  const {user, token} = useAuth();
+export default function AddTreeScreen({ navigation }) {
+  const { user, token } = useAuth();
 
   const [enumModalVisible, setEnumModalVisible] = useState(false);
 
@@ -195,7 +196,7 @@ export default function AddTreeScreen({navigation}) {
     '2027-28',
     '2028-29',
     '2029-30',
-  ].map((name, idx) => ({id: String(idx + 1), name}));
+  ].map((name, idx) => ({ id: String(idx + 1), name }));
 
   const getSideOptions = type => {
     if (type === 'Road Side') return ['Left', 'Right', 'Both', 'Median'];
@@ -323,7 +324,8 @@ export default function AddTreeScreen({navigation}) {
 
   /* ===================== FETCH MY SITES ===================== */
   const fetchMySites = useCallback(
-    async ({silent = false} = {}) => {
+    async ({ silent = false } = {}) => {
+      // Just check token existence for UX, though apiService handles it.
       if (!token) {
         if (!silent) Alert.alert('Session', 'Token missing. Please login again.');
         return;
@@ -332,18 +334,7 @@ export default function AddTreeScreen({navigation}) {
       try {
         if (!silent) setLoadingList(true);
 
-        const res = await fetch(ENUM_MY_SITES_URL, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        const json = await safeJson(res);
-
-        if (!res.ok) {
-          throw new Error(json?.message || `Fetch failed (HTTP ${res.status})`);
-        }
+        const json = await apiService.get(ENUM_MY_SITES_URL);
 
         const data = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
         const mapped = data.map(normalizeItemFromApi);
@@ -375,13 +366,13 @@ export default function AddTreeScreen({navigation}) {
         kmFrom: '',
         kmTo: '',
       });
-      fetchMySites({silent: true});
+      fetchMySites({ silent: true });
     }, [fetchMySites]),
   );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetchMySites({silent: true});
+    await fetchMySites({ silent: true });
     setRefreshing(false);
   }, [fetchMySites]);
 
@@ -529,20 +520,7 @@ export default function AddTreeScreen({navigation}) {
         rds_to,
       };
 
-      const res = await fetch(ENUM_CREATE_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const json = await safeJson(res);
-
-      if (!res.ok) {
-        throw new Error(json?.message || `Failed to save (HTTP ${res.status})`);
-      }
+      const json = await apiService.post(ENUM_CREATE_URL, payload);
 
       // add to list immediately
       const saved = json?.data || {};
@@ -561,7 +539,7 @@ export default function AddTreeScreen({navigation}) {
       setRemarks('');
 
       setEnumModalVisible(false);
-      Alert.alert('Success', 'Enumeration saved successfully.', [{text: 'OK'}]);
+      Alert.alert(json.offline ? 'Saved Offline' : 'Success', json.message || 'Enumeration saved successfully.', [{ text: 'OK' }]);
     } catch (e) {
       console.error('Save enumeration error:', e);
       Alert.alert('Error', e?.message || 'Unable to save enumeration.');
@@ -671,13 +649,13 @@ export default function AddTreeScreen({navigation}) {
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
 
-        <View style={{flex: 1}}>
+        <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Guard Site Information</Text>
           <Text style={styles.headerSubtitle}>Manage your plantation sites</Text>
         </View>
 
         <TouchableOpacity
-          style={[styles.backButton, {paddingHorizontal: 10}]}
+          style={[styles.backButton, { paddingHorizontal: 10 }]}
           onPress={() => fetchMySites()}
           activeOpacity={0.85}>
           <Ionicons name="refresh" size={20} color="#fff" />
@@ -919,7 +897,7 @@ export default function AddTreeScreen({navigation}) {
                       <TouchableOpacity
                         key={opt.id}
                         style={[styles.filterOption, active && styles.filterOptionActive]}
-                        onPress={() => setFilters(prev => ({...prev, linearType: active ? '' : opt.name}))}>
+                        onPress={() => setFilters(prev => ({ ...prev, linearType: active ? '' : opt.name }))}>
                         <Text style={[styles.filterOptionText, active && styles.filterOptionTextActive]}>
                           {opt.name}
                         </Text>
@@ -935,7 +913,7 @@ export default function AddTreeScreen({navigation}) {
                   <Ionicons name="business" size={16} color="#059669" style={styles.filterInputIcon} />
                   <TextInput
                     value={filters.circle}
-                    onChangeText={v => setFilters(prev => ({...prev, circle: v}))}
+                    onChangeText={v => setFilters(prev => ({ ...prev, circle: v }))}
                     placeholder="Type circle name"
                     placeholderTextColor="#9ca3af"
                     style={styles.filterInput}
@@ -949,7 +927,7 @@ export default function AddTreeScreen({navigation}) {
                   <Ionicons name="grid" size={16} color="#059669" style={styles.filterInputIcon} />
                   <TextInput
                     value={filters.block}
-                    onChangeText={v => setFilters(prev => ({...prev, block: v}))}
+                    onChangeText={v => setFilters(prev => ({ ...prev, block: v }))}
                     placeholder="Type block name"
                     placeholderTextColor="#9ca3af"
                     style={styles.filterInput}
@@ -964,7 +942,7 @@ export default function AddTreeScreen({navigation}) {
                     <Ionicons name="calendar" size={16} color="#059669" style={styles.filterInputIcon} />
                     <TextInput
                       value={filters.dateFrom}
-                      onChangeText={v => setFilters(prev => ({...prev, dateFrom: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, dateFrom: v }))}
                       placeholder="From: 2025-12-01"
                       placeholderTextColor="#9ca3af"
                       style={styles.filterInput}
@@ -974,7 +952,7 @@ export default function AddTreeScreen({navigation}) {
                     <Ionicons name="calendar" size={16} color="#059669" style={styles.filterInputIcon} />
                     <TextInput
                       value={filters.dateTo}
-                      onChangeText={v => setFilters(prev => ({...prev, dateTo: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, dateTo: v }))}
                       placeholder="To: 2025-12-31"
                       placeholderTextColor="#9ca3af"
                       style={styles.filterInput}
@@ -990,7 +968,7 @@ export default function AddTreeScreen({navigation}) {
                     <Ionicons name="map" size={16} color="#059669" style={styles.filterInputIcon} />
                     <TextInput
                       value={filters.kmFrom}
-                      onChangeText={v => setFilters(prev => ({...prev, kmFrom: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, kmFrom: v }))}
                       placeholder="From: 10"
                       placeholderTextColor="#9ca3af"
                       style={styles.filterInput}
@@ -1001,7 +979,7 @@ export default function AddTreeScreen({navigation}) {
                     <Ionicons name="map" size={16} color="#059669" style={styles.filterInputIcon} />
                     <TextInput
                       value={filters.kmTo}
-                      onChangeText={v => setFilters(prev => ({...prev, kmTo: v}))}
+                      onChangeText={v => setFilters(prev => ({ ...prev, kmTo: v }))}
                       placeholder="To: 50"
                       placeholderTextColor="#9ca3af"
                       style={styles.filterInput}
@@ -1226,7 +1204,7 @@ export default function AddTreeScreen({navigation}) {
 
               <DropdownRow
                 label="Type of Linear Plantation *"
-                value={linearType ? {id: 'lt', name: linearType} : null}
+                value={linearType ? { id: 'lt', name: linearType } : null}
                 onChange={opt => {
                   setLinearType(opt.name);
                   setSide('');
@@ -1253,7 +1231,7 @@ export default function AddTreeScreen({navigation}) {
 
               <DropdownRow
                 label="Year *"
-                value={year ? {id: 'yr', name: year} : null}
+                value={year ? { id: 'yr', name: year } : null}
                 onChange={opt => setYear(opt.name)}
                 options={yearOptions}
                 required
@@ -1261,7 +1239,7 @@ export default function AddTreeScreen({navigation}) {
 
               <DropdownRow
                 label={sideLabel + ' *'}
-                value={side ? {id: 'sd', name: side} : null}
+                value={side ? { id: 'sd', name: side } : null}
                 onChange={opt => setSide(opt.name)}
                 options={getSideOptions(linearType).map((name, idx) => ({
                   id: String(idx + 1),

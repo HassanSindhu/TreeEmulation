@@ -24,6 +24,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { apiService } from '../services/ApiService';
 
 import FormRow from '../components/FormRow';
 import DateField from '../components/DateField';
@@ -281,47 +282,8 @@ export default function EnumerationAuditScreen({ navigation, route }) {
   };
 
   // Upload
-  const uploadImages = useCallback(
-    async assets => {
-      if (!assets?.length) return [];
+  // Manual AWS Upload Removed - handled by ApiService
 
-      const net = await NetInfo.fetch();
-      const online = !!net.isConnected && (net.isInternetReachable ?? true);
-      if (!online) throw new Error('No internet connection. Please connect and try again.');
-
-      const fd = new FormData();
-      const fileName = `audit_${enumerationId}_${Date.now()}`;
-
-      assets.slice(0, MAX_IMAGES).forEach((a, idx) => {
-        if (!a?.uri) return;
-        fd.append('files', {
-          uri: a.uri,
-          type: a.type || 'image/jpeg',
-          name: a.fileName || `${fileName}_${idx}.jpg`,
-        });
-      });
-
-      fd.append('uploadPath', BUCKET_UPLOAD_PATH);
-      fd.append('isMulti', BUCKET_IS_MULTI);
-      fd.append('fileName', fileName);
-
-      const token = await getAuthToken();
-      const res = await fetch(BUCKET_UPLOAD_URL, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        body: fd,
-      });
-
-      const json = await safeJson(res);
-      if (!res.ok) {
-        throw new Error(json?.message || json?.error || `Upload failed (${res.status})`);
-      }
-
-      const urls = extractUploadUrls(json);
-      return urls.slice(0, MAX_IMAGES);
-    },
-    [enumerationId],
-  );
 
   // ✅ UPDATED: History fetch uses your new cURL endpoint
   const fetchAuditHistory = useCallback(async () => {
@@ -329,24 +291,9 @@ export default function EnumerationAuditScreen({ navigation, route }) {
 
     setHistoryLoading(true);
     try {
-      const token = await getAuthToken();
-      if (!token) throw new Error('Missing AUTH_TOKEN');
-
-      const headers = { Authorization: `Bearer ${token}` };
-
       // This matches: /enum/enumeration-audit/get-all-audits-of-enumeration/44
       const url = AUDIT_HISTORY_BY_ENUMERATION_ID_URL(enumerationId);
-      const res = await fetch(url, { method: 'GET', headers });
-
-      if (res.status === 404) {
-        setAuditHistory([]);
-        return;
-      }
-
-      const json = await safeJson(res);
-      if (!res.ok) {
-        throw new Error(json?.message || `Audit history load failed (${res.status})`);
-      }
+      const json = await apiService.get(url);
 
       // backend may return {data:[...]} or directly [...]
       const list = normalizeList(json);
@@ -367,39 +314,8 @@ export default function EnumerationAuditScreen({ navigation, route }) {
       normalized.sort((x, y) => new Date(y.dateOfAudit || 0) - new Date(x.dateOfAudit || 0));
       setAuditHistory(normalized);
     } catch (e) {
-      // Fallback (optional): if your new endpoint fails, you can still attempt single GET
-      try {
-        const token = await getAuthToken();
-        if (!token) throw new Error('Missing AUTH_TOKEN');
-
-        const headers = { Authorization: `Bearer ${token}` };
-        const res = await fetch(AUDIT_GET_ONE_URL(enumerationId), { method: 'GET', headers });
-        if (res.status === 404) {
-          setAuditHistory([]);
-          return;
-        }
-        const json = await safeJson(res);
-        if (!res.ok) throw new Error(json?.message || `Audit load failed (${res.status})`);
-        const one = json?.data ?? json;
-        const list = one ? [one] : [];
-
-        const normalized = (list || []).map(a => ({
-          id: a?.id ?? a?._id ?? null,
-          enumerationId: a?.enumerationId ?? a?.enumeration_id ?? enumerationId,
-          year: a?.year ?? '',
-          actual_girth: a?.actual_girth ?? a?.actualGirth ?? '',
-          condition_id: a?.condition_id ?? a?.conditionId ?? a?.condition?.id ?? null,
-          pictures: Array.isArray(a?.pictures) ? a.pictures : [],
-          additionalRemarks: a?.additionalRemarks ?? a?.additional_remarks ?? '',
-          isDisputed: !!(a?.isDisputed ?? a?.is_disputed),
-          dateOfAudit: a?.dateOfAudit ?? a?.date_of_audit ?? a?.updated_at ?? a?.created_at ?? null,
-          raw: a,
-        }));
-        setAuditHistory(normalized);
-      } catch (fallbackErr) {
-        Alert.alert('Error', fallbackErr?.message || e?.message || 'Failed to load audit history.');
-        setAuditHistory([]);
-      }
+      setAuditHistory([]);
+      Alert.alert('Error', e?.message || 'Failed to load audit history');
     } finally {
       setHistoryLoading(false);
     }
@@ -501,97 +417,55 @@ export default function EnumerationAuditScreen({ navigation, route }) {
   };
 
   // Save
-  const validateAndBuildPayload = useCallback(async () => {
-    if (!enumerationId) throw new Error('Missing enumerationId.');
-    if (!year) throw new Error('Please select Year.');
-    if (!conditionId) throw new Error('Please select Tree Condition.');
-
-    const chosenCount =
-      (localAssets?.length || 0) > 0 ? localAssets.length : (uploadedUrls?.length || 0);
-
-    if (chosenCount < MIN_IMAGES) throw new Error(`Please add at least ${MIN_IMAGES} image.`);
-    if (chosenCount > MAX_IMAGES) throw new Error(`You can add maximum ${MAX_IMAGES} images.`);
-
-    let pictures = [];
-
-    if (localAssets?.length) {
-      setUploading(true);
-      const urls = await uploadImages(localAssets);
-      pictures = urls.slice(0, MAX_IMAGES);
-      if (!pictures.length) throw new Error('Upload succeeded but no image URL returned.');
-      setUploadedUrls(pictures);
-      setLocalAssets([]);
-    } else {
-      pictures = (uploadedUrls || []).slice(0, MAX_IMAGES);
-    }
-
-    return {
-      enumerationId: Number(enumerationId),
-      year: String(year),
-      actual_girth: String(actualGirth || '').trim(),
-      condition_id: Number(conditionId),
-      pictures,
-      additionalRemarks: String(additionalRemarks || '').trim(),
-      isDisputed: !!isDisputed,
-      dateOfAudit: String(dateOfAudit || new Date().toISOString()),
-    };
-  }, [
-    enumerationId,
-    year,
-    conditionId,
-    actualGirth,
-    additionalRemarks,
-    isDisputed,
-    dateOfAudit,
-    localAssets,
-    uploadedUrls,
-    uploadImages,
-  ]);
-
-  const postAudit = async payload => {
-    const token = await getAuthToken();
-    if (!token) throw new Error('Missing AUTH_TOKEN');
-
-    const res = await fetch(AUDIT_CREATE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(payload),
-    });
-
-    const json = await safeJson(res);
-    if (!res.ok) throw new Error(json?.message || `Create failed (${res.status})`);
-    return json?.data ?? json;
-  };
-
-  const patchAudit = async (id, payload) => {
-    const token = await getAuthToken();
-    if (!token) throw new Error('Missing AUTH_TOKEN');
-    if (!id) throw new Error('Missing audit id for update.');
-
-    const res = await fetch(AUDIT_PATCH_URL(id), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(payload),
-    });
-
-    const json = await safeJson(res);
-    if (!res.ok) throw new Error(json?.message || `Update failed (${res.status})`);
-    return json?.data ?? json;
-  };
-
   const onSave = async () => {
     try {
+      if (!enumerationId) throw new Error('Missing enumerationId.');
+      if (!year) throw new Error('Please select Year.');
+      if (!conditionId) throw new Error('Please select Tree Condition.');
+
+      const chosenCount = (localAssets?.length || 0) + (uploadedUrls?.length || 0);
+      if (chosenCount < MIN_IMAGES) throw new Error(`Please add at least ${MIN_IMAGES} image.`);
+      if (chosenCount > MAX_IMAGES) throw new Error(`You can add maximum ${MAX_IMAGES} images.`);
+
+      setUploading(true);
       setLoading(true);
 
-      const payload = await validateAndBuildPayload();
+      const attachments = (localAssets || []).map((a, idx) => ({
+        uri: a.uri, type: a.type || 'image/jpeg',
+        name: a.fileName || `audit_${enumerationId}_${Date.now()}_${idx}.jpg`,
+        uploadUrl: BUCKET_UPLOAD_URL,
+        uploadPath: BUCKET_UPLOAD_PATH,
+        targetFieldInBody: 'pictures',
+        storeBasename: false // Enumeration logic seemed to store full URLs? 
+        // Original code `extractUploadUrls` returned full URLs. So keep storeBasename false (default).
+        // Actually, if backend wants full URLs, ApiService does that by default.
+      }));
 
+      // If Editing and localAssets is empty, we keep uploadedUrls.
+      // ApiService appends new uploads to 'pictures'.
+
+      const existing = (uploadedUrls || []).slice(0, MAX_IMAGES);
+
+      const payload = {
+        enumerationId: Number(enumerationId),
+        year: String(year),
+        actual_girth: String(actualGirth || '').trim(),
+        condition_id: Number(conditionId),
+        pictures: existing, // ApiService will append new ones
+        additionalRemarks: String(additionalRemarks || '').trim(),
+        isDisputed: !!isDisputed,
+        dateOfAudit: String(dateOfAudit || new Date().toISOString()),
+      };
+
+      let res;
       if (isEditing) {
-        await patchAudit(editingAuditId, payload);
-        Alert.alert('Success', 'Audit updated successfully.');
+        if (!editingAuditId) throw new Error('Audit ID missing for update');
+        res = await apiService.patch(AUDIT_PATCH_URL(editingAuditId), payload, { attachments });
       } else {
-        await postAudit(payload);
-        Alert.alert('Success', 'Audit created successfully.');
+        res = await apiService.post(AUDIT_CREATE_URL, payload, { attachments });
       }
+
+      Alert.alert(res.offline ? 'Saved Offline' : 'Success', res.message || 'Audit saved successfully.');
 
       // Refresh list (uses new endpoint)
       await fetchAuditHistory();

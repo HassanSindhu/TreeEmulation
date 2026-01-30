@@ -1,5 +1,5 @@
 // /screens/RegistersScreen.js
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -22,12 +22,13 @@ import LinearGradient from 'react-native-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import Geolocation from '@react-native-community/geolocation';
-import {launchImageLibrary} from 'react-native-image-picker';
+import { launchImageLibrary } from 'react-native-image-picker';
+import { apiService } from '../services/ApiService';
 
 import FormRow from '../components/FormRow';
-import {DropdownRow} from '../components/SelectRows';
+import { DropdownRow } from '../components/SelectRows';
 
-const {height} = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 /**
  * IMPORTANT
@@ -85,9 +86,9 @@ const COLORS = {
 };
 
 const TABS = [
-  {key: 'aff', label: 'Afforestation', icon: 'leaf'},
-  {key: 'pole', label: 'Pole Crop', icon: 'grid'},
-  {key: 'enumeration', label: 'Enumeration', icon: 'list'},
+  { key: 'aff', label: 'Afforestation', icon: 'leaf' },
+  { key: 'pole', label: 'Pole Crop', icon: 'grid' },
+  { key: 'enumeration', label: 'Enumeration', icon: 'list' },
 ];
 
 // ---------------------- STATUS FILTER ----------------------
@@ -178,7 +179,7 @@ const pickLatestPoleCropSpeciesPerId = arr => {
     }));
 };
 
-export default function RegistersScreen({navigation}) {
+export default function RegistersScreen({ navigation }) {
   // ---------- TOP TAB ----------
   const [activeType, setActiveType] = useState('aff');
 
@@ -216,7 +217,7 @@ export default function RegistersScreen({navigation}) {
   // ---------- NEW SPECIES (Other) ----------
   const [showNewSpeciesBox, setShowNewSpeciesBox] = useState(false);
   const [newSpeciesName, setNewSpeciesName] = useState('');
-  const [newSpeciesTarget, setNewSpeciesTarget] = useState({type: null, index: null}); // {type:'pole'|'aff', index:number}
+  const [newSpeciesTarget, setNewSpeciesTarget] = useState({ type: null, index: null }); // {type:'pole'|'aff', index:number}
   const [creatingSpecies, setCreatingSpecies] = useState(false);
 
   // ---------- GPS ----------
@@ -243,12 +244,12 @@ export default function RegistersScreen({navigation}) {
   // Pole Crop fields
   const [rdsFrom, setRdsFrom] = useState('');
   const [rdsTo, setRdsTo] = useState('');
-  const [poleSpeciesCounts, setPoleSpeciesCounts] = useState([{species_id: null, count: ''}]);
+  const [poleSpeciesCounts, setPoleSpeciesCounts] = useState([{ species_id: null, count: '' }]);
 
   // Afforestation fields
   const [avMilesKm, setAvMilesKm] = useState('');
   const [noOfPlants, setNoOfPlants] = useState('');
-  const [affSpeciesCounts, setAffSpeciesCounts] = useState([{species_id: null, count: ''}]);
+  const [affSpeciesCounts, setAffSpeciesCounts] = useState([{ species_id: null, count: '' }]);
 
   // ---------- HELPERS ----------
   const safeJson = async res => {
@@ -273,16 +274,16 @@ export default function RegistersScreen({navigation}) {
 
   const parseLatLng = str => {
     const s = String(str || '').trim();
-    if (!s) return {lat: null, lng: null};
+    if (!s) return { lat: null, lng: null };
     const parts = s
       .split(/,|\s+/)
       .map(p => p.trim())
       .filter(Boolean);
-    if (parts.length < 2) return {lat: null, lng: null};
+    if (parts.length < 2) return { lat: null, lng: null };
     const lat = Number(parts[0]);
     const lng = Number(parts[1]);
-    if (Number.isNaN(lat) || Number.isNaN(lng)) return {lat: null, lng: null};
-    return {lat, lng};
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return { lat: null, lng: null };
+    return { lat, lng };
   };
 
   const formatLatLng = (latitude, longitude) =>
@@ -312,13 +313,13 @@ export default function RegistersScreen({navigation}) {
     const superdariExists = hasAny(row?.superdari);
 
     if (disposalExists && superdariExists) {
-      return {statusText: 'Disposed + Superdari', statusColor: COLORS.warning, showEdit: false, isRejected: false};
+      return { statusText: 'Disposed + Superdari', statusColor: COLORS.warning, showEdit: false, isRejected: false };
     }
     if (disposalExists) {
-      return {statusText: 'Disposed', statusColor: COLORS.secondary, showEdit: false, isRejected: false};
+      return { statusText: 'Disposed', statusColor: COLORS.secondary, showEdit: false, isRejected: false };
     }
     if (superdariExists) {
-      return {statusText: 'Superdari', statusColor: COLORS.info, showEdit: false, isRejected: false};
+      return { statusText: 'Superdari', statusColor: COLORS.info, showEdit: false, isRejected: false };
     }
 
     const latest = row?.latestStatus || null;
@@ -329,7 +330,7 @@ export default function RegistersScreen({navigation}) {
     const remarks = String(latest?.remarks || '').trim();
 
     if (!latest || !actionRaw) {
-      return {statusText: 'Pending (Block Officer)', statusColor: COLORS.textLight, showEdit: false, isRejected: false};
+      return { statusText: 'Pending (Block Officer)', statusColor: COLORS.textLight, showEdit: false, isRejected: false };
     }
 
     if (action === 'rejected' || action === 'disapproved') {
@@ -349,13 +350,13 @@ export default function RegistersScreen({navigation}) {
       const nxt = nextRole(approver);
 
       if (!nxt) {
-        return {statusText: 'Final Approved', statusColor: COLORS.success, showEdit: false, isRejected: false};
+        return { statusText: 'Final Approved', statusColor: COLORS.success, showEdit: false, isRejected: false };
       }
 
-      return {statusText: `Approved • Pending (${nxt})`, statusColor: COLORS.warning, showEdit: false, isRejected: false};
+      return { statusText: `Approved • Pending (${nxt})`, statusColor: COLORS.warning, showEdit: false, isRejected: false };
     }
 
-    return {statusText: 'Pending', statusColor: COLORS.textLight, showEdit: false, isRejected: false};
+    return { statusText: 'Pending', statusColor: COLORS.textLight, showEdit: false, isRejected: false };
   };
 
   const getStatusTags = row => {
@@ -392,7 +393,7 @@ export default function RegistersScreen({navigation}) {
     });
   };
 
-  const closeRejectionPopup = () => setRejectionModal({visible: false, rejectedBy: '', remarks: ''});
+  const closeRejectionPopup = () => setRejectionModal({ visible: false, rejectedBy: '', remarks: '' });
 
   // ---------- Upload helpers ----------
   const extractUploadUrls = json => {
@@ -418,43 +419,10 @@ export default function RegistersScreen({navigation}) {
     return Array.from(new Set(urls.filter(Boolean)));
   };
 
-  const uploadImages = useCallback(async (assets, uploadPath) => {
-    if (!assets?.length) return [];
-
-    const net = await NetInfo.fetch();
-    const online = !!net.isConnected && (net.isInternetReachable ?? true);
-    if (!online) throw new Error('No internet connection. Please connect to internet to upload images.');
-
-    const fd = new FormData();
-    assets.forEach((a, idx) => {
-      const uri = a?.uri;
-      if (!uri) return;
-
-      const name =
-        a?.fileName ||
-        a?.name ||
-        `img_${Date.now()}_${idx}.${String(a?.type || 'image/jpeg').includes('png') ? 'png' : 'jpg'}`;
-
-      const type = a?.type || 'image/jpeg';
-      fd.append('files', {uri, type, name});
-    });
-
-    fd.append('uploadPath', uploadPath);
-    fd.append('isMulti', UPLOAD_IS_MULTI);
-    fd.append('fileName', UPLOAD_FILE_NAME);
-
-    const res = await fetch(UPLOAD_URL, {method: 'POST', body: fd});
-    const json = await safeJson(res);
-
-    if (!res.ok) {
-      const msg = json?.message || json?.error || `Upload API Error (${res.status})`;
-      throw new Error(msg);
-    }
-    return extractUploadUrls(json);
-  }, []);
+  // Manual upload removed - handled by ApiService
 
   const pickImage = () => {
-    launchImageLibrary({mediaType: 'photo', quality: 0.7, selectionLimit: 10}, res => {
+    launchImageLibrary({ mediaType: 'photo', quality: 0.7, selectionLimit: 10 }, res => {
       if (res?.didCancel) return;
       if (res?.errorCode) {
         Alert.alert('Image Error', res?.errorMessage || res.errorCode);
@@ -468,7 +436,7 @@ export default function RegistersScreen({navigation}) {
   };
 
   // ---------- Location ----------
-  const fetchLocationSmart = useCallback(async ({silent = false} = {}) => {
+  const fetchLocationSmart = useCallback(async ({ silent = false } = {}) => {
     try {
       setGpsFetching(true);
 
@@ -476,12 +444,12 @@ export default function RegistersScreen({navigation}) {
       const online = !!net.isConnected && (net.isInternetReachable ?? true);
 
       const options = online
-        ? {enableHighAccuracy: false, timeout: 12000, maximumAge: 30000}
-        : {enableHighAccuracy: true, timeout: 18000, maximumAge: 5000};
+        ? { enableHighAccuracy: false, timeout: 12000, maximumAge: 30000 }
+        : { enableHighAccuracy: true, timeout: 18000, maximumAge: 5000 };
 
       Geolocation.getCurrentPosition(
         pos => {
-          const {latitude, longitude} = pos.coords;
+          const { latitude, longitude } = pos.coords;
           const val = formatLatLng(latitude, longitude);
 
           setGpsAuto(val);
@@ -503,28 +471,19 @@ export default function RegistersScreen({navigation}) {
 
   // ---------- API Calls ----------
   const getActiveUrls = () => {
-    if (activeType === 'enumeration') return {list: ENUM_LIST_URL, create: ENUM_CREATE_URL, update: ENUM_UPDATE_URL};
-    if (activeType === 'pole') return {list: POLE_LIST_URL, create: POLE_CREATE_URL, update: POLE_UPDATE_URL};
-    return {list: AFF_LIST_URL, create: AFF_CREATE_URL, update: AFF_UPDATE_URL};
+    if (activeType === 'enumeration') return { list: ENUM_LIST_URL, create: ENUM_CREATE_URL, update: ENUM_UPDATE_URL };
+    if (activeType === 'pole') return { list: POLE_LIST_URL, create: POLE_CREATE_URL, update: POLE_UPDATE_URL };
+    return { list: AFF_LIST_URL, create: AFF_CREATE_URL, update: AFF_UPDATE_URL };
   };
 
   const fetchServer = useCallback(
-    async ({refresh = false} = {}) => {
-      const {list} = getActiveUrls();
+    async ({ refresh = false } = {}) => {
+      const { list } = getActiveUrls();
       try {
         refresh ? setRefreshing(true) : setLoading(true);
         setServerError('');
 
-        const token = await getAuthToken();
-        if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
-
-        const res = await fetch(list, {method: 'GET', headers: {Authorization: `Bearer ${token}`}});
-        const json = await safeJson(res);
-
-        if (!res.ok) {
-          const msg = json?.message || json?.error || `API Error (${res.status})`;
-          throw new Error(msg);
-        }
+        const json = await apiService.get(list);
 
         const rows = normalizeList(json);
         setServerRows(Array.isArray(rows) ? rows : []);
@@ -542,14 +501,14 @@ export default function RegistersScreen({navigation}) {
     try {
       setSpeciesLoading(true);
       const token = await getAuthToken();
-      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
-      const res = await fetch(SPECIES_URL, {headers});
+      const res = await fetch(SPECIES_URL, { headers });
       const json = await safeJson(res);
       const rows = normalizeList(json);
 
       const normalized = (Array.isArray(rows) ? rows : [])
-        .map(x => ({id: x?.id ?? x?.species_id ?? null, name: String(x?.name ?? x?.species_name ?? '').trim()}))
+        .map(x => ({ id: x?.id ?? x?.species_id ?? null, name: String(x?.name ?? x?.species_name ?? '').trim() }))
         .filter(x => x?.name);
 
       setSpeciesRows(normalized);
@@ -569,16 +528,16 @@ export default function RegistersScreen({navigation}) {
     try {
       setConditionLoading(true);
       const token = await getAuthToken();
-      const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
-      const res = await fetch(CONDITIONS_URL, {headers});
+      const res = await fetch(CONDITIONS_URL, { headers });
       const json = await safeJson(res);
       const rows = normalizeList(json);
 
       const normalized = rows
         .map(x => {
-          if (typeof x === 'string') return {id: null, name: x};
-          return {id: x?.id ?? x?.condition_id ?? null, name: x?.name ?? x?.condition_name ?? ''};
+          if (typeof x === 'string') return { id: null, name: x };
+          return { id: x?.id ?? x?.condition_id ?? null, name: x?.name ?? x?.condition_name ?? '' };
         })
         .filter(x => x.name);
 
@@ -604,7 +563,7 @@ export default function RegistersScreen({navigation}) {
   useEffect(() => {
     if (!modalVisible) return;
     if (isEdit) return;
-    fetchLocationSmart({silent: true});
+    fetchLocationSmart({ silent: true });
   }, [modalVisible, isEdit, fetchLocationSmart]);
 
   // ---------- Maps ----------
@@ -802,17 +761,17 @@ export default function RegistersScreen({navigation}) {
   // ---------- Multi Species UI Helpers ----------
   const addSpeciesCountRow = type => {
     if (type === 'pole') {
-      setPoleSpeciesCounts(prev => [...prev, {species_id: null, count: ''}]);
+      setPoleSpeciesCounts(prev => [...prev, { species_id: null, count: '' }]);
       return;
     }
-    setAffSpeciesCounts(prev => [...prev, {species_id: null, count: ''}]);
+    setAffSpeciesCounts(prev => [...prev, { species_id: null, count: '' }]);
   };
 
   const removeSpeciesCountRow = (type, index) => {
     const remover = prev => {
       const arr = Array.isArray(prev) ? [...prev] : [];
       arr.splice(index, 1);
-      return arr.length ? arr : [{species_id: null, count: ''}];
+      return arr.length ? arr : [{ species_id: null, count: '' }];
     };
     if (type === 'pole') setPoleSpeciesCounts(remover);
     else setAffSpeciesCounts(remover);
@@ -821,8 +780,8 @@ export default function RegistersScreen({navigation}) {
   const updateSpeciesCountRow = (type, index, patch) => {
     const updater = prev => {
       const arr = Array.isArray(prev) ? [...prev] : [];
-      if (!arr[index]) arr[index] = {species_id: null, count: ''};
-      arr[index] = {...arr[index], ...patch};
+      if (!arr[index]) arr[index] = { species_id: null, count: '' };
+      arr[index] = { ...arr[index], ...patch };
       return arr;
     };
     if (type === 'pole') setPoleSpeciesCounts(updater);
@@ -858,11 +817,11 @@ export default function RegistersScreen({navigation}) {
 
     setRdsFrom('');
     setRdsTo('');
-    setPoleSpeciesCounts([{species_id: null, count: ''}]);
+    setPoleSpeciesCounts([{ species_id: null, count: '' }]);
 
     setAvMilesKm('');
     setNoOfPlants('');
-    setAffSpeciesCounts([{species_id: null, count: ''}]);
+    setAffSpeciesCounts([{ species_id: null, count: '' }]);
 
     setGpsAuto('');
     setGpsManual('');
@@ -874,7 +833,7 @@ export default function RegistersScreen({navigation}) {
 
     setShowNewSpeciesBox(false);
     setNewSpeciesName('');
-    setNewSpeciesTarget({type: null, index: null});
+    setNewSpeciesTarget({ type: null, index: null });
   };
 
   const openAddForm = () => {
@@ -914,18 +873,18 @@ export default function RegistersScreen({navigation}) {
       const poleLatest = pickLatestPoleCropSpeciesPerId(row?.poleCropSpecies || []);
       if (poleLatest.length) {
         setPoleSpeciesCounts(
-          poleLatest.map(x => ({species_id: x?.species_id ?? null, count: String(x?.count ?? '')})),
+          poleLatest.map(x => ({ species_id: x?.species_id ?? null, count: String(x?.count ?? '') })),
         );
       } else if (Array.isArray(row?.species_counts) && row.species_counts.length) {
         setPoleSpeciesCounts(
-          row.species_counts.map(x => ({species_id: x?.species_id ?? x?.id ?? null, count: String(x?.count ?? '')})),
+          row.species_counts.map(x => ({ species_id: x?.species_id ?? x?.id ?? null, count: String(x?.count ?? '') })),
         );
       } else if (Array.isArray(row?.species_ids) && row?.species_ids?.length) {
         setPoleSpeciesCounts(
-          row.species_ids.map((sid, i) => ({species_id: sid, count: i === 0 ? String(row?.count ?? '') : ''})),
+          row.species_ids.map((sid, i) => ({ species_id: sid, count: i === 0 ? String(row?.count ?? '') : '' })),
         );
       } else {
-        setPoleSpeciesCounts([{species_id: null, count: ''}]);
+        setPoleSpeciesCounts([{ species_id: null, count: '' }]);
       }
     }
 
@@ -935,13 +894,13 @@ export default function RegistersScreen({navigation}) {
 
       const latest = pickLatestAfforestationSpeciesPerId(row?.afforestationSpecies || []);
       if (latest.length) {
-        setAffSpeciesCounts(latest.map(x => ({species_id: x?.species_id ?? null, count: String(x?.count ?? '')})));
+        setAffSpeciesCounts(latest.map(x => ({ species_id: x?.species_id ?? null, count: String(x?.count ?? '') })));
       } else if (Array.isArray(row?.species_counts) && row.species_counts.length) {
         setAffSpeciesCounts(
-          row.species_counts.map(x => ({species_id: x?.species_id ?? x?.id ?? null, count: String(x?.count ?? '')})),
+          row.species_counts.map(x => ({ species_id: x?.species_id ?? x?.id ?? null, count: String(x?.count ?? '') })),
         );
       } else {
-        setAffSpeciesCounts([{species_id: null, count: ''}]);
+        setAffSpeciesCounts([{ species_id: null, count: '' }]);
       }
     }
 
@@ -968,13 +927,13 @@ export default function RegistersScreen({navigation}) {
   };
 
   const submitCreate = async body => {
-    const {create} = getActiveUrls();
+    const { create } = getActiveUrls();
     const token = await getAuthToken();
     if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
 
     const res = await fetch(create, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     });
 
@@ -984,14 +943,14 @@ export default function RegistersScreen({navigation}) {
   };
 
   const submitPatch = async (id, body) => {
-    const {update} = getActiveUrls();
+    const { update } = getActiveUrls();
     const token = await getAuthToken();
     if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
     if (!id) throw new Error('Missing record id for update.');
 
     const res = await fetch(update(id), {
       method: 'PATCH',
-      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     });
 
@@ -1012,8 +971,8 @@ export default function RegistersScreen({navigation}) {
 
       const res = await fetch(SPECIES_CREATE_URL, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
-        body: JSON.stringify({name: nm}),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: nm }),
       });
 
       const json = await safeJson(res);
@@ -1022,13 +981,13 @@ export default function RegistersScreen({navigation}) {
       await fetchSpecies();
 
       const createdId = speciesIdByNameLower.get(nm.toLowerCase());
-      const {type, index} = newSpeciesTarget || {};
+      const { type, index } = newSpeciesTarget || {};
 
-      if (createdId != null && type && index != null) updateSpeciesCountRow(type, index, {species_id: createdId});
+      if (createdId != null && type && index != null) updateSpeciesCountRow(type, index, { species_id: createdId });
 
       setShowNewSpeciesBox(false);
       setNewSpeciesName('');
-      setNewSpeciesTarget({type: null, index: null});
+      setNewSpeciesTarget({ type: null, index: null });
 
       Alert.alert('Success', 'Species added successfully.');
     } catch (e) {
@@ -1039,14 +998,31 @@ export default function RegistersScreen({navigation}) {
   }, [newSpeciesName, newSpeciesTarget, fetchSpecies, speciesIdByNameLower]);
 
   const saveRecord = async () => {
-    const {lat: autoLat, lng: autoLng} = parseLatLng(gpsAuto);
-    const {lat: manualLat, lng: manualLng} = parseLatLng(gpsManual);
+    const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
+    const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
 
-    let pictures = [];
-    try {
-      pictures = await buildPictures();
-    } catch (e) {
-      return Alert.alert('Upload Failed', e?.message || 'Failed to upload images');
+    // Prepare attachment metadata for ApiService
+    const uploadPath = UPLOAD_PATHS[activeType] || UPLOAD_PATHS.enumeration;
+    const attachments = (pictureAssets || []).map((a, idx) => ({
+      uri: a.uri,
+      type: a.type || 'image/jpeg',
+      name: a.fileName || `img_${Date.now()}_${idx}.jpg`,
+      uploadUrl: UPLOAD_URL,
+      uploadPath: uploadPath,
+      targetFieldInBody: 'pictures',
+    }));
+
+    // If Editing, we need to handle existing vs new pictures.
+    // ApiService logic: appends new uploads to 'pictures'.
+    // So if replacing (new pics present), 'pictures' in body should be [].
+    // If appending (keeping old + adding new), 'pictures' should contain old URLs.
+    // RegistersScreen UI: "setPictureAssets([])" on load, implies if user picks new images, they replace?
+    // Actually the UI handles `uploadedImageUrls` (existing) separately.
+    // Line 953 logic was: if pictureAssets.length, upload and replace. Else keep existing.
+
+    let initialPictures = [];
+    if (!pictureAssets || pictureAssets.length === 0) {
+      initialPictures = Array.isArray(uploadedImageUrls) ? uploadedImageUrls : [];
     }
 
     let body = null;
@@ -1072,7 +1048,7 @@ export default function RegistersScreen({navigation}) {
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
-        pictures,
+        pictures: initialPictures, // ApiService will append new ones
       };
     }
 
@@ -1093,7 +1069,7 @@ export default function RegistersScreen({navigation}) {
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
-        pictures,
+        pictures: initialPictures,
         species_counts,
       };
     }
@@ -1118,7 +1094,7 @@ export default function RegistersScreen({navigation}) {
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
-        pictures,
+        pictures: initialPictures,
         species_counts,
       };
     }
@@ -1126,20 +1102,24 @@ export default function RegistersScreen({navigation}) {
     if (!body) return Alert.alert('Error', 'Unknown record type.');
 
     try {
+      setUploadingImages(true);
+      const urls = getActiveUrls();
+
+      let res;
       if (isEdit) {
-        await submitPatch(editingId, body);
-        setModalVisible(false);
-        fetchServer({refresh: true});
-        Alert.alert('Success', 'Record updated successfully.');
-        return;
+        if (!editingId) throw new Error('Edit ID missing.');
+        res = await apiService.patch(urls.update(editingId), body, { attachments });
+      } else {
+        res = await apiService.post(urls.create, body, { attachments });
       }
 
-      await submitCreate(body);
       setModalVisible(false);
-      fetchServer({refresh: true});
-      Alert.alert('Success', 'Saved to server.');
+      fetchServer({ refresh: true });
+      Alert.alert(res.offline ? 'Saved Offline' : 'Success', res.message || 'Saved successfully.');
     } catch (e) {
       Alert.alert(isEdit ? 'Update Failed' : 'Create Failed', e?.message || 'Request failed');
+    } finally {
+      setUploadingImages(false);
     }
   };
 
@@ -1153,7 +1133,7 @@ export default function RegistersScreen({navigation}) {
     // EnumerationAudit, PoleCropAuditScreen, AfforestationAuditListScreen
     if (type === 'pole') {
       // ✅ match your working pattern
-      stackNav.navigate('PoleCropAuditScreen', {poleCrop: r});
+      stackNav.navigate('PoleCropAuditScreen', { poleCrop: r });
       return;
     }
 
@@ -1187,48 +1167,48 @@ export default function RegistersScreen({navigation}) {
   const tableColumns = useMemo(() => {
     if (activeType === 'enumeration') {
       return [
-        {key: 'id', label: 'ID', width: 80},
-        {key: 'site', label: 'Site', width: 90},
-        {key: 'rd', label: 'RD/KM', width: 110},
-        {key: 'species', label: 'Species', width: 200},
-        {key: 'condition', label: 'Condition', width: 160},
-        {key: 'takki', label: 'Takki #', width: 120},
-        {key: 'disputed', label: 'Disputed', width: 110},
-        {key: 'auto', label: 'Auto GPS', width: 180},
-        {key: 'manual', label: 'Manual GPS', width: 180},
-        {key: 'status', label: 'Status', width: 220},
-        {key: 'actions', label: 'Actions', width: 220}, // ✅ widened for Edit + Audit
+        { key: 'id', label: 'ID', width: 80 },
+        { key: 'site', label: 'Site', width: 90 },
+        { key: 'rd', label: 'RD/KM', width: 110 },
+        { key: 'species', label: 'Species', width: 200 },
+        { key: 'condition', label: 'Condition', width: 160 },
+        { key: 'takki', label: 'Takki #', width: 120 },
+        { key: 'disputed', label: 'Disputed', width: 110 },
+        { key: 'auto', label: 'Auto GPS', width: 180 },
+        { key: 'manual', label: 'Manual GPS', width: 180 },
+        { key: 'status', label: 'Status', width: 220 },
+        { key: 'actions', label: 'Actions', width: 220 }, // ✅ widened for Edit + Audit
       ];
     }
 
     if (activeType === 'pole') {
       return [
-        {key: 'id', label: 'ID', width: 80},
-        {key: 'site', label: 'Site', width: 90},
-        {key: 'rds_from', label: 'RDS From', width: 110},
-        {key: 'rds_to', label: 'RDS To', width: 110},
-        {key: 'species_multi', label: 'Species : Count', width: 260},
-        {key: 'takki', label: 'Takki #', width: 120},
-        {key: 'disputed', label: 'Disputed', width: 110},
-        {key: 'auto', label: 'Auto GPS', width: 180},
-        {key: 'manual', label: 'Manual GPS', width: 180},
-        {key: 'status', label: 'Status', width: 220},
-        {key: 'actions', label: 'Actions', width: 220}, // ✅ widened for Edit + Audit
+        { key: 'id', label: 'ID', width: 80 },
+        { key: 'site', label: 'Site', width: 90 },
+        { key: 'rds_from', label: 'RDS From', width: 110 },
+        { key: 'rds_to', label: 'RDS To', width: 110 },
+        { key: 'species_multi', label: 'Species : Count', width: 260 },
+        { key: 'takki', label: 'Takki #', width: 120 },
+        { key: 'disputed', label: 'Disputed', width: 110 },
+        { key: 'auto', label: 'Auto GPS', width: 180 },
+        { key: 'manual', label: 'Manual GPS', width: 180 },
+        { key: 'status', label: 'Status', width: 220 },
+        { key: 'actions', label: 'Actions', width: 220 }, // ✅ widened for Edit + Audit
       ];
     }
 
     return [
-      {key: 'id', label: 'ID', width: 80},
-      {key: 'site', label: 'Site', width: 90},
-      {key: 'avg', label: 'Avg KM', width: 110},
-      {key: 'plants', label: 'Plants', width: 110},
-      {key: 'species_multi', label: 'Species : Count', width: 260},
-      {key: 'takki', label: 'Takki #', width: 120},
-      {key: 'disputed', label: 'Disputed', width: 110},
-      {key: 'auto', label: 'Auto GPS', width: 180},
-      {key: 'manual', label: 'Manual GPS', width: 180},
-      {key: 'status', label: 'Status', width: 220},
-      {key: 'actions', label: 'Actions', width: 220}, // ✅ widened for Edit + Audit
+      { key: 'id', label: 'ID', width: 80 },
+      { key: 'site', label: 'Site', width: 90 },
+      { key: 'avg', label: 'Avg KM', width: 110 },
+      { key: 'plants', label: 'Plants', width: 110 },
+      { key: 'species_multi', label: 'Species : Count', width: 260 },
+      { key: 'takki', label: 'Takki #', width: 120 },
+      { key: 'disputed', label: 'Disputed', width: 110 },
+      { key: 'auto', label: 'Auto GPS', width: 180 },
+      { key: 'manual', label: 'Manual GPS', width: 180 },
+      { key: 'status', label: 'Status', width: 220 },
+      { key: 'actions', label: 'Actions', width: 220 }, // ✅ widened for Edit + Audit
     ];
   }, [activeType]);
 
@@ -1282,7 +1262,7 @@ export default function RegistersScreen({navigation}) {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => fetchServer({refresh: true})}
+            onRefresh={() => fetchServer({ refresh: true })}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
@@ -1308,12 +1288,12 @@ export default function RegistersScreen({navigation}) {
           {/* Status Filters */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterBar} contentContainerStyle={styles.filterBarContent}>
             {[
-              {key: STATUS_FILTERS.ALL, label: 'All'},
-              {key: STATUS_FILTERS.PENDING, label: 'Pending'},
-              {key: STATUS_FILTERS.VERIFIED, label: 'Verified'},
-              {key: STATUS_FILTERS.DISAPPROVED, label: 'Disapproved'},
-              {key: STATUS_FILTERS.DISPOSED, label: 'Disposed'},
-              {key: STATUS_FILTERS.SUPERDARI, label: 'Superdari'},
+              { key: STATUS_FILTERS.ALL, label: 'All' },
+              { key: STATUS_FILTERS.PENDING, label: 'Pending' },
+              { key: STATUS_FILTERS.VERIFIED, label: 'Verified' },
+              { key: STATUS_FILTERS.DISAPPROVED, label: 'Disapproved' },
+              { key: STATUS_FILTERS.DISPOSED, label: 'Disposed' },
+              { key: STATUS_FILTERS.SUPERDARI, label: 'Superdari' },
             ].map(item => {
               const active = statusFilter === item.key;
               return (
@@ -1357,7 +1337,7 @@ export default function RegistersScreen({navigation}) {
               <Text style={styles.errorTitle}>Server Error</Text>
             </View>
             <Text style={styles.errorMessage}>{serverError}</Text>
-            <TouchableOpacity style={styles.errorButton} onPress={() => fetchServer({refresh: true})}>
+            <TouchableOpacity style={styles.errorButton} onPress={() => fetchServer({ refresh: true })}>
               <Text style={styles.errorButtonText}>Retry Connection</Text>
             </TouchableOpacity>
           </View>
@@ -1384,7 +1364,7 @@ export default function RegistersScreen({navigation}) {
                 {/* Header */}
                 <View style={styles.tableHeader}>
                   {tableColumns.map((col, idx) => (
-                    <View key={String(col.key) + idx} style={[styles.thCell, {width: col.width}]}>
+                    <View key={String(col.key) + idx} style={[styles.thCell, { width: col.width }]}>
                       <Text style={styles.thText}>{col.label}</Text>
                     </View>
                   ))}
@@ -1441,20 +1421,20 @@ export default function RegistersScreen({navigation}) {
                       {tableColumns.map(col => {
                         if (col.key === 'status') {
                           return (
-                            <View key="status" style={[styles.tdCell, {width: col.width}]}>
+                            <View key="status" style={[styles.tdCell, { width: col.width }]}>
                               {ui.isRejected ? (
                                 <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
-                                  <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                                    <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                                    <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                                  <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+                                    <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+                                    <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
                                       {ui.statusText}
                                     </Text>
                                   </View>
                                 </TouchableOpacity>
                               ) : (
-                                <View style={[styles.statusBadge, {backgroundColor: `${ui.statusColor}15`}]}>
-                                  <View style={[styles.statusDot, {backgroundColor: ui.statusColor}]} />
-                                  <Text style={[styles.statusText, {color: ui.statusColor}]} numberOfLines={2}>
+                                <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+                                  <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+                                  <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
                                     {ui.statusText}
                                   </Text>
                                 </View>
@@ -1465,7 +1445,7 @@ export default function RegistersScreen({navigation}) {
 
                         if (col.key === 'actions') {
                           return (
-                            <View key="actions" style={[styles.tdCell, styles.actionsCell, {width: col.width}]}>
+                            <View key="actions" style={[styles.tdCell, styles.actionsCell, { width: col.width }]}>
                               {/* Edit (only if rejected/disapproved as you already do) */}
                               {ui.showEdit ? (
                                 <TouchableOpacity style={styles.actionButton} onPress={() => openEditForm(r)}>
@@ -1473,7 +1453,7 @@ export default function RegistersScreen({navigation}) {
                                   <Text style={styles.actionButtonText}>Edit</Text>
                                 </TouchableOpacity>
                               ) : (
-                                <View style={{width: 0, height: 0}} />
+                                <View style={{ width: 0, height: 0 }} />
                               )}
 
                               {/* ✅ Audit (always available; uses correct route+params) */}
@@ -1482,7 +1462,7 @@ export default function RegistersScreen({navigation}) {
                                 onPress={() => goToAudit(activeType, r)}
                                 activeOpacity={0.7}>
                                 <Ionicons name="clipboard-outline" size={16} color={COLORS.primary} />
-                                <Text style={[styles.actionButtonText, {color: COLORS.primary}]}>Audit</Text>
+                                <Text style={[styles.actionButtonText, { color: COLORS.primary }]}>Audit</Text>
                               </TouchableOpacity>
                             </View>
                           );
@@ -1490,17 +1470,17 @@ export default function RegistersScreen({navigation}) {
 
                         if (col.key === 'disputed') {
                           return (
-                            <View key="disputed" style={[styles.tdCell, {width: col.width}]}>
-                              <View style={[styles.disputedPill, {backgroundColor: disputedBg, borderColor: `${disputedColor}35`}]}>
-                                <View style={[styles.disputedDot, {backgroundColor: disputedColor}]} />
-                                <Text style={[styles.disputedText, {color: disputedColor}]}>{r?._disputedLabel ?? 'NO'}</Text>
+                            <View key="disputed" style={[styles.tdCell, { width: col.width }]}>
+                              <View style={[styles.disputedPill, { backgroundColor: disputedBg, borderColor: `${disputedColor}35` }]}>
+                                <View style={[styles.disputedDot, { backgroundColor: disputedColor }]} />
+                                <Text style={[styles.disputedText, { color: disputedColor }]}>{r?._disputedLabel ?? 'NO'}</Text>
                               </View>
                             </View>
                           );
                         }
 
                         return (
-                          <View key={col.key} style={[styles.tdCell, {width: col.width}]}>
+                          <View key={col.key} style={[styles.tdCell, { width: col.width }]}>
                             <Text style={styles.tdText} numberOfLines={2}>
                               {getCellValue(col.key)}
                             </Text>
@@ -1531,7 +1511,7 @@ export default function RegistersScreen({navigation}) {
           </TouchableWithoutFeedback>
 
           <View style={styles.modalContainer}>
-            <View style={[styles.modalContent, {maxHeight: height * 0.5}]}>
+            <View style={[styles.modalContent, { maxHeight: height * 0.5 }]}>
               <View style={styles.modalHeader}>
                 <View style={styles.modalTitleRow}>
                   <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
@@ -1542,13 +1522,13 @@ export default function RegistersScreen({navigation}) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{padding: 20}}>
-                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>Rejected By</Text>
-                <Text style={{fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 14}}>
+              <View style={{ padding: 20 }}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textLight }}>Rejected By</Text>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 14 }}>
                   {rejectionModal.rejectedBy || 'Officer'}
                 </Text>
 
-                <Text style={{fontSize: 13, fontWeight: '800', color: COLORS.textLight}}>Remarks</Text>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textLight }}>Remarks</Text>
                 <View
                   style={{
                     marginTop: 8,
@@ -1558,15 +1538,15 @@ export default function RegistersScreen({navigation}) {
                     borderRadius: 14,
                     padding: 14,
                   }}>
-                  <Text style={{fontSize: 14, fontWeight: '600', color: COLORS.text, lineHeight: 20}}>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text, lineHeight: 20 }}>
                     {rejectionModal.remarks}
                   </Text>
                 </View>
 
                 <TouchableOpacity
-                  style={{marginTop: 16, backgroundColor: COLORS.danger, paddingVertical: 14, borderRadius: 14, alignItems: 'center'}}
+                  style={{ marginTop: 16, backgroundColor: COLORS.danger, paddingVertical: 14, borderRadius: 14, alignItems: 'center' }}
                   onPress={closeRejectionPopup}>
-                  <Text style={{color: '#fff', fontWeight: '800'}}>Close</Text>
+                  <Text style={{ color: '#fff', fontWeight: '800' }}>Close</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1667,11 +1647,11 @@ export default function RegistersScreen({navigation}) {
                             onChange={name => {
                               if (name === 'Other (Add New)') {
                                 setShowNewSpeciesBox(true);
-                                setNewSpeciesTarget({type: 'pole', index: idx});
+                                setNewSpeciesTarget({ type: 'pole', index: idx });
                                 return;
                               }
                               const id = speciesRows.find(x => x.name === name)?.id ?? null;
-                              updateSpeciesCountRow('pole', idx, {species_id: id});
+                              updateSpeciesCountRow('pole', idx, { species_id: id });
                             }}
                             options={speciesOptions}
                             disabled={speciesLoading}
@@ -1681,12 +1661,12 @@ export default function RegistersScreen({navigation}) {
                           <FormRow
                             label="Count"
                             value={String(row?.count ?? '')}
-                            onChangeText={t => updateSpeciesCountRow('pole', idx, {count: t})}
+                            onChangeText={t => updateSpeciesCountRow('pole', idx, { count: t })}
                             placeholder="e.g. 100"
                             keyboardType="numeric"
                           />
 
-                          <View style={{flexDirection: 'row', gap: 10}}>
+                          <View style={{ flexDirection: 'row', gap: 10 }}>
                             <TouchableOpacity
                               style={{
                                 flex: 1,
@@ -1696,7 +1676,7 @@ export default function RegistersScreen({navigation}) {
                                 alignItems: 'center',
                               }}
                               onPress={() => addSpeciesCountRow('pole')}>
-                              <Text style={{fontWeight: '800', color: COLORS.text}}>+ Add Row</Text>
+                              <Text style={{ fontWeight: '800', color: COLORS.text }}>+ Add Row</Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity
@@ -1708,7 +1688,7 @@ export default function RegistersScreen({navigation}) {
                                 alignItems: 'center',
                               }}
                               onPress={() => removeSpeciesCountRow('pole', idx)}>
-                              <Text style={{fontWeight: '800', color: COLORS.danger}}>Remove</Text>
+                              <Text style={{ fontWeight: '800', color: COLORS.danger }}>Remove</Text>
                             </TouchableOpacity>
                           </View>
                         </View>
@@ -1749,11 +1729,11 @@ export default function RegistersScreen({navigation}) {
                             onChange={name => {
                               if (name === 'Other (Add New)') {
                                 setShowNewSpeciesBox(true);
-                                setNewSpeciesTarget({type: 'aff', index: idx});
+                                setNewSpeciesTarget({ type: 'aff', index: idx });
                                 return;
                               }
                               const id = speciesRows.find(x => x.name === name)?.id ?? null;
-                              updateSpeciesCountRow('aff', idx, {species_id: id});
+                              updateSpeciesCountRow('aff', idx, { species_id: id });
                             }}
                             options={speciesOptions}
                             disabled={speciesLoading}
@@ -1763,12 +1743,12 @@ export default function RegistersScreen({navigation}) {
                           <FormRow
                             label="Count"
                             value={String(row?.count ?? '')}
-                            onChangeText={t => updateSpeciesCountRow('aff', idx, {count: t})}
+                            onChangeText={t => updateSpeciesCountRow('aff', idx, { count: t })}
                             placeholder="e.g. 500"
                             keyboardType="numeric"
                           />
 
-                          <View style={{flexDirection: 'row', gap: 10}}>
+                          <View style={{ flexDirection: 'row', gap: 10 }}>
                             <TouchableOpacity
                               style={{
                                 flex: 1,
@@ -1778,7 +1758,7 @@ export default function RegistersScreen({navigation}) {
                                 alignItems: 'center',
                               }}
                               onPress={() => addSpeciesCountRow('aff')}>
-                              <Text style={{fontWeight: '800', color: COLORS.text}}>+ Add Row</Text>
+                              <Text style={{ fontWeight: '800', color: COLORS.text }}>+ Add Row</Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity
@@ -1790,7 +1770,7 @@ export default function RegistersScreen({navigation}) {
                                 alignItems: 'center',
                               }}
                               onPress={() => removeSpeciesCountRow('aff', idx)}>
-                              <Text style={{fontWeight: '800', color: COLORS.danger}}>Remove</Text>
+                              <Text style={{ fontWeight: '800', color: COLORS.danger }}>Remove</Text>
                             </TouchableOpacity>
                           </View>
                         </View>
@@ -1801,7 +1781,7 @@ export default function RegistersScreen({navigation}) {
 
                 {/* Create new species box (Other) */}
                 {showNewSpeciesBox && (
-                  <View style={{marginTop: 10, marginBottom: 10}}>
+                  <View style={{ marginTop: 10, marginBottom: 10 }}>
                     <Text style={styles.sectionLabel}>Add New Species</Text>
                     <View
                       style={{
@@ -1812,7 +1792,7 @@ export default function RegistersScreen({navigation}) {
                         padding: 14,
                       }}>
                       <FormRow label="Species name" value={newSpeciesName} onChangeText={setNewSpeciesName} placeholder="e.g. Guavaaa" />
-                      <View style={{flexDirection: 'row', gap: 10}}>
+                      <View style={{ flexDirection: 'row', gap: 10 }}>
                         <TouchableOpacity
                           style={{
                             flex: 1,
@@ -1824,16 +1804,16 @@ export default function RegistersScreen({navigation}) {
                           }}
                           disabled={creatingSpecies}
                           onPress={createSpeciesAndAssign}>
-                          {creatingSpecies ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{color: '#fff', fontWeight: '900'}}>Add & Select</Text>}
+                          {creatingSpecies ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ color: '#fff', fontWeight: '900' }}>Add & Select</Text>}
                         </TouchableOpacity>
                         <TouchableOpacity
-                          style={{flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 14, borderRadius: 12, alignItems: 'center'}}
+                          style={{ flex: 1, backgroundColor: 'rgba(31, 41, 55, 0.05)', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
                           onPress={() => {
                             setShowNewSpeciesBox(false);
                             setNewSpeciesName('');
-                            setNewSpeciesTarget({type: null, index: null});
+                            setNewSpeciesTarget({ type: null, index: null });
                           }}>
-                          <Text style={{fontWeight: '900', color: COLORS.text}}>Cancel</Text>
+                          <Text style={{ fontWeight: '900', color: COLORS.text }}>Cancel</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -1849,7 +1829,7 @@ export default function RegistersScreen({navigation}) {
                   <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.footerButtonPrimary, uploadingImages && {opacity: 0.7}]} disabled={uploadingImages} onPress={saveRecord}>
+                <TouchableOpacity style={[styles.footerButtonPrimary, uploadingImages && { opacity: 0.7 }]} disabled={uploadingImages} onPress={saveRecord}>
                   <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.footerButtonGradient}>
                     {uploadingImages ? (
                       <>
@@ -1874,9 +1854,9 @@ export default function RegistersScreen({navigation}) {
 }
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
-  contentContainer: {paddingBottom: 100},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
+  contentContainer: { paddingBottom: 100 },
 
   headerGradient: {
     paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 20,
@@ -1885,11 +1865,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  header: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   backButton: {
     width: 44,
     height: 44,
@@ -1899,11 +1879,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 22, fontWeight: '800', color: '#fff', marginBottom: 2},
-  headerSubtitle: {fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.85)'},
+  headerContent: { flex: 1 },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#fff', marginBottom: 2 },
+  headerSubtitle: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.85)' },
 
-  tabsRow: {flexDirection: 'row', gap: 10, paddingHorizontal: 20, marginTop: 14},
+  tabsRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, marginTop: 14 },
   tabPill: {
     flex: 1,
     flexDirection: 'row',
@@ -1914,13 +1894,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
   },
-  tabPillActive: {backgroundColor: 'rgba(255,255,255,0.20)', borderColor: 'rgba(255,255,255,0.30)'},
-  tabPillInactive: {backgroundColor: 'rgba(255,255,255,0.10)', borderColor: 'rgba(255,255,255,0.18)'},
-  tabText: {fontSize: 12, fontWeight: '900'},
-  tabTextActive: {color: '#fff'},
-  tabTextInactive: {color: 'rgba(255,255,255,0.85)'},
+  tabPillActive: { backgroundColor: 'rgba(255,255,255,0.20)', borderColor: 'rgba(255,255,255,0.30)' },
+  tabPillInactive: { backgroundColor: 'rgba(255,255,255,0.10)', borderColor: 'rgba(255,255,255,0.18)' },
+  tabText: { fontSize: 12, fontWeight: '900' },
+  tabTextActive: { color: '#fff' },
+  tabTextInactive: { color: 'rgba(255,255,255,0.85)' },
 
-  searchSection: {paddingHorizontal: 20, paddingTop: 20, paddingBottom: 6},
+  searchSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 6 },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1931,23 +1911,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  searchIcon: {marginRight: 12},
-  searchInput: {flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text},
-  searchClear: {padding: 4},
+  searchIcon: { marginRight: 12 },
+  searchInput: { flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.text },
+  searchClear: { padding: 4 },
 
-  filterBar: {marginTop: 10},
-  filterBarContent: {paddingHorizontal: 0, paddingBottom: 6, gap: 10},
-  filterChip: {paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, borderWidth: 1},
-  filterChipActive: {backgroundColor: 'rgba(5, 150, 105, 0.12)', borderColor: 'rgba(5, 150, 105, 0.30)'},
-  filterChipInactive: {backgroundColor: '#fff', borderColor: COLORS.border},
-  filterChipText: {fontSize: 12, fontWeight: '800', letterSpacing: 0.2},
-  filterChipTextActive: {color: COLORS.primaryDark},
-  filterChipTextInactive: {color: COLORS.textLight},
+  filterBar: { marginTop: 10 },
+  filterBarContent: { paddingHorizontal: 0, paddingBottom: 6, gap: 10 },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, borderWidth: 1 },
+  filterChipActive: { backgroundColor: 'rgba(5, 150, 105, 0.12)', borderColor: 'rgba(5, 150, 105, 0.30)' },
+  filterChipInactive: { backgroundColor: '#fff', borderColor: COLORS.border },
+  filterChipText: { fontSize: 12, fontWeight: '800', letterSpacing: 0.2 },
+  filterChipTextActive: { color: COLORS.primaryDark },
+  filterChipTextInactive: { color: COLORS.textLight },
 
   statsCard: {
     flexDirection: 'row',
@@ -1960,16 +1940,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
     marginTop: 10,
   },
-  statItem: {flex: 1, alignItems: 'center'},
-  statValue: {fontSize: 24, fontWeight: '800', color: COLORS.primary, marginBottom: 4},
-  statLabel: {fontSize: 12, fontWeight: '600', color: COLORS.textLight},
-  statDivider: {width: 1, height: 40, backgroundColor: COLORS.border},
+  statItem: { flex: 1, alignItems: 'center' },
+  statValue: { fontSize: 24, fontWeight: '800', color: COLORS.primary, marginBottom: 4 },
+  statLabel: { fontSize: 12, fontWeight: '600', color: COLORS.textLight },
+  statDivider: { width: 1, height: 40, backgroundColor: COLORS.border },
 
   errorCard: {
     backgroundColor: 'rgba(239,68,68,0.08)',
@@ -1980,16 +1960,16 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
   },
-  errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
-  errorTitle: {fontSize: 16, fontWeight: '700', color: COLORS.danger},
-  errorMessage: {fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: 12},
-  errorButton: {backgroundColor: COLORS.danger, borderRadius: 12, paddingVertical: 12, alignItems: 'center'},
-  errorButtonText: {color: '#fff', fontSize: 14, fontWeight: '700'},
+  errorHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  errorTitle: { fontSize: 16, fontWeight: '700', color: COLORS.danger },
+  errorMessage: { fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: 12 },
+  errorButton: { backgroundColor: COLORS.danger, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  errorButtonText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 
-  section: {marginHorizontal: 20, marginBottom: 20},
-  sectionHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
-  sectionTitle: {fontSize: 20, fontWeight: '700', color: COLORS.text},
-  sectionSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  section: { marginHorizontal: 20, marginBottom: 20 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text },
+  sectionSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
 
   emptyState: {
     backgroundColor: '#fff',
@@ -2000,10 +1980,10 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     borderStyle: 'dashed',
   },
-  emptyTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8},
-  emptyText: {fontSize: 14, color: COLORS.textLight, textAlign: 'center', lineHeight: 20},
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8 },
+  emptyText: { fontSize: 14, color: COLORS.textLight, textAlign: 'center', lineHeight: 20 },
 
-  tableContainer: {borderRadius: 16, overflow: 'hidden'},
+  tableContainer: { borderRadius: 16, overflow: 'hidden' },
   table: {
     borderRadius: 16,
     overflow: 'hidden',
@@ -2011,7 +1991,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -2023,14 +2003,14 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     minHeight: 56,
   },
-  thCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  thText: {fontSize: 12, fontWeight: '800', color: COLORS.text, textTransform: 'uppercase', letterSpacing: 0.5},
-  tableRow: {flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border},
-  rowEven: {backgroundColor: '#fff'},
-  rowOdd: {backgroundColor: 'rgba(5, 150, 105, 0.02)'},
-  rowRejected: {backgroundColor: 'rgba(239, 68, 68, 0.06)'},
-  tdCell: {paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border},
-  tdText: {fontSize: 13, fontWeight: '600', color: COLORS.text},
+  thCell: { paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border },
+  thText: { fontSize: 12, fontWeight: '800', color: COLORS.text, textTransform: 'uppercase', letterSpacing: 0.5 },
+  tableRow: { flexDirection: 'row', minHeight: 60, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  rowEven: { backgroundColor: '#fff' },
+  rowOdd: { backgroundColor: 'rgba(5, 150, 105, 0.02)' },
+  rowRejected: { backgroundColor: 'rgba(239, 68, 68, 0.06)' },
+  tdCell: { paddingHorizontal: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.border },
+  tdText: { fontSize: 13, fontWeight: '600', color: COLORS.text },
 
   statusBadge: {
     flexDirection: 'row',
@@ -2042,10 +2022,10 @@ const styles = StyleSheet.create({
     gap: 6,
     maxWidth: 210,
   },
-  statusDot: {width: 8, height: 8, borderRadius: 4},
-  statusText: {fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1},
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusText: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 1 },
 
-  actionsCell: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8},
+  actionsCell: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2055,10 +2035,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 4,
   },
-  actionButtonText: {fontSize: 12, fontWeight: '700', color: COLORS.secondary},
+  actionButtonText: { fontSize: 12, fontWeight: '700', color: COLORS.secondary },
 
   // ✅ Audit button styling
-  auditButton: {backgroundColor: 'rgba(5,150,105,0.10)'},
+  auditButton: { backgroundColor: 'rgba(5,150,105,0.10)' },
 
   disputedPill: {
     flexDirection: 'row',
@@ -2070,31 +2050,31 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 6,
   },
-  disputedDot: {width: 8, height: 8, borderRadius: 4},
-  disputedText: {fontSize: 12, fontWeight: '900', letterSpacing: 0.4},
+  disputedDot: { width: 8, height: 8, borderRadius: 4 },
+  disputedText: { fontSize: 12, fontWeight: '900', letterSpacing: 0.4 },
 
   fab: {
     position: 'absolute',
     right: 20,
     bottom: 30,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
   },
-  fabGradient: {width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center'},
+  fabGradient: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
 
-  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  modalBackdrop: {...StyleSheet.absoluteFillObject},
-  modalContainer: {flex: 1, justifyContent: 'center', padding: 20},
+  modalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalContainer: { flex: 1, justifyContent: 'center', padding: 20 },
   modalContent: {
     borderRadius: 24,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 10},
+    shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.15,
     shadowRadius: 20,
     elevation: 10,
@@ -2109,8 +2089,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  modalTitle: {fontSize: 20, fontWeight: '800', color: COLORS.text},
+  modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
   modalClose: {
     width: 40,
     height: 40,
@@ -2120,8 +2100,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  editModalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  editModalContainer: {flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20},
+  editModalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  editModalContainer: { flex: 1, marginTop: Platform.OS === 'ios' ? 40 : 20 },
   editModalContent: {
     flex: 1,
     borderTopLeftRadius: 28,
@@ -2140,8 +2120,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  editModalTitle: {fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4},
-  editModalSubtitle: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
+  editModalTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  editModalSubtitle: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
   editModalClose: {
     width: 40,
     height: 40,
@@ -2150,7 +2130,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  editModalBody: {paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20},
+  editModalBody: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20 },
   editModalFooter: {
     flexDirection: 'row',
     gap: 12,
@@ -2166,10 +2146,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  footerButtonSecondaryText: {fontSize: 16, fontWeight: '700', color: COLORS.text},
-  footerButtonPrimary: {flex: 2, borderRadius: 14, overflow: 'hidden'},
-  footerButtonGradient: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8},
-  footerButtonPrimaryText: {fontSize: 16, fontWeight: '800', color: '#fff'},
+  footerButtonSecondaryText: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  footerButtonPrimary: { flex: 2, borderRadius: 14, overflow: 'hidden' },
+  footerButtonGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8 },
+  footerButtonPrimaryText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
   sectionLabel: {
     fontSize: 14,

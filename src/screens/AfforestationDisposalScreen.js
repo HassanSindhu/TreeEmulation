@@ -1,5 +1,5 @@
 // /screens/AfforestationDisposalScreen.js
-import React, {useEffect, useMemo, useState} from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -19,10 +19,11 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
-import {Calendar} from 'react-native-calendars';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { Calendar } from 'react-native-calendars';
 
 import FormRow from '../components/FormRow';
+import { apiService } from '../services/ApiService';
 
 // ✅ IMPORTANT: Your cURL uses localhost:3000. In production, switch to be.lte.gisforestry.com.
 const API_HOST = 'http://be.lte.gisforestry.com';
@@ -66,11 +67,11 @@ const formatDateDisplay = ymd => {
 };
 
 // Simple reusable date input row
-const DateRow = ({label, value, onPress, required}) => (
-  <View style={{marginBottom: 10}}>
+const DateRow = ({ label, value, onPress, required }) => (
+  <View style={{ marginBottom: 10 }}>
     <Text style={styles.dateLabel}>
       {label}
-      {required ? <Text style={{color: COLORS.danger}}> *</Text> : null}
+      {required ? <Text style={{ color: COLORS.danger }}> *</Text> : null}
     </Text>
     <TouchableOpacity style={styles.dateInput} onPress={onPress} activeOpacity={0.8}>
       <Text style={value ? styles.dateText : styles.datePlaceholder}>
@@ -81,7 +82,7 @@ const DateRow = ({label, value, onPress, required}) => (
   </View>
 );
 
-export default function AfforestationDisposalScreen({navigation, route}) {
+export default function AfforestationDisposalScreen({ navigation, route }) {
   const afforestationId = Number(route?.params?.afforestationId);
   const nameOfSiteId = route?.params?.nameOfSiteId;
   const disposalId = route?.params?.disposalId ?? null;
@@ -177,8 +178,8 @@ export default function AfforestationDisposalScreen({navigation, route}) {
       'Permission Required',
       'Please allow camera permission from Settings to take photos.',
       [
-        {text: 'Cancel', style: 'cancel'},
-        {text: 'Open Settings', onPress: () => Linking.openSettings().catch(() => {})},
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Settings', onPress: () => Linking.openSettings().catch(() => { }) },
       ],
     );
   };
@@ -221,7 +222,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
 
   const pickFromGallery = () => {
     setImagePickerModal(false);
-    launchImageLibrary({mediaType: 'photo', quality: 0.75, selectionLimit: 0}, onImagePickerResult);
+    launchImageLibrary({ mediaType: 'photo', quality: 0.75, selectionLimit: 0 }, onImagePickerResult);
   };
 
   const takePhotoFromCamera = async () => {
@@ -232,51 +233,14 @@ export default function AfforestationDisposalScreen({navigation, route}) {
       return;
     }
     launchCamera(
-      {mediaType: 'photo', quality: 0.75, saveToPhotos: true, cameraType: 'back'},
+      { mediaType: 'photo', quality: 0.75, saveToPhotos: true, cameraType: 'back' },
       onImagePickerResult,
     );
   };
 
   // ---------------- AWS UPLOAD ----------------
-  const uploadImagesToS3 = async (
-    localUris,
-    {uploadPath = AWS_UPLOAD_PATH, fileName = 'aff_disp'} = {},
-  ) => {
-    if (!Array.isArray(localUris) || localUris.length === 0) return [];
+  // Manual AWS Upload Removed - handled by ApiService
 
-    const form = new FormData();
-    form.append('uploadPath', uploadPath);
-    form.append('isMulti', 'true');
-    form.append('fileName', fileName);
-
-    localUris.forEach((uri, idx) => {
-      const cleanUri = Platform.OS === 'ios' ? uri.replace('file://', '') : uri;
-      const extGuess = (uri || '').split('.').pop();
-      const ext = extGuess && extGuess.length <= 5 ? extGuess.toLowerCase() : 'jpg';
-      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-
-      form.append('files', {uri: cleanUri, type: mime, name: `${fileName}_${idx}.${ext}`});
-    });
-
-    const res = await fetch(AWS_UPLOAD_URL, {method: 'POST', body: form});
-    const json = await res.json().catch(() => null);
-
-    if (!res.ok || !json?.status) {
-      const msg = json?.message || `Upload failed (HTTP ${res.status})`;
-      throw new Error(msg);
-    }
-
-    const items = Array.isArray(json?.data) ? json.data : [];
-    const finalUrls = [];
-
-    items.forEach(it => {
-      const img = it?.availableSizes?.image;
-      if (img) return finalUrls.push(img);
-      if (Array.isArray(it?.url) && it.url.length) return finalUrls.push(it.url[it.url.length - 1]);
-    });
-
-    return finalUrls.filter(Boolean);
-  };
 
   // ---------------- VALIDATION ----------------
   const validate = () => {
@@ -298,10 +262,10 @@ export default function AfforestationDisposalScreen({navigation, route}) {
     }
 
     const dateFields = [
-      {label: 'DPC Date', value: dpcDate},
-      {label: 'FIR Date', value: firDate},
-      {label: 'Act Date', value: actDate},
-      {label: 'Auction Date', value: auctionDate},
+      { label: 'DPC Date', value: dpcDate },
+      { label: 'FIR Date', value: firDate },
+      { label: 'Act Date', value: actDate },
+      { label: 'Auction Date', value: auctionDate },
     ];
     for (const f of dateFields) {
       if (cleanStr(f.value) && !isValidYmd(f.value)) {
@@ -331,29 +295,17 @@ export default function AfforestationDisposalScreen({navigation, route}) {
   const submitDisposal = async () => {
     if (!validate()) return;
 
-    const token = await getAuthToken();
-    if (!token) {
-      Alert.alert('Auth Error', 'Missing AUTH_TOKEN. Please login again.');
-      return;
-    }
-
-    let uploadedUrls = [];
-    try {
-      if (pictureUris?.length) {
-        setUploading(true);
-        const safeFileName = `aff_disp_${afforestationId}_${Date.now()}`;
-        uploadedUrls = await uploadImagesToS3(pictureUris, {
-          uploadPath: AWS_UPLOAD_PATH,
-          fileName: safeFileName,
-        });
-      }
-    } catch (e) {
-      setUploading(false);
-      Alert.alert('Upload Failed', e?.message || 'Image upload failed.');
-      return;
-    } finally {
-      setUploading(false);
-    }
+    // Prepare attachments
+    const safeFileName = `aff_disp_${afforestationId}_${Date.now()}`;
+    const attachments = (pictureUris || []).map((uri, idx) => ({
+      uri, type: 'image/jpeg', name: `${safeFileName}_${idx}.jpg`,
+      uploadUrl: AWS_UPLOAD_URL,
+      uploadPath: AWS_UPLOAD_PATH,
+      targetFieldInBody: 'pictures',
+      storeBasename: false // Afforestation logic seemed to store URLs, but let's stick to consistent pattern.
+      // Wait, original code `uploadedUrls` stored full URLs. 
+      // If we want full URLs, ApiService will put them in `pictures` if storeBasename is false/default.
+    }));
 
     // ✅ Same API payload keys (unchanged)
     const body = {
@@ -386,25 +338,15 @@ export default function AfforestationDisposalScreen({navigation, route}) {
       auction_authority_designation: auction ? cleanStr(auctionAuthorityDesignation) : '',
       auction_remarks: auction ? cleanStr(auctionRemarks) : '',
 
-      pictures: uploadedUrls,
+      pictures: [], // Filled by ApiService
     };
 
     try {
       setSubmitting(true);
 
-      const res = await fetch(DISPOSAL_URL, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
-        body: JSON.stringify(body),
-      });
+      const json = await apiService.post(DISPOSAL_URL, body, { attachments });
 
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
-        const msg = json?.message || json?.error || `API Error (${res.status})`;
-        throw new Error(msg);
-      }
-
-      Alert.alert('Success', 'Disposal saved successfully.');
+      Alert.alert(json.offline ? 'Saved Offline' : 'Success', json.message || 'Disposal saved successfully.');
       navigation.goBack();
     } catch (e) {
       Alert.alert('Submit Failed', e?.message || 'Failed to submit Disposal.');
@@ -422,7 +364,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
-        <View style={{flex: 1}}>
+        <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{title}</Text>
           <Text style={styles.headerSub}>
             Afforestation ID: {Number.isFinite(afforestationId) ? afforestationId : '—'}
@@ -431,10 +373,10 @@ export default function AfforestationDisposalScreen({navigation, route}) {
         </View>
       </View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{flex: 1}}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView
           style={styles.container}
-          contentContainerStyle={{paddingBottom: 24}}
+          contentContainerStyle={{ paddingBottom: 24 }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
 
@@ -507,7 +449,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
                 <Switch
                   value={peedaAct}
                   onValueChange={setPeedaAct}
-                  trackColor={{false: 'rgba(31,41,55,0.15)', true: 'rgba(5,150,105,0.35)'}}
+                  trackColor={{ false: 'rgba(31,41,55,0.15)', true: 'rgba(5,150,105,0.35)' }}
                   thumbColor={peedaAct ? COLORS.primary : '#f4f4f5'}
                 />
               </View>
@@ -539,7 +481,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
                 <Switch
                   value={auction}
                   onValueChange={setAuction}
-                  trackColor={{false: 'rgba(31,41,55,0.15)', true: 'rgba(5,150,105,0.35)'}}
+                  trackColor={{ false: 'rgba(31,41,55,0.15)', true: 'rgba(5,150,105,0.35)' }}
                   thumbColor={auction ? COLORS.primary : '#f4f4f5'}
                 />
               </View>
@@ -568,7 +510,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
 
             <TouchableOpacity style={styles.imageBtn} onPress={() => setImagePickerModal(true)} activeOpacity={0.8}>
               <Ionicons name="image-outline" size={20} color={COLORS.primary} />
-              <View style={{flex: 1}}>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.imageBtnTitle}>Add Pictures</Text>
                 <Text style={styles.imageBtnSub}>Camera or Gallery • Uploads to AWS</Text>
               </View>
@@ -594,7 +536,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
 
           {/* Submit */}
           <TouchableOpacity
-            style={[styles.submitBtn, (submitting || uploading) && {opacity: 0.7}]}
+            style={[styles.submitBtn, (submitting || uploading) && { opacity: 0.7 }]}
             onPress={submitDisposal}
             disabled={submitting || uploading}
             activeOpacity={0.85}>
@@ -637,7 +579,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
                 applySelectedDate(ymd);
               }}
               markedDates={{
-                [tempDate]: {selected: true, selectedColor: COLORS.primary},
+                [tempDate]: { selected: true, selectedColor: COLORS.primary },
               }}
               theme={{
                 backgroundColor: '#ffffff',
@@ -688,7 +630,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{padding: 18, gap: 12}}>
+              <View style={{ padding: 18, gap: 12 }}>
                 <TouchableOpacity style={styles.modalBtnPrimary} onPress={takePhotoFromCamera} activeOpacity={0.85}>
                   <Ionicons name="camera-outline" size={18} color="#fff" />
                   <Text style={styles.modalBtnPrimaryText}>Take Photo</Text>
@@ -712,7 +654,7 @@ export default function AfforestationDisposalScreen({navigation, route}) {
 }
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
+  screen: { flex: 1, backgroundColor: COLORS.background },
   header: {
     backgroundColor: COLORS.primary,
     paddingTop: Platform.OS === 'ios' ? 54 : (StatusBar.currentHeight || 0) + 18,
@@ -732,10 +674,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {color: '#fff', fontSize: 18, fontWeight: '800'},
-  headerSub: {color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: '600', marginTop: 2},
+  headerTitle: { color: '#fff', fontSize: 18, fontWeight: '800' },
+  headerSub: { color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: '600', marginTop: 2 },
 
-  container: {flex: 1, paddingHorizontal: 16, paddingTop: 14},
+  container: { flex: 1, paddingHorizontal: 16, paddingTop: 14 },
 
   card: {
     backgroundColor: COLORS.card,
@@ -745,19 +687,19 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     marginBottom: 14,
   },
-  cardHeaderRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6},
-  cardTitle: {fontSize: 15, fontWeight: '800', color: COLORS.text, marginBottom: 10},
+  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  cardTitle: { fontSize: 15, fontWeight: '800', color: COLORS.text, marginBottom: 10 },
 
-  sectionToggle: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8},
-  toggleLeft: {flexDirection: 'row', alignItems: 'center', gap: 10},
+  sectionToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  toggleLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 
-  switchRow: {flexDirection: 'row', alignItems: 'center', gap: 10},
-  switchLabel: {fontSize: 12, fontWeight: '800', color: COLORS.textLight},
+  switchRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  switchLabel: { fontSize: 12, fontWeight: '800', color: COLORS.textLight },
 
-  note: {marginTop: 2, color: COLORS.textLight, fontSize: 12, fontWeight: '600', lineHeight: 18},
+  note: { marginTop: 2, color: COLORS.textLight, fontSize: 12, fontWeight: '600', lineHeight: 18 },
 
   // Date input
-  dateLabel: {fontSize: 12, fontWeight: '800', color: COLORS.text, marginBottom: 6},
+  dateLabel: { fontSize: 12, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
   dateInput: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -769,8 +711,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
-  dateText: {color: COLORS.text, fontSize: 13, fontWeight: '800'},
-  datePlaceholder: {color: COLORS.textLight, fontSize: 13, fontWeight: '700'},
+  dateText: { color: COLORS.text, fontSize: 13, fontWeight: '800' },
+  datePlaceholder: { color: COLORS.textLight, fontSize: 13, fontWeight: '700' },
 
   imageBtn: {
     flexDirection: 'row',
@@ -782,8 +724,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 14,
   },
-  imageBtnTitle: {fontSize: 14, fontWeight: '800', color: COLORS.text},
-  imageBtnSub: {fontSize: 12, fontWeight: '600', color: COLORS.textLight, marginTop: 2},
+  imageBtnTitle: { fontSize: 14, fontWeight: '800', color: COLORS.text },
+  imageBtnSub: { fontSize: 12, fontWeight: '600', color: COLORS.textLight, marginTop: 2 },
 
   selectedBox: {
     flexDirection: 'row',
@@ -796,10 +738,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
   },
-  selectedText: {fontSize: 13, fontWeight: '800', color: COLORS.success},
+  selectedText: { fontSize: 13, fontWeight: '800', color: COLORS.success },
 
-  progressRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10},
-  progressText: {color: COLORS.textLight, fontSize: 12, fontWeight: '700'},
+  progressRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
+  progressText: { color: COLORS.textLight, fontSize: 12, fontWeight: '700' },
 
   submitBtn: {
     marginTop: 6,
@@ -811,7 +753,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
-  submitBtnText: {color: '#fff', fontSize: 15, fontWeight: '900'},
+  submitBtnText: { color: '#fff', fontSize: 15, fontWeight: '900' },
 
   footerHint: {
     marginTop: 12,
@@ -824,8 +766,8 @@ const styles = StyleSheet.create({
   },
 
   // Date modal
-  dateModalOverlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end'},
-  datePickerContainer: {backgroundColor: '#fff', borderTopLeftRadius: 18, borderTopRightRadius: 18},
+  dateModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  datePickerContainer: { backgroundColor: '#fff', borderTopLeftRadius: 18, borderTopRightRadius: 18 },
   datePickerHeader: {
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -835,8 +777,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  datePickerTitle: {fontSize: 16, fontWeight: '900', color: COLORS.text},
-  dateCloseBtn: {width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(31,41,55,0.06)', alignItems: 'center', justifyContent: 'center'},
+  datePickerTitle: { fontSize: 16, fontWeight: '900', color: COLORS.text },
+  dateCloseBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(31,41,55,0.06)', alignItems: 'center', justifyContent: 'center' },
   selectedDateContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -845,14 +787,14 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
   },
-  selectedDateLabel: {fontSize: 13, fontWeight: '800', color: COLORS.textLight, marginRight: 8},
-  selectedDateValue: {fontSize: 14, fontWeight: '900', color: COLORS.primary},
+  selectedDateLabel: { fontSize: 13, fontWeight: '800', color: COLORS.textLight, marginRight: 8 },
+  selectedDateValue: { fontSize: 14, fontWeight: '900', color: COLORS.primary },
 
   // Image modal
-  modalOverlay: {flex: 1, backgroundColor: COLORS.overlay},
-  modalBackdrop: {...StyleSheet.absoluteFillObject},
-  modalContainer: {flex: 1, justifyContent: 'center', padding: 18},
-  modalContent: {backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border},
+  modalOverlay: { flex: 1, backgroundColor: COLORS.overlay },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalContainer: { flex: 1, justifyContent: 'center', padding: 18 },
+  modalContent: { backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border },
   modalHeader: {
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -862,7 +804,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  modalTitle: {fontSize: 16, fontWeight: '900', color: COLORS.text},
+  modalTitle: { fontSize: 16, fontWeight: '900', color: COLORS.text },
   modalClose: {
     width: 36,
     height: 36,
@@ -880,7 +822,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
   },
-  modalBtnPrimaryText: {color: '#fff', fontSize: 14, fontWeight: '900'},
+  modalBtnPrimaryText: { color: '#fff', fontSize: 14, fontWeight: '900' },
   modalBtnSecondary: {
     backgroundColor: 'rgba(5,150,105,0.06)',
     borderWidth: 1,
@@ -892,7 +834,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
   },
-  modalBtnSecondaryText: {color: COLORS.primary, fontSize: 14, fontWeight: '900'},
-  modalCancel: {alignItems: 'center', paddingVertical: 10},
-  modalCancelText: {color: COLORS.textLight, fontSize: 13, fontWeight: '800'},
+  modalBtnSecondaryText: { color: COLORS.primary, fontSize: 14, fontWeight: '900' },
+  modalCancel: { alignItems: 'center', paddingVertical: 10 },
+  modalCancelText: { color: COLORS.textLight, fontSize: 13, fontWeight: '800' },
 });

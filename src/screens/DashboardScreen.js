@@ -1,4 +1,4 @@
-import React, {useCallback, useMemo, useState, useEffect} from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { apiService } from '../services/ApiService';
 
 // Theme Colors (consistent with other screens)
 const COLORS = {
@@ -42,39 +43,39 @@ const API_BASE = 'http://be.lte.gisforestry.com';
 const STATS_URL = `${API_BASE}/lpe3/stats`;
 
 const SAMPLE_DIVISIONS = [
-  {id: 'div_1', name: 'Lahore'},
-  {id: 'div_2', name: 'Sheikhupura'},
-  {id: 'div_3', name: 'Faisalabad'},
+  { id: 'div_1', name: 'Lahore' },
+  { id: 'div_2', name: 'Sheikhupura' },
+  { id: 'div_3', name: 'Faisalabad' },
 ];
 
 const SAMPLE_RANGES = {
   div_1: [
-    {id: 'rng_1', name: 'Range A'},
-    {id: 'rng_2', name: 'Range B'},
+    { id: 'rng_1', name: 'Range A' },
+    { id: 'rng_2', name: 'Range B' },
   ],
-  div_2: [{id: 'rng_3', name: 'Range C'}],
-  div_3: [{id: 'rng_4', name: 'Range D'}],
+  div_2: [{ id: 'rng_3', name: 'Range C' }],
+  div_3: [{ id: 'rng_4', name: 'Range D' }],
 };
 
 const SAMPLE_BLOCKS = {
   rng_1: [
-    {id: 'blk_1', name: 'Block 1'},
-    {id: 'blk_2', name: 'Block 2'},
+    { id: 'blk_1', name: 'Block 1' },
+    { id: 'blk_2', name: 'Block 2' },
   ],
-  rng_2: [{id: 'blk_3', name: 'Block 3'}],
-  rng_3: [{id: 'blk_4', name: 'Block 4'}],
-  rng_4: [{id: 'blk_5', name: 'Block 5'}],
+  rng_2: [{ id: 'blk_3', name: 'Block 3' }],
+  rng_3: [{ id: 'blk_4', name: 'Block 4' }],
+  rng_4: [{ id: 'blk_5', name: 'Block 5' }],
 };
 
 const SAMPLE_BEATS = {
   blk_1: [
-    {id: 'bt_1', name: 'Beat 1'},
-    {id: 'bt_2', name: 'Beat 2'},
+    { id: 'bt_1', name: 'Beat 1' },
+    { id: 'bt_2', name: 'Beat 2' },
   ],
-  blk_2: [{id: 'bt_3', name: 'Beat 3'}],
-  blk_3: [{id: 'bt_4', name: 'Beat 4'}],
-  blk_4: [{id: 'bt_5', name: 'Beat 5'}],
-  blk_5: [{id: 'bt_6', name: 'Beat 6'}],
+  blk_2: [{ id: 'bt_3', name: 'Beat 3' }],
+  blk_3: [{ id: 'bt_4', name: 'Beat 4' }],
+  blk_4: [{ id: 'bt_5', name: 'Beat 5' }],
+  blk_5: [{ id: 'bt_6', name: 'Beat 6' }],
 };
 
 export default function DashboardScreen() {
@@ -114,29 +115,12 @@ export default function DashboardScreen() {
   };
 
   const fetchStats = useCallback(
-    async ({refresh = false} = {}) => {
+    async ({ refresh = false } = {}) => {
       try {
         refresh ? setStatsRefreshing(true) : setStatsLoading(true);
         setStatsError('');
 
-        const token = await getAuthToken();
-        if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
-
-        // ✅ If later your API supports filters, add query params here
-        // e.g. ?divisionId=...&rangeId=...
-        const res = await fetch(STATS_URL, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        const json = await safeJson(res);
-
-        if (!res.ok) {
-          const msg = json?.message || json?.error || `API Error (${res.status})`;
-          throw new Error(msg);
-        }
+        const json = await apiService.get(STATS_URL);
 
         setStatsData(json?.data || null);
       } catch (e) {
@@ -180,7 +164,7 @@ export default function DashboardScreen() {
   const applyFilters = async () => {
     // ✅ For now filters are UI only. When your backend supports it,
     // pass these IDs as query params in fetchStats()
-    await fetchStats({refresh: true});
+    await fetchStats({ refresh: true });
   };
 
   const resetFilters = () => {
@@ -189,7 +173,7 @@ export default function DashboardScreen() {
     setBlock(null);
     setBeat(null);
     // You can refresh stats for "All"
-    fetchStats({refresh: true});
+    fetchStats({ refresh: true });
   };
 
   const totals = useMemo(() => {
@@ -301,7 +285,7 @@ export default function DashboardScreen() {
         refreshControl={
           <RefreshControl
             refreshing={statsRefreshing}
-            onRefresh={() => fetchStats({refresh: true})}
+            onRefresh={() => fetchStats({ refresh: true })}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
@@ -324,7 +308,7 @@ export default function DashboardScreen() {
               <Text style={styles.errorText}>{statsError}</Text>
               <TouchableOpacity
                 style={styles.errorBtn}
-                onPress={() => fetchStats({refresh: true})}>
+                onPress={() => fetchStats({ refresh: true })}>
                 <Text style={styles.errorBtnText}>Retry</Text>
               </TouchableOpacity>
             </View>
@@ -334,7 +318,7 @@ export default function DashboardScreen() {
           <View style={styles.totalCard}>
             <View style={styles.totalTopRow}>
               <View style={styles.totalLeft}>
-                <View style={[styles.totalIcon, {backgroundColor: 'rgba(5, 150, 105, 0.12)'}]}>
+                <View style={[styles.totalIcon, { backgroundColor: 'rgba(5, 150, 105, 0.12)' }]}>
                   <Ionicons name="leaf-outline" size={18} color={COLORS.primary} />
                 </View>
                 <View>
@@ -352,9 +336,9 @@ export default function DashboardScreen() {
             <StackedBar
               total={Math.max(0, totals.total)}
               segments={[
-                {value: totals.pendingTotal, color: COLORS.warning},
-                {value: totals.approvedTotal, color: COLORS.success},
-                {value: totals.rejectedTotal, color: COLORS.danger},
+                { value: totals.pendingTotal, color: COLORS.warning },
+                { value: totals.approvedTotal, color: COLORS.success },
+                { value: totals.rejectedTotal, color: COLORS.danger },
               ]}
             />
 
@@ -498,11 +482,11 @@ async function safeJson(res) {
 
 /* ---------- Reusable components ---------- */
 
-function SelectField({label, value, placeholder, onPress, disabled}) {
+function SelectField({ label, value, placeholder, onPress, disabled }) {
   return (
     <TouchableOpacity
       activeOpacity={0.7}
-      style={[styles.selectField, disabled && {opacity: 0.5}]}
+      style={[styles.selectField, disabled && { opacity: 0.5 }]}
       onPress={onPress}
       disabled={disabled}>
       <Text style={styles.selectLabel}>{label}</Text>
@@ -516,10 +500,10 @@ function SelectField({label, value, placeholder, onPress, disabled}) {
   );
 }
 
-function QuickAction({icon, title, color, onPress}) {
+function QuickAction({ icon, title, color, onPress }) {
   return (
     <TouchableOpacity style={styles.quickAction} onPress={onPress} activeOpacity={0.7}>
-      <View style={[styles.actionIcon, {backgroundColor: `${color}15`}]}>
+      <View style={[styles.actionIcon, { backgroundColor: `${color}15` }]}>
         <Ionicons name={icon} size={24} color={color} />
       </View>
       <Text style={styles.actionTitle}>{title}</Text>
@@ -527,10 +511,10 @@ function QuickAction({icon, title, color, onPress}) {
   );
 }
 
-function ActivityItem({icon, title, time, color}) {
+function ActivityItem({ icon, title, time, color }) {
   return (
     <View style={styles.activityItem}>
-      <View style={[styles.activityIcon, {backgroundColor: `${color}15`}]}>
+      <View style={[styles.activityIcon, { backgroundColor: `${color}15` }]}>
         <Ionicons name={icon} size={16} color={color} />
       </View>
       <View style={styles.activityContent}>
@@ -541,7 +525,7 @@ function ActivityItem({icon, title, time, color}) {
   );
 }
 
-function PickerModal({visible, title, data, onClose, onSelect}) {
+function PickerModal({ visible, title, data, onClose, onSelect }) {
   return (
     <Modal visible={visible} animationType="slide" transparent>
       <View style={styles.modalOverlay}>
@@ -556,7 +540,7 @@ function PickerModal({visible, title, data, onClose, onSelect}) {
             data={data}
             keyExtractor={item => item.id}
             ItemSeparatorComponent={() => <View style={styles.separator} />}
-            renderItem={({item}) => (
+            renderItem={({ item }) => (
               <Pressable style={styles.modalItem} onPress={() => onSelect(item)}>
                 <Text style={styles.modalItemText}>{item.name}</Text>
                 <Ionicons name="chevron-forward" size={18} color={COLORS.textLight} />
@@ -569,10 +553,10 @@ function PickerModal({visible, title, data, onClose, onSelect}) {
   );
 }
 
-function LegendDot({label, color}) {
+function LegendDot({ label, color }) {
   return (
     <View style={styles.legendItem}>
-      <View style={[styles.legendDot, {backgroundColor: color}]} />
+      <View style={[styles.legendDot, { backgroundColor: color }]} />
       <Text style={styles.legendText} numberOfLines={1}>
         {label}
       </Text>
@@ -580,23 +564,23 @@ function LegendDot({label, color}) {
   );
 }
 
-function ProgressBar({value, total, color}) {
+function ProgressBar({ value, total, color }) {
   const pct = total > 0 ? Math.max(0, Math.min(1, value / total)) : 0;
   return (
     <View style={styles.progressTrack}>
-      <View style={[styles.progressFill, {width: `${pct * 100}%`, backgroundColor: color}]} />
+      <View style={[styles.progressFill, { width: `${pct * 100}%`, backgroundColor: color }]} />
     </View>
   );
 }
 
-function StackedBar({total, segments}) {
+function StackedBar({ total, segments }) {
   const t = Math.max(0, Number(total || 0));
   const safeSegments = Array.isArray(segments) ? segments : [];
 
   return (
     <View style={styles.stackedTrack}>
       {t <= 0 ? (
-        <View style={[styles.stackedSeg, {width: '100%', backgroundColor: 'rgba(31,41,55,0.08)'}]} />
+        <View style={[styles.stackedSeg, { width: '100%', backgroundColor: 'rgba(31,41,55,0.08)' }]} />
       ) : (
         safeSegments.map((s, idx) => {
           const w = Math.max(0, Math.min(1, Number(s?.value || 0) / t));
@@ -605,7 +589,7 @@ function StackedBar({total, segments}) {
               key={`${idx}`}
               style={[
                 styles.stackedSeg,
-                {width: `${w * 100}%`, backgroundColor: s?.color || 'rgba(31,41,55,0.25)'},
+                { width: `${w * 100}%`, backgroundColor: s?.color || 'rgba(31,41,55,0.25)' },
               ]}
             />
           );
@@ -615,18 +599,18 @@ function StackedBar({total, segments}) {
   );
 }
 
-function StatusStatCard({title, icon, color, bg, total, value, roleRows}) {
+function StatusStatCard({ title, icon, color, bg, total, value, roleRows }) {
   const totalNum = Math.max(0, Number(total || 0));
   const valueNum = Math.max(0, Number(value || 0));
   const pctText = totalNum > 0 ? `${Math.round((valueNum / totalNum) * 100)}%` : '0%';
 
   return (
-    <View style={[styles.statusCard, {backgroundColor: bg}]}>
+    <View style={[styles.statusCard, { backgroundColor: bg }]}>
       <View style={styles.statusTop}>
-        <View style={[styles.statusIcon, {backgroundColor: `${color}20`}]}>
+        <View style={[styles.statusIcon, { backgroundColor: `${color}20` }]}>
           <Ionicons name={icon} size={18} color={color} />
         </View>
-        <View style={{flex: 1}}>
+        <View style={{ flex: 1 }}>
           <Text style={styles.statusTitle}>{title}</Text>
           <Text style={styles.statusMeta}>
             {valueNum.toLocaleString()} / {totalNum.toLocaleString()} ({pctText})
@@ -637,7 +621,7 @@ function StatusStatCard({title, icon, color, bg, total, value, roleRows}) {
       <ProgressBar value={valueNum} total={totalNum} color={color} />
 
       {!!roleRows?.length && (
-        <View style={{marginTop: 12}}>
+        <View style={{ marginTop: 12 }}>
           <Text style={styles.breakdownTitle}>By Role</Text>
 
           {roleRows.map(r => (
@@ -646,7 +630,7 @@ function StatusStatCard({title, icon, color, bg, total, value, roleRows}) {
                 {r.label}
               </Text>
               <Text style={styles.roleValue}>{Number(r.value || 0).toLocaleString()}</Text>
-              <View style={{flex: 1}}>
+              <View style={{ flex: 1 }}>
                 <ProgressBar value={Number(r.value || 0)} total={valueNum || 1} color={color} />
               </View>
             </View>
@@ -660,9 +644,9 @@ function StatusStatCard({title, icon, color, bg, total, value, roleRows}) {
 /* ---------- Styles ---------- */
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
-  contentContainer: {paddingBottom: 40},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
+  contentContainer: { paddingBottom: 40 },
 
   // Header
   header: {
@@ -673,11 +657,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  headerContent: {paddingHorizontal: 20},
+  headerContent: { paddingHorizontal: 20 },
   headerTitle: {
     fontSize: 24,
     fontWeight: '800',
@@ -685,7 +669,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     letterSpacing: 0.5,
   },
-  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
+  headerInfo: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -695,7 +679,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 4,
   },
-  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
+  infoChipText: { fontSize: 12, fontWeight: '600', color: '#fff' },
 
   // Cards
   card: {
@@ -707,7 +691,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -721,12 +705,12 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     paddingBottom: 12,
   },
-  cardTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  cardTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
 
   // Filter Section
-  filterRow: {flexDirection: 'row', gap: 12, marginBottom: 12},
-  selectField: {flex: 1},
-  selectLabel: {fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 6},
+  filterRow: { flexDirection: 'row', gap: 12, marginBottom: 12 },
+  selectField: { flex: 1 },
+  selectLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 6 },
   selectBox: {
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -738,8 +722,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     backgroundColor: '#fff',
   },
-  selectValue: {fontSize: 14, color: COLORS.text, fontWeight: '500'},
-  selectPlaceholder: {color: COLORS.textLight, fontStyle: 'italic'},
+  selectValue: { fontSize: 14, color: COLORS.text, fontWeight: '500' },
+  selectPlaceholder: { color: COLORS.textLight, fontStyle: 'italic' },
   filterActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -757,7 +741,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.primaryLight,
     gap: 6,
   },
-  resetButtonText: {color: COLORS.primary, fontWeight: '700', fontSize: 14},
+  resetButtonText: { color: COLORS.primary, fontWeight: '700', fontSize: 14 },
   applyButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -767,19 +751,19 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 6,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,
   },
-  applyButtonText: {color: '#fff', fontWeight: '700', fontSize: 14},
+  applyButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 
   // Sections
-  statsSection: {marginHorizontal: 20, marginTop: 12},
-  actionsSection: {marginHorizontal: 20, marginTop: 12},
-  activitySection: {marginHorizontal: 20, marginTop: 12},
-  sectionHeader: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16},
-  sectionTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text},
+  statsSection: { marginHorizontal: 20, marginTop: 12 },
+  actionsSection: { marginHorizontal: 20, marginTop: 12 },
+  activitySection: { marginHorizontal: 20, marginTop: 12 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
 
   // Error card
   errorCard: {
@@ -790,9 +774,9 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
   },
-  errorHeader: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6},
-  errorTitle: {fontSize: 14, fontWeight: '800', color: COLORS.danger},
-  errorText: {fontSize: 13, color: COLORS.text, lineHeight: 18},
+  errorHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  errorTitle: { fontSize: 14, fontWeight: '800', color: COLORS.danger },
+  errorText: { fontSize: 13, color: COLORS.text, lineHeight: 18 },
   errorBtn: {
     marginTop: 10,
     backgroundColor: COLORS.danger,
@@ -800,7 +784,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     alignItems: 'center',
   },
-  errorBtnText: {color: '#fff', fontWeight: '800', fontSize: 13},
+  errorBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
 
   // Total card
   totalCard: {
@@ -811,17 +795,17 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     marginBottom: 12,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 6,
     elevation: 2,
   },
-  totalTopRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'},
-  totalLeft: {flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1},
-  totalIcon: {width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center'},
-  totalTitle: {fontSize: 14, fontWeight: '800', color: COLORS.text},
-  totalSubtitle: {fontSize: 12, color: COLORS.textLight, marginTop: 2},
-  totalValue: {fontSize: 22, fontWeight: '900', color: COLORS.text},
+  totalTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  totalLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  totalIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  totalTitle: { fontSize: 14, fontWeight: '800', color: COLORS.text },
+  totalSubtitle: { fontSize: 12, color: COLORS.textLight, marginTop: 2 },
+  totalValue: { fontSize: 22, fontWeight: '900', color: COLORS.text },
 
   // Stacked bar
   stackedTrack: {
@@ -832,15 +816,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginTop: 14,
   },
-  stackedSeg: {height: '100%'},
+  stackedSeg: { height: '100%' },
 
-  legendRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12},
-  legendItem: {flexDirection: 'row', alignItems: 'center', gap: 6},
-  legendDot: {width: 10, height: 10, borderRadius: 5},
-  legendText: {fontSize: 12, color: COLORS.textLight, fontWeight: '600'},
+  legendRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendText: { fontSize: 12, color: COLORS.textLight, fontWeight: '600' },
 
   // Status cards grid
-  statsGrid2: {gap: 12},
+  statsGrid2: { gap: 12 },
 
   statusCard: {
     borderRadius: 16,
@@ -848,15 +832,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
     shadowRadius: 6,
     elevation: 2,
   },
-  statusTop: {flexDirection: 'row', alignItems: 'center', gap: 10},
-  statusIcon: {width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center'},
-  statusTitle: {fontSize: 14, fontWeight: '900', color: COLORS.text},
-  statusMeta: {fontSize: 12, color: COLORS.textLight, marginTop: 2, fontWeight: '600'},
+  statusTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  statusIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  statusTitle: { fontSize: 14, fontWeight: '900', color: COLORS.text },
+  statusMeta: { fontSize: 12, color: COLORS.textLight, marginTop: 2, fontWeight: '600' },
 
   // Progress
   progressTrack: {
@@ -866,7 +850,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginTop: 12,
   },
-  progressFill: {height: '100%', borderRadius: 10},
+  progressFill: { height: '100%', borderRadius: 10 },
 
   // Breakdown
   breakdownTitle: {
@@ -883,11 +867,11 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 10,
   },
-  roleLabel: {width: 90, fontSize: 12, color: COLORS.text, fontWeight: '700'},
-  roleValue: {width: 42, textAlign: 'right', fontSize: 12, color: COLORS.text, fontWeight: '800'},
+  roleLabel: { width: 90, fontSize: 12, color: COLORS.text, fontWeight: '700' },
+  roleValue: { width: 42, textAlign: 'right', fontSize: 12, color: COLORS.text, fontWeight: '800' },
 
   // Quick Actions
-  actionsGrid: {flexDirection: 'row', justifyContent: 'space-between', gap: 12},
+  actionsGrid: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   quickAction: {
     flex: 1,
     alignItems: 'center',
@@ -897,7 +881,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 2,
@@ -910,7 +894,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 8,
   },
-  actionTitle: {fontSize: 12, fontWeight: '600', color: COLORS.text, textAlign: 'center'},
+  actionTitle: { fontSize: 12, fontWeight: '600', color: COLORS.text, textAlign: 'center' },
 
   // Activity
   activityCard: {
@@ -920,7 +904,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 2,
@@ -940,9 +924,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  activityContent: {flex: 1},
-  activityTitle: {fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 2},
-  activityTime: {fontSize: 12, color: COLORS.textLight},
+  activityContent: { flex: 1 },
+  activityTitle: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 2 },
+  activityTime: { fontSize: 12, color: COLORS.textLight },
 
   // Modal
   modalOverlay: {
@@ -966,9 +950,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  modalTitle: {fontSize: 18, fontWeight: '700', color: COLORS.text},
-  closeButton: {padding: 4},
-  separator: {height: 1, backgroundColor: COLORS.border, marginHorizontal: 20},
+  modalTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text },
+  closeButton: { padding: 4 },
+  separator: { height: 1, backgroundColor: COLORS.border, marginHorizontal: 20 },
   modalItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -976,5 +960,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
   },
-  modalItemText: {fontSize: 15, color: COLORS.text, fontWeight: '500'},
+  modalItemText: { fontSize: 15, color: COLORS.text, fontWeight: '500' },
 });

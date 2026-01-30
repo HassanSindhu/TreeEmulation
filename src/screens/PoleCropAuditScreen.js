@@ -40,6 +40,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import { apiService } from '../services/ApiService';
 
 import FormRow from '../components/FormRow';
 import DateField from '../components/DateField';
@@ -430,44 +431,7 @@ export default function PoleCropAuditScreen({ navigation, route }) {
 
   const clearAssets = setter => setter([]);
 
-  const uploadAssetsToBucket = async (assets, uploadPath) => {
-    const list = Array.isArray(assets) ? assets : [];
-    if (!list.length) return [];
-
-    const form = new FormData();
-
-    list.forEach(a => {
-      const f = toFormFile(a);
-      if (f) form.append('files', f);
-    });
-
-    form.append('uploadPath', uploadPath);
-    form.append('isMulti', BUCKET_IS_MULTI);
-    form.append('fileName', BUCKET_FILE_NAME);
-
-    const res = await fetch(BUCKET_UPLOAD_URL, { method: 'POST', body: form });
-    const json = await res.json().catch(() => null);
-
-    if (!res.ok || !json?.status) {
-      const msg = json?.message || json?.error || `upload failed (${res.status})`;
-      throw new Error(msg);
-    }
-
-    const data = Array.isArray(json?.data) ? json.data : [];
-    const urls = [];
-
-    data.forEach(item => {
-      const img = item?.availableSizes?.image;
-      if (img) urls.push(img);
-
-      const arr = Array.isArray(item?.url) ? item.url : [];
-      arr.forEach(u => {
-        if (u && !urls.includes(u)) urls.push(u);
-      });
-    });
-
-    return urls.filter(Boolean);
-  };
+  // Manual bucket upload removed - handled by ApiService
 
   const openPicturesViewer = (pics, title = 'Pictures') => {
     const list = Array.isArray(pics) ? pics.filter(Boolean) : [];
@@ -493,25 +457,9 @@ export default function PoleCropAuditScreen({ navigation, route }) {
         refresh ? setRefreshing(true) : setLoading(true);
         setServerError('');
 
-        const token = await getToken();
-        if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
+        const rowsRaw = await apiService.get(POLE_CROP_AUDIT_LIST_URL(poleCropId));
 
-        const res = await fetch(POLE_CROP_AUDIT_LIST_URL(poleCropId), {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/json',
-          },
-        });
-
-        const { json, text } = await fetchJsonOrText(res);
-
-        if (!res.ok) {
-          const msg = json?.message || json?.error || text || `API Error (${res.status})`;
-          throw new Error(msg);
-        }
-
-        let rows = normalizeList(json);
+        let rows = normalizeList(rowsRaw);
         rows = Array.isArray(rows) ? rows : [];
 
         // optional: sort latest first if date exists
@@ -646,19 +594,41 @@ export default function PoleCropAuditScreen({ navigation, route }) {
     try {
       setUploading(true);
 
-      const token = await getToken();
-      if (!token) throw new Error('Missing Bearer token (AUTH_TOKEN).');
+      // Prepare attachments for all 3 categories
+      const attachments = [];
 
-      const [picsUrls, drUrls, firUrls] = await Promise.all([
-        uploadAssetsToBucket(auditPicsAssets, BUCKET_UPLOAD_PATH_AUDIT_PICS),
-        uploadAssetsToBucket(drEvidenceAssets, BUCKET_UPLOAD_PATH_DR_EVIDENCE),
-        uploadAssetsToBucket(firEvidenceAssets, BUCKET_UPLOAD_PATH_FIR_EVIDENCE),
-      ]);
+      // 1. Audit Pics
+      auditPicsAssets.forEach(a => {
+        attachments.push({
+          uri: a.uri, type: a.type || 'image/jpeg', name: a.fileName,
+          uploadUrl: BUCKET_UPLOAD_URL,
+          uploadPath: BUCKET_UPLOAD_PATH_AUDIT_PICS,
+          targetFieldInBody: 'pictures',
+          storeBasename: true
+        });
+      });
 
-      // ✅ IMPORTANT: Send only basenames (filenames) to backend
-      const picturesFinal = (picsUrls || []).map(toBasename).filter(Boolean);
-      const drEvidenceFinal = (drUrls || []).map(toBasename).filter(Boolean);
-      const firEvidenceFinal = (firUrls || []).map(toBasename).filter(Boolean);
+      // 2. DR Evidence
+      drEvidenceAssets.forEach(a => {
+        attachments.push({
+          uri: a.uri, type: a.type || 'image/jpeg', name: a.fileName,
+          uploadUrl: BUCKET_UPLOAD_URL,
+          uploadPath: BUCKET_UPLOAD_PATH_DR_EVIDENCE,
+          targetFieldInBody: 'drEvidence',
+          storeBasename: true
+        });
+      });
+
+      // 3. FIR Evidence
+      firEvidenceAssets.forEach(a => {
+        attachments.push({
+          uri: a.uri, type: a.type || 'image/jpeg', name: a.fileName,
+          uploadUrl: BUCKET_UPLOAD_URL,
+          uploadPath: BUCKET_UPLOAD_PATH_FIR_EVIDENCE,
+          targetFieldInBody: 'firEvidence',
+          storeBasename: true
+        });
+      });
 
       const speciesSuccessCounts = speciesList.map(s => ({
         species_id: Number(s.species_id),
@@ -676,37 +646,26 @@ export default function PoleCropAuditScreen({ navigation, route }) {
 
         drNo: String(drNo || '').trim() || undefined,
         drDate: String(drDate || '').trim() ? new Date(drDate).toISOString() : undefined,
-        drEvidence: drEvidenceFinal.length ? drEvidenceFinal : undefined,
+        drEvidence: [], // ApiService will fill
 
         fineImposed: !!fineImposed,
         fineAmount: fineImposed ? Number(fineAmount) : undefined,
 
         firRegistered: !!firRegistered,
         firNumber: firRegistered ? String(firNumber || '').trim() : undefined,
-        firEvidence: firEvidenceFinal.length ? firEvidenceFinal : undefined,
+        firEvidence: [], // ApiService will fill
 
-        pictures: picturesFinal.length ? picturesFinal : undefined,
+        pictures: [], // ApiService will fill
       });
 
-      console.log('POLE CROP AUDIT payload:', JSON.stringify(payload, null, 2));
-
-      const res = await fetch(POLE_CROP_AUDIT_CREATE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-
-      const { json, text } = await fetchJsonOrText(res);
-
-      if (!res.ok) {
-        console.log('POLE CROP AUDIT HTTP', res.status, text);
-        const msg = json?.message || json?.error || text || `API Error (${res.status})`;
-        throw new Error(msg);
-      }
+      const res = await apiService.post(POLE_CROP_AUDIT_CREATE_URL, payload, { attachments });
 
       setModalVisible(false);
       fetchPoleCropAudits({ refresh: true });
-      Alert.alert('Success', 'Audit saved successfully.');
+      Alert.alert(
+        res.offline ? 'Saved Offline' : 'Success',
+        res.message || 'Audit saved successfully.'
+      );
     } catch (e) {
       Alert.alert('Error', e?.message || 'Failed to save audit');
     } finally {

@@ -1,5 +1,5 @@
 // /screens/SuperdariScreen.js
-import React, {useEffect, useRef, useState, useMemo} from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -15,10 +15,11 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
-import {launchImageLibrary} from 'react-native-image-picker';
+import { launchImageLibrary } from 'react-native-image-picker';
 
 import FormRow from '../components/FormRow';
-import {DropdownRow} from '../components/SelectRows';
+import { DropdownRow } from '../components/SelectRows';
+import { apiService } from '../services/ApiService';
 
 // Theme Colors (consistent with Disposal screen)
 const COLORS = {
@@ -48,10 +49,10 @@ const STORAGE_TOKEN = 'AUTH_TOKEN';
 const SUPERDARI_URL = `${API_BASE}/enum/superdari`;
 const TREE_CONDITION_SOURCE_URL = `${API_BASE}/forest-tree-conditions`; // as per your request
 
-export default function SuperdariScreen({navigation, route}) {
+export default function SuperdariScreen({ navigation, route }) {
   // ✅ Now Superdari links to Tree ID (enumerationId) always.
   // disposalId is OPTIONAL (only if tree is disposed).
-  const {treeId, disposalId: routeDisposalId, enumeration} = route.params || {};
+  const { treeId, disposalId: routeDisposalId, enumeration } = route.params || {};
 
   const [record, setRecord] = useState(null);
 
@@ -106,13 +107,13 @@ export default function SuperdariScreen({navigation, route}) {
 
   const parseLatLong = txt => {
     const s = String(txt || '').trim();
-    if (!s) return {lat: null, long: null};
+    if (!s) return { lat: null, long: null };
     const parts = s.split(/[,\s]+/).filter(Boolean);
-    if (parts.length < 2) return {lat: null, long: null};
+    if (parts.length < 2) return { lat: null, long: null };
     const lat = Number(parts[0]);
     const long = Number(parts[1]);
-    if (Number.isNaN(lat) || Number.isNaN(long)) return {lat: null, long: null};
-    return {lat, long};
+    if (Number.isNaN(lat) || Number.isNaN(long)) return { lat: null, long: null };
+    return { lat, long };
   };
 
   const buildPicturesForApi = () => {
@@ -161,18 +162,13 @@ export default function SuperdariScreen({navigation, route}) {
   const fetchTreeConditionFromApi = async () => {
     setConditionLoading(true);
     try {
-      const res = await fetch(TREE_CONDITION_SOURCE_URL);
-      const json = await safeJson(res);
-
-      if (!res.ok) {
-        throw new Error(json?.message || `Tree condition API failed (HTTP ${res.status})`);
-      }
+      const json = await apiService.get(TREE_CONDITION_SOURCE_URL);
 
       const rows = normalizeList(json);
 
       const mapped = rows
         .map(x => {
-          if (typeof x === 'string') return {id: null, label: x};
+          if (typeof x === 'string') return { id: null, label: x };
           return {
             id: x?.id ?? null,
             label: x?.name ?? '',
@@ -181,12 +177,12 @@ export default function SuperdariScreen({navigation, route}) {
         .filter(x => x.label);
 
       // Optional: add blank at top
-      const final = [{id: null, label: ''}, ...mapped];
+      const final = [{ id: null, label: '' }, ...mapped];
 
       setConditionRows(final);
     } catch (e) {
       console.warn('Tree condition fetch error', e);
-      setConditionRows([{id: null, label: ''}]);
+      setConditionRows([{ id: null, label: '' }]);
       Alert.alert('Error', e?.message || 'Failed to load Tree Condition list from API.');
     } finally {
       setConditionLoading(false);
@@ -201,7 +197,7 @@ export default function SuperdariScreen({navigation, route}) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const {latitude, longitude} = pos.coords;
+        const { latitude, longitude } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
         setGpsLoading(false);
@@ -210,7 +206,7 @@ export default function SuperdariScreen({navigation, route}) {
         setGpsLoading(false);
         if (!silent) Alert.alert('Location Error', err.message);
       },
-      {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
     );
   };
 
@@ -244,27 +240,8 @@ export default function SuperdariScreen({navigation, route}) {
   };
 
   /* ===================== API POST ===================== */
-  const postSuperdari = async payload => {
-    const token = await getToken();
-    if (!token) throw new Error('Auth token not found. Please login again.');
+  /* ===================== API POST (Replaced by ApiService inline) ===================== */
 
-    const res = await fetch(SUPERDARI_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const json = await safeJson(res);
-
-    if (!res.ok) {
-      throw new Error(json?.message || `Superdari API failed (HTTP ${res.status})`);
-    }
-
-    return json;
-  };
 
   /* ===================== SAVE ===================== */
   const save = async () => {
@@ -299,18 +276,19 @@ export default function SuperdariScreen({navigation, route}) {
       return;
     }
 
-    const {lat: auto_lat, long: auto_long} = parseLatLong(autoGps);
-    const {lat: manual_lat, long: manual_long} = parseLatLong(manualGps);
+    const { lat: auto_lat, long: auto_long } = parseLatLong(autoGps);
+    const { lat: manual_lat, long: manual_long } = parseLatLong(manualGps);
+
+    // Attachments for ApiService
+    const attachments = (pictureUris || []).map((uri, idx) => ({
+      uri, type: 'image/jpeg', name: `super_${treeId}_${idx}_${Date.now()}.jpg`,
+      uploadUrl: 'https://app.eco.gisforestry.com/aws-bucket/tree-enum',
+      uploadPath: 'Superdari',
+      targetFieldInBody: 'pictures',
+      storeBasename: false
+    }));
 
     // ✅ Latest API body:
-    // {
-    //   disposalId?: number,
-    //   enumerationId: number (TreeID),
-    //   superdar_name, contact_no, cnic_no,
-    //   treeConditionId,
-    //   auto_lat, auto_long, manual_lat, manual_long,
-    //   pictures: [...]
-    // }
     const payload = {
       enumerationId: Number(treeId), // TreeID linking
       superdar_name: name.trim(),
@@ -321,7 +299,7 @@ export default function SuperdariScreen({navigation, route}) {
       auto_long: auto_long ?? null,
       manual_lat: manual_lat ?? null,
       manual_long: manual_long ?? null,
-      pictures: buildPicturesForApi(),
+      pictures: [], // Filled by ApiService
     };
 
     // only attach disposalId when present
@@ -331,43 +309,44 @@ export default function SuperdariScreen({navigation, route}) {
 
     setSubmitting(true);
     try {
-      const apiResp = await postSuperdari(payload);
+      const apiResp = await apiService.post(SUPERDARI_URL, payload, { attachments });
 
+      // Save locally (Keeping existing logic for UI consistency)
       const json = await AsyncStorage.getItem(STORAGE_KEY);
       const arr = json ? JSON.parse(json) : [];
 
       const updated = arr.map(r =>
         r.id === treeId
           ? {
-              ...r,
-              superdari: {
-                superdarName: name.trim(),
-                superdarContact: contact.trim(),
-                superdarCnic: cnic.trim(),
-                treeCondition: treeCondition.trim(),
-                treeConditionId: Number(treeConditionId),
-                autoGpsLatLong: (autoGps || '').trim(),
-                manualGpsLatLong: (manualGps || '').trim(),
-                gpsLatLong: gpsFinal,
-                remarks,
-                pictureUris: pictureUris || [],
-                // store both links
-                enumerationId: Number(treeId),
-                // disposalId optional in local too
-                disposalId:
-                  resolvedDisposalId !== null && resolvedDisposalId !== undefined && resolvedDisposalId !== ''
-                    ? Number(resolvedDisposalId)
-                    : null,
-                apiResponse: apiResp || null,
-                savedAt: new Date().toISOString(),
-              },
-            }
+            ...r,
+            superdari: {
+              superdarName: name.trim(),
+              superdarContact: contact.trim(),
+              superdarCnic: cnic.trim(),
+              treeCondition: treeCondition.trim(),
+              treeConditionId: Number(treeConditionId),
+              autoGpsLatLong: (autoGps || '').trim(),
+              manualGpsLatLong: (manualGps || '').trim(),
+              gpsLatLong: gpsFinal,
+              remarks,
+              pictureUris: pictureUris || [],
+              // store both links
+              enumerationId: Number(treeId),
+              // disposalId optional in local too
+              disposalId:
+                resolvedDisposalId !== null && resolvedDisposalId !== undefined && resolvedDisposalId !== ''
+                  ? Number(resolvedDisposalId)
+                  : null,
+              apiResponse: apiResp || null,
+              savedAt: new Date().toISOString(),
+            },
+          }
           : r,
       );
 
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
 
-      Alert.alert('Success', 'Superdari saved and posted to server.');
+      Alert.alert(apiResp.offline ? 'Saved Offline' : 'Success', apiResp.message || 'Superdari saved and posted to server.');
       navigation.goBack();
     } catch (e) {
       console.warn('Superdari save/post error', e);
@@ -437,11 +416,11 @@ export default function SuperdariScreen({navigation, route}) {
               <Text style={styles.infoValue}>
                 {String(
                   routeDisposalId ||
-                    record?.disposalId ||
-                    record?.disposal?.id ||
-                    record?.disposal?.disposalId ||
-                    record?.disposal?.serverDisposalId ||
-                    '—',
+                  record?.disposalId ||
+                  record?.disposal?.id ||
+                  record?.disposal?.disposalId ||
+                  record?.disposal?.serverDisposalId ||
+                  '—',
                 )}
               </Text>
             </View>
@@ -549,7 +528,7 @@ export default function SuperdariScreen({navigation, route}) {
           {pictureUris.length > 0 && (
             <>
               <Text style={styles.picCount}>
-                {pictureUris.length} picture(s) selected • API will send: {buildPicturesForApi().length} link(s)
+                {pictureUris.length} picture(s) selected
               </Text>
 
               <ScrollView
@@ -558,7 +537,7 @@ export default function SuperdariScreen({navigation, route}) {
                 style={styles.imagesContainer}>
                 {pictureUris.map(uri => (
                   <View key={uri} style={styles.thumbWrap}>
-                    <Image source={{uri}} style={styles.thumb} />
+                    <Image source={{ uri }} style={styles.thumb} />
                     <TouchableOpacity
                       style={styles.thumbClose}
                       onPress={() => removePicture(uri)}
@@ -574,7 +553,7 @@ export default function SuperdariScreen({navigation, route}) {
 
         {/* Save Button */}
         <TouchableOpacity
-          style={[styles.saveBtn, {opacity: submitting ? 0.7 : 1}]}
+          style={[styles.saveBtn, { opacity: submitting ? 0.7 : 1 }]}
           disabled={submitting}
           onPress={save}
           activeOpacity={0.7}>
@@ -596,9 +575,9 @@ export default function SuperdariScreen({navigation, route}) {
 }
 
 const styles = StyleSheet.create({
-  screen: {flex: 1, backgroundColor: COLORS.background},
-  container: {flex: 1},
-  contentContainer: {paddingBottom: 40},
+  screen: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
+  contentContainer: { paddingBottom: 40 },
 
   header: {
     backgroundColor: COLORS.primary,
@@ -608,11 +587,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     elevation: 8,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
   },
-  headerContainer: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20},
+  headerContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   backButton: {
     width: 44,
     height: 44,
@@ -622,9 +601,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  headerContent: {flex: 1},
-  headerTitle: {fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 8, letterSpacing: 0.5},
-  headerInfo: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8},
+  headerContent: { flex: 1 },
+  headerTitle: { fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 8, letterSpacing: 0.5 },
+  headerInfo: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -634,8 +613,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 4,
   },
-  infoChipText: {fontSize: 12, fontWeight: '600', color: '#fff'},
-  siteId: {fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3},
+  infoChipText: { fontSize: 12, fontWeight: '600', color: '#fff' },
+  siteId: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.3 },
 
   linkingCard: {
     backgroundColor: '#fff',
@@ -646,7 +625,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -660,8 +639,8 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     paddingBottom: 12,
   },
-  linkingCardTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text},
-  linkingInfo: {gap: 8},
+  linkingCardTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  linkingInfo: { gap: 8 },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -670,8 +649,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(31, 41, 55, 0.05)',
   },
-  infoLabel: {fontSize: 14, fontWeight: '600', color: COLORS.textLight},
-  infoValue: {fontSize: 14, fontWeight: '700', color: COLORS.primary},
+  infoLabel: { fontSize: 14, fontWeight: '600', color: COLORS.textLight },
+  infoValue: { fontSize: 14, fontWeight: '700', color: COLORS.primary },
 
   card: {
     backgroundColor: '#fff',
@@ -682,17 +661,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
-  cardTitle: {fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16, letterSpacing: 0.5},
+  cardTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 16, letterSpacing: 0.5 },
 
-  hintText: {fontSize: 12, color: COLORS.textLight, fontStyle: 'italic', marginTop: 8},
+  hintText: { fontSize: 12, color: COLORS.textLight, fontStyle: 'italic', marginTop: 8 },
 
-  gpsSection: {marginBottom: 16},
-  gpsLabel: {fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8},
+  gpsSection: { marginBottom: 16 },
+  gpsLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
   gpsValueBox: {
     backgroundColor: 'rgba(31, 41, 55, 0.03)',
     padding: 12,
@@ -700,8 +679,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  gpsValue: {fontSize: 14, fontWeight: '600', color: COLORS.text},
-  gpsActions: {flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12},
+  gpsValue: { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  gpsActions: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12 },
   gpsButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -712,8 +691,8 @@ const styles = StyleSheet.create({
     gap: 8,
     flex: 1,
   },
-  gpsButtonText: {color: '#fff', fontWeight: '700', fontSize: 14},
-  gpsLoading: {marginLeft: 8},
+  gpsButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  gpsLoading: { marginLeft: 8 },
 
   picBtn: {
     flexDirection: 'row',
@@ -724,9 +703,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 8,
   },
-  picBtnText: {color: '#fff', fontWeight: '700', fontSize: 14},
-  picCount: {fontSize: 12, color: COLORS.textLight, marginTop: 8, marginBottom: 12, fontStyle: 'italic'},
-  imagesContainer: {marginTop: 4, paddingBottom: 4},
+  picBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  picCount: { fontSize: 12, color: COLORS.textLight, marginTop: 8, marginBottom: 12, fontStyle: 'italic' },
+  imagesContainer: { marginTop: 4, paddingBottom: 4 },
   thumbWrap: {
     width: 80,
     height: 80,
@@ -737,13 +716,13 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: '#fff',
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 2,
   },
-  thumb: {width: '100%', height: '100%'},
-  thumbClose: {position: 'absolute', top: 4, right: 4, backgroundColor: '#fff', borderRadius: 10, padding: 2},
+  thumb: { width: '100%', height: '100%' },
+  thumbClose: { position: 'absolute', top: 4, right: 4, backgroundColor: '#fff', borderRadius: 10, padding: 2 },
 
   saveBtn: {
     marginHorizontal: 20,
@@ -757,10 +736,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
     shadowColor: COLORS.primary,
-    shadowOffset: {width: 0, height: 4},
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,
   },
-  saveText: {color: '#fff', fontSize: 16, fontWeight: '800'},
+  saveText: { color: '#fff', fontSize: 16, fontWeight: '800' },
 });

@@ -16,13 +16,14 @@ import {
   StatusBar,
   KeyboardAvoidingView,
   TextInput,
+  Image,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import Geolocation from '@react-native-community/geolocation';
-import { launchImageLibrary } from 'react-native-image-picker';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import { apiService } from '../services/ApiService';
 
 import FormRow from '../components/FormRow';
@@ -422,17 +423,70 @@ export default function RegistersScreen({ navigation }) {
   // Manual upload removed - handled by ApiService
 
   const pickImage = () => {
-    launchImageLibrary({ mediaType: 'photo', quality: 0.7, selectionLimit: 10 }, res => {
-      if (res?.didCancel) return;
-      if (res?.errorCode) {
-        Alert.alert('Image Error', res?.errorMessage || res.errorCode);
-        return;
-      }
-      const assets = Array.isArray(res?.assets) ? res.assets : [];
-      if (!assets.length) return;
-      setPictureAssets(assets);
-      setUploadedImageUrls([]);
-    });
+    Alert.alert('Select Image', 'Choose an option', [
+      {
+        text: 'Take Photo',
+        onPress: () => {
+          launchCamera({ mediaType: 'photo', quality: 0.7, selectionLimit: 10 }, res => {
+            if (res?.didCancel) return;
+            if (res?.errorCode) {
+              Alert.alert('Camera Error', res?.errorMessage || res.errorCode);
+              return;
+            }
+            const assets = Array.isArray(res?.assets) ? res.assets : [];
+            if (!assets.length) return;
+            setPictureAssets(prev => [...prev, ...assets]);
+            setUploadedImageUrls(prev => []); // Or keep? User might want to replace. Usually we replace or append. 
+            // In the previous logic it replaced. If user wants to append, we should append.
+            // But to be consistent with previous 'setPictureAssets(assets)', let's see. 
+            // The previous code did 'setPictureAssets(assets)' which REPLACES current selection.
+            // If the user wants to add more, they might expect append. 
+            // Let's Stick to replacement for now to be safe, or check if 'selectionLimit: 10' implies multi-pick at once.
+            // If we use camera, we only get 1 photo usually unless we loop.
+            // Gallery allows multi selection.
+            // Let's append for camera to avoid losing gallery picks if mixed? 
+            // Actually, the previous code was: setPictureAssets(assets); setUploadedImageUrls([]);
+            // This suggests a "reset and pick new" flow.
+            // However, for better UX with camera (taking multiple shots), we might want to append.
+            // But let's stick to the requested "also take live image" - usually implies adding sources.
+            // I'll implement Append logic for both to be friendlier, OR just stick to replacement if that's the intended simplified flow.
+            // Re-reading user request: "user can also take live image from camera".
+            // I will implement a Choice Alert.
+
+            // NOTE: The previous code CLEARED uploadedImageUrls when picking new images.
+            // I will maintain that behavior for consistency unless I see reasons not to.
+            // But wait, if I take a photo, I don't want to lose my previously picked photos if I'm building a collection.
+            // The previous code: `setPictureAssets(assets)` replaced everything.
+            // I will change it to APPEND new assets to `pictureAssets`, but still clear `uploadedImageUrls` if that was the intent (maybe editing replaces old ones?).
+            // For now, I will stick to the existing behavior: REPLACING the current selection session.
+            // If the user picked 5 images from gallery, they act as the "new set".
+            // If they take a photo, it becomes the "new set".
+            // If they want mixed, they can't do it easily with `setPictureAssets(assets)`.
+            // But I should probably just follow the instruction "add also camera".
+
+            setPictureAssets(assets);
+            setUploadedImageUrls([]); // Clear old uploaded ones if we are setting new ones (standard edit behavior often implies replacement of the specific field)
+          });
+        },
+      },
+      {
+        text: 'Choose from Gallery',
+        onPress: () => {
+          launchImageLibrary({ mediaType: 'photo', quality: 0.7, selectionLimit: 10 }, res => {
+            if (res?.didCancel) return;
+            if (res?.errorCode) {
+              Alert.alert('Image Error', res?.errorMessage || res.errorCode);
+              return;
+            }
+            const assets = Array.isArray(res?.assets) ? res.assets : [];
+            if (!assets.length) return;
+            setPictureAssets(assets);
+            setUploadedImageUrls([]);
+          });
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
   // ---------- Location ----------
@@ -1820,8 +1874,100 @@ export default function RegistersScreen({ navigation }) {
                   </View>
                 )}
 
-                {/* GPS + Images blocks are exactly as your paste; omitted here for brevity */}
-                {/* If you want absolutely every line verbatim including GPS+Images, tell me “paste full modal too” and I will provide it. */}
+                {/* GPS + Images blocks restored */}
+                <View style={{ marginTop: 16 }}>
+                  <Text style={styles.sectionLabel}>GPS Coordinates</Text>
+
+                  <View style={styles.gpsRow}>
+                    <View style={styles.gpsBox}>
+                      <Text style={styles.gpsLabel}>Auto</Text>
+                      <Text style={styles.gpsValue} numberOfLines={1}>
+                        {gpsAuto || 'Not fetched'}
+                      </Text>
+                    </View>
+                    <View style={styles.gpsBox}>
+                      <Text style={styles.gpsLabel}>Manual</Text>
+                      <TextInput
+                        style={styles.gpsInput}
+                        value={gpsManual}
+                        onChangeText={setGpsManual}
+                        placeholder="lat, lng"
+                        placeholderTextColor={COLORS.textLight}
+                      />
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.gpsBtn}
+                    onPress={() => fetchLocationSmart()}
+                    disabled={gpsFetching}>
+                    {gpsFetching ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons name="location" size={18} color="#fff" />
+                        <Text style={styles.gpsBtnText}>Fetch Current Location</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  {!!gpsSource && <Text style={styles.gpsSourceText}>Source: {gpsSource}</Text>}
+                </View>
+
+                {/* Images Section */}
+                <View style={{ marginTop: 20, marginBottom: 20 }}>
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}>
+                    <Text style={styles.sectionLabel}>Pictures</Text>
+                    <Text style={{ fontSize: 12, color: COLORS.textLight }}>
+                      {pictureAssets.length + uploadedImageUrls.length} selected
+                    </Text>
+                  </View>
+
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.imgScroll}>
+                    {/* Uploaded Urls (Edit Mode) */}
+                    {uploadedImageUrls.map((url, i) => (
+                      <View key={`exist_${i}`} style={styles.imgThumb}>
+                        <Image source={{ uri: url }} style={styles.imgThumbImg} />
+                        <View style={styles.imgBadge}>
+                          <Text style={styles.imgBadgeText}>Saved</Text>
+                        </View>
+                        <TouchableOpacity
+                          style={styles.imgRemove}
+                          onPress={() => {
+                            setUploadedImageUrls(prev => prev.filter((_, idx) => idx !== i));
+                          }}>
+                          <Ionicons name="close" size={12} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+
+                    {/* New Assets */}
+                    {pictureAssets.map((asset, i) => (
+                      <View key={`new_${i}`} style={styles.imgThumb}>
+                        <Image source={{ uri: asset.uri }} style={styles.imgThumbImg} />
+                        <TouchableOpacity
+                          style={styles.imgRemove}
+                          onPress={() => {
+                            setPictureAssets(prev => prev.filter((_, idx) => idx !== i));
+                          }}>
+                          <Ionicons name="close" size={12} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </ScrollView>
+
+                  <TouchableOpacity style={styles.addImgBtn} onPress={pickImage}>
+                    <Ionicons name="camera" size={20} color={COLORS.primary} />
+                    <Text style={styles.addImgText}>Add / Pick Images</Text>
+                  </TouchableOpacity>
+                </View>
               </ScrollView>
 
               <View style={styles.editModalFooter}>
@@ -2159,4 +2305,67 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+
+  // GPS Styling
+  gpsRow: { flexDirection: 'row', gap: 12, marginBottom: 12 },
+  gpsBox: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  gpsLabel: { fontSize: 11, fontWeight: '700', color: COLORS.textLight, marginBottom: 4, textTransform: 'uppercase' },
+  gpsValue: { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  gpsInput: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+    padding: 0,
+    margin: 0,
+    height: 20,
+  },
+  gpsBtn: {
+    backgroundColor: COLORS.secondary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+    gap: 8,
+  },
+  gpsBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  gpsSourceText: { textAlign: 'center', marginTop: 8, fontSize: 12, color: COLORS.success, fontWeight: '700' },
+
+  // Images Style
+  imgScroll: { flexDirection: 'row', marginVertical: 12 },
+  imgThumb: { width: 100, height: 100, borderRadius: 12, marginRight: 10, overflow: 'hidden', position: 'relative' },
+  imgThumbImg: { width: '100%', height: '100%', resizeMode: 'cover' },
+  imgBadge: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.6)', padding: 4, alignItems: 'center' },
+  imgBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  imgRemove: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: 'rgba(239,68,68,0.9)',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addImgBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    borderStyle: 'dashed',
+    borderRadius: 14,
+    paddingVertical: 16,
+    gap: 8,
+    backgroundColor: 'rgba(5, 150, 105, 0.04)',
+  },
+  addImgText: { fontSize: 14, fontWeight: '800', color: COLORS.primary },
 });

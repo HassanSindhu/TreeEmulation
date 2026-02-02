@@ -12,6 +12,7 @@ class OfflineService {
     constructor() {
         this.queue = [];
         this.isOnline = true;
+        this.isSyncing = false; // ✅ New state
         this.subscribers = [];
 
         // Initialize NetInfo listener
@@ -106,78 +107,121 @@ class OfflineService {
 
         if (this.queue.length === 0 || !this.isOnline) return;
 
-        console.log('Sync: Processing Queue...');
-        const queueCopy = [...this.queue];
+        // Prevent concurrent syncs
+        if (this.isSyncing) return;
+        this.isSyncing = true;
+        this.notifySubscribers();
 
-        // Process items one by one
-        for (const item of queueCopy) {
-            if (item.status === 'processing') continue;
+        try {
+            console.log('Sync: Processing Queue...', this.queue.length, 'items');
+            // Filter out items already processing to avoid duplication
+            const pendingItems = this.queue.filter(q => q.status !== 'processing');
 
-            try {
-                console.log(`Syncing item ${item.id}: ${item.method} ${item.url}`);
+            if (pendingItems.length === 0) return;
 
-                // 1. Handle Attachments (Upload first)
-                let finalBody = { ...item.body };
+            // Process items one by one
+            for (const item of pendingItems) {
+                // Check status again just in case (though filtered above)
+                if (item.status === 'processing') continue;
 
-                if (item.attachments && item.attachments.length > 0) {
-                    const uploadedUrls = await this.processAttachments(item.attachments);
+                // Mark processing
+                item.status = 'processing';
+                this.notifySubscribers();
 
-                    const fields = {};
-                    item.attachments.forEach((att, idx) => {
-                        const field = att.targetFieldInBody || 'pictures';
-                        if (!fields[field]) fields[field] = [];
+                try {
+                    console.log(`Syncing item ${item.id}: ${item.method} ${item.url}`);
 
-                        let val = uploadedUrls[idx];
-                        if (val && att.storeBasename) {
-                            // Extract basename logic
-                            const noQuery = String(val).split('?')[0];
-                            const lastSlash = noQuery.lastIndexOf('/');
-                            val = lastSlash >= 0 ? noQuery.substring(lastSlash + 1) : noQuery;
-                        }
+                    // 1. Handle Attachments (Upload first)
+                    let finalBody = { ...item.body };
 
-                        if (val) fields[field].push(val);
-                    });
+                    if (item.attachments && item.attachments.length > 0) {
+                        const uploadedUrls = await this.processAttachments(item.attachments);
 
-                    Object.keys(fields).forEach(key => {
-                        // If the body already has this key, we might be appending or replacing. 
-                        // We'll replace or append based on simple logic: if array, append.
-                        if (Array.isArray(finalBody[key])) {
-                            finalBody[key] = [...finalBody[key], ...fields[key]];
-                        } else {
-                            finalBody[key] = fields[key];
-                        }
-                    });
-                }
+                        const fields = {};
+                        item.attachments.forEach((att, idx) => {
+                            const field = att.targetFieldInBody || 'pictures';
+                            if (!fields[field]) fields[field] = [];
 
-                // 2. Perform actual API Request
-                // REFRESH AUTH TOKEN: The token stored in headers might be stale.
-                const token = await AsyncStorage.getItem('AUTH_TOKEN');
-                const headers = { ...item.headers };
-                if (token) {
-                    headers['Authorization'] = `Bearer ${token}`;
-                }
+                            let val = uploadedUrls[idx];
+                            if (val && att.storeBasename) {
+                                // Extract basename logic
+                                const noQuery = String(val).split('?')[0];
+                                const lastSlash = noQuery.lastIndexOf('/');
+                                val = lastSlash >= 0 ? noQuery.substring(lastSlash + 1) : noQuery;
+                            }
 
-                const res = await fetch(item.url, {
-                    method: item.method,
-                    headers: headers,
-                    body: JSON.stringify(finalBody)
-                });
+                            if (val) fields[field].push(val);
+                        });
 
-                if (!res.ok) {
-                    if (res.status >= 400 && res.status < 500) {
-                        console.warn('Sync failed with client error, removing:', res.status);
-                        this.removeFromQueue(item.id);
-                    } else {
-                        throw new Error(`Status ${res.status}`);
+                        Object.keys(fields).forEach(key => {
+                            // If the body already has this key, we might be appending or replacing. 
+                            // We'll replace or append based on simple logic: if array, append.
+                            if (Array.isArray(finalBody[key])) {
+                                finalBody[key] = [...finalBody[key], ...fields[key]];
+                            } else {
+                                finalBody[key] = fields[key];
+                            }
+                        });
                     }
-                } else {
-                    // Success!
-                    console.log(`Sync item ${item.id} complete.`);
-                    this.removeFromQueue(item.id);
+
+                    // 2. Perform actual API Request
+                    // REFRESH AUTH TOKEN: The token stored in headers might be stale.
+                    const token = await AsyncStorage.getItem('AUTH_TOKEN');
+                    const headers = { ...item.headers };
+                    if (token) {
+                        headers['Authorization'] = `Bearer ${token}`;
+                    }
+
+                    const res = await fetch(item.url, {
+                        method: item.method,
+                        headers: headers,
+                        body: JSON.stringify(finalBody)
+                    });
+
+                    if (!res.ok) {
+                        // Reset status since it failed
+                        item.status = 'pending';
+
+                        // Retry on 5xx or connection error (caught below).
+                        // For 4xx, differentiate:
+                        if (res.status === 401 || res.status === 403) {
+                            console.warn('Sync failed with Auth error (401/403). Keeping in queue for retry once token is fresh.');
+                            // Do not remove. Wait for next sync which will grab new token.
+                        } else if (res.status >= 400 && res.status < 500) {
+                            // 400, 404, 422 etc -> Permanent failure usually.
+                            console.warn('Sync failed with permanent client error, removing:', res.status);
+
+                            // Parse error message for better logging if possible
+                            try {
+                                const errText = await res.text();
+                                console.warn('Offline Sync Error Body:', errText);
+                            } catch (e) { }
+
+                            await this.removeFromQueue(item.id);
+                        } else {
+                            // 500+ -> Server error. Retry later.
+                            throw new Error(`Server Status ${res.status}`);
+                        }
+                    } else {
+                        // Success!
+                        console.log(`Sync item ${item.id} complete.`);
+                        await this.removeFromQueue(item.id);
+                    }
+                } catch (e) {
+                    console.error(`Sync item ${item.id} failed:`, e);
+                    // Reset to pending so it can be picked up again
+                    item.status = 'pending';
                 }
-            } catch (e) {
-                console.error(`Sync item ${item.id} failed:`, e);
-                // Item remains until success
+            }
+        } finally {
+            this.isSyncing = false;
+            this.notifySubscribers();
+
+            // Retry logic: If queue still has items and we are online, schedule another check.
+            if (this.queue.length > 0 && this.isOnline) {
+                setTimeout(() => {
+                    this.processQueue();
+                }, 5000); // retry in 5s
             }
         }
     }

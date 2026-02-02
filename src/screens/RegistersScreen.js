@@ -1,4 +1,5 @@
 // /screens/RegistersScreen.js
+import { offlineService } from '../services/OfflineService';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
@@ -27,6 +28,7 @@ import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import { apiService } from '../services/ApiService';
 
 import FormRow from '../components/FormRow';
+import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
@@ -203,6 +205,21 @@ export default function RegistersScreen({ navigation }) {
 
   // ---------- ADD/EDIT MODAL ----------
   const [modalVisible, setModalVisible] = useState(false);
+
+  const [offlineStatus, setOfflineStatus] = useState({ count: 0, syncing: false });
+
+  useEffect(() => {
+    const update = () => {
+      setOfflineStatus({
+        count: offlineService.queue.length,
+        syncing: offlineService.isSyncing
+      });
+    };
+    const unsub = offlineService.subscribe(update);
+    update();
+    return unsub;
+  }, []);
+
   const [isEdit, setIsEdit] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
@@ -303,7 +320,7 @@ export default function RegistersScreen({ navigation }) {
     return String(role || '').trim();
   };
 
-  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO', 'Surveyor'];
+  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO'];
   const nextRole = currentRole => {
     const idx = ROLE_ORDER.indexOf(currentRole);
     return idx >= 0 ? ROLE_ORDER[idx + 1] || null : null;
@@ -314,13 +331,13 @@ export default function RegistersScreen({ navigation }) {
     const superdariExists = hasAny(row?.superdari);
 
     if (disposalExists && superdariExists) {
-      return { statusText: 'Disposed + Superdari', statusColor: COLORS.warning, showEdit: false, isRejected: false };
+      return { statusText: 'Disposed + Superdari', statusColor: COLORS.warning, showEdit: false, isRejected: false, isFinalApproved: false };
     }
     if (disposalExists) {
-      return { statusText: 'Disposed', statusColor: COLORS.secondary, showEdit: false, isRejected: false };
+      return { statusText: 'Disposed', statusColor: COLORS.secondary, showEdit: false, isRejected: false, isFinalApproved: false };
     }
     if (superdariExists) {
-      return { statusText: 'Superdari', statusColor: COLORS.info, showEdit: false, isRejected: false };
+      return { statusText: 'Superdari', statusColor: COLORS.info, showEdit: false, isRejected: false, isFinalApproved: false };
     }
 
     const latest = row?.latestStatus || null;
@@ -331,7 +348,7 @@ export default function RegistersScreen({ navigation }) {
     const remarks = String(latest?.remarks || '').trim();
 
     if (!latest || !actionRaw) {
-      return { statusText: 'Pending (Block Officer)', statusColor: COLORS.textLight, showEdit: false, isRejected: false };
+      return { statusText: 'Pending (Block Officer)', statusColor: COLORS.textLight, showEdit: false, isRejected: false, isFinalApproved: false };
     }
 
     if (action === 'rejected' || action === 'disapproved') {
@@ -341,6 +358,7 @@ export default function RegistersScreen({ navigation }) {
         statusColor: COLORS.danger,
         showEdit: true,
         isRejected: true,
+        isFinalApproved: false,
         _remarks: remarks,
         _rejectedBy: rejectBy,
       };
@@ -351,13 +369,13 @@ export default function RegistersScreen({ navigation }) {
       const nxt = nextRole(approver);
 
       if (!nxt) {
-        return { statusText: 'Final Approved', statusColor: COLORS.success, showEdit: false, isRejected: false };
+        return { statusText: 'Final Approved', statusColor: COLORS.success, showEdit: false, isRejected: false, isFinalApproved: true };
       }
 
-      return { statusText: `Approved • Pending (${nxt})`, statusColor: COLORS.warning, showEdit: false, isRejected: false };
+      return { statusText: `Approved • Pending (${nxt})`, statusColor: COLORS.warning, showEdit: false, isRejected: false, isFinalApproved: false };
     }
 
-    return { statusText: 'Pending', statusColor: COLORS.textLight, showEdit: false, isRejected: false };
+    return { statusText: 'Pending', statusColor: COLORS.textLight, showEdit: false, isRejected: false, isFinalApproved: false };
   };
 
   const getStatusTags = row => {
@@ -495,11 +513,11 @@ export default function RegistersScreen({ navigation }) {
       setGpsFetching(true);
 
       const net = await NetInfo.fetch();
-      const online = !!net.isConnected && (net.isInternetReachable ?? true);
+      const online = !!net.isConnected && (net.isInternetReachable !== false);
 
-      const options = online
-        ? { enableHighAccuracy: false, timeout: 12000, maximumAge: 30000 }
-        : { enableHighAccuracy: true, timeout: 18000, maximumAge: 5000 };
+      // ALWAYS use High Accuracy for "exact coordinates" as requested.
+      // works offline via GPS. Increased timeout for cold locks.
+      const options = { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 };
 
       Geolocation.getCurrentPosition(
         pos => {
@@ -508,12 +526,23 @@ export default function RegistersScreen({ navigation }) {
 
           setGpsAuto(val);
           setGpsManual(prev => (String(prev || '').trim() ? prev : val));
-          setGpsSource(online ? 'NETWORK' : 'GPS');
+          // Since we use high accuracy, it's effectively GPS/HighPrecision
+          setGpsSource('GPS');
           setGpsFetching(false);
         },
         err => {
+          console.warn('GPS Error', err);
+          // If offline and high accuracy failed, usually means no GPS signal.
+
+          if (online && err.code === 3) {
+            // Timeout? Try low accuracy as backup if online? 
+            // But user wants exact. Let's just fail with clear message.
+          }
+
           setGpsFetching(false);
-          if (!silent) Alert.alert('Location Error', err.message);
+          if (!silent) {
+            Alert.alert('Location Error', err.message + '\nEnsure GPS is ON and you are outdoors.');
+          }
         },
         options,
       );
@@ -1207,7 +1236,7 @@ export default function RegistersScreen({ navigation }) {
     const enumerationId = r?.id;
     stackNav.navigate('EnumerationAudit', {
       enumerationId,
-      record: r,
+      enumeration: r,
     });
   };
 
@@ -1510,14 +1539,16 @@ export default function RegistersScreen({ navigation }) {
                                 <View style={{ width: 0, height: 0 }} />
                               )}
 
-                              {/* ✅ Audit (always available; uses correct route+params) */}
-                              <TouchableOpacity
-                                style={[styles.actionButton, styles.auditButton]}
-                                onPress={() => goToAudit(activeType, r)}
-                                activeOpacity={0.7}>
-                                <Ionicons name="clipboard-outline" size={16} color={COLORS.primary} />
-                                <Text style={[styles.actionButtonText, { color: COLORS.primary }]}>Audit</Text>
-                              </TouchableOpacity>
+                              {/* Update (only if Final Approved) */}
+                              {ui.isFinalApproved && (
+                                <TouchableOpacity
+                                  style={[styles.actionButton, styles.auditButton]}
+                                  onPress={() => goToAudit(activeType, r)}
+                                  activeOpacity={0.7}>
+                                  <Ionicons name="clipboard-outline" size={16} color={COLORS.primary} />
+                                  <Text style={[styles.actionButtonText, { color: COLORS.primary }]}>Update</Text>
+                                </TouchableOpacity>
+                              )}
                             </View>
                           );
                         }
@@ -1550,12 +1581,7 @@ export default function RegistersScreen({ navigation }) {
         </View>
       </ScrollView>
 
-      {/* FAB */}
-      <TouchableOpacity style={styles.fab} onPress={openAddForm} activeOpacity={0.8}>
-        <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.fabGradient}>
-          <Ionicons name="add" size={28} color="#fff" />
-        </LinearGradient>
-      </TouchableOpacity>
+
 
       {/* Rejection Modal */}
       <Modal transparent visible={rejectionModal.visible} animationType="fade" onRequestClose={closeRejectionPopup}>
@@ -1596,6 +1622,47 @@ export default function RegistersScreen({ navigation }) {
                     {rejectionModal.remarks}
                   </Text>
                 </View>
+
+                {/* --- Offline Sync Bar --- */}
+                {offlineStatus.count > 0 && (
+                  <View style={{ marginBottom: 16 }}>
+                    <TouchableOpacity
+                      style={{
+                        backgroundColor: COLORS.warning,
+                        paddingVertical: 12,
+                        paddingHorizontal: 16,
+                        borderRadius: 12,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.1,
+                        shadowRadius: 4,
+                        elevation: 3,
+                      }}
+                      onPress={() => offlineService.processQueue()}
+                      disabled={offlineStatus.syncing}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        {offlineStatus.syncing ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Ionicons name="cloud-offline" size={20} color="#fff" />
+                        )}
+                        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                          {offlineStatus.syncing
+                            ? 'Syncing records...'
+                            : `${offlineStatus.count} Offline Records Pending`}
+                        </Text>
+                      </View>
+                      {!offlineStatus.syncing && (
+                        <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                          <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                )}
 
                 <TouchableOpacity
                   style={{ marginTop: 16, backgroundColor: COLORS.danger, paddingVertical: 14, borderRadius: 14, alignItems: 'center' }}
@@ -1995,6 +2062,8 @@ export default function RegistersScreen({ navigation }) {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      <FullScreenLoader visible={offlineStatus.syncing} />
     </View>
   );
 }
@@ -2002,7 +2071,7 @@ export default function RegistersScreen({ navigation }) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: COLORS.background },
   container: { flex: 1 },
-  contentContainer: { paddingBottom: 100 },
+  // (This tool call is strictly for OfflineService.js update)
 
   headerGradient: {
     paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 20,

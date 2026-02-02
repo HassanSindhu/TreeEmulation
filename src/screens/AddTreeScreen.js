@@ -289,6 +289,8 @@ export default function AddTreeScreen({ navigation }) {
         rdFrom: apiItem?.rds_from != null ? String(apiItem.rds_from) : '',
         rdTo: apiItem?.rds_to != null ? String(apiItem.rds_to) : '',
         remarks: apiItem?.remarks || '',
+        page_no: apiItem?.page_no || '',
+        register_no: apiItem?.register_no || '',
 
         createdAt: apiItem?.created_at || apiItem?.createdAt || new Date().toISOString(),
       };
@@ -612,6 +614,7 @@ export default function AddTreeScreen({ navigation }) {
         nameOfSiteId: resolvedSiteId,
         siteId: resolvedSiteId,
         site: item,
+        isFromSite: true,
       });
     }
 
@@ -624,6 +627,7 @@ export default function AddTreeScreen({ navigation }) {
         nameOfSiteId: resolvedSiteId,
         siteId: resolvedSiteId,
         site: item,
+        isFromSite: true,
       });
     }
   };

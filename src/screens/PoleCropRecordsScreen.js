@@ -29,6 +29,7 @@ import { apiService } from '../services/ApiService';
 import { offlineService } from '../services/OfflineService';
 
 import FormRow from '../components/FormRow';
+import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
@@ -95,6 +96,22 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
   // Form fields
   const [rdsFrom, setRdsFrom] = useState('');
   const [rdsTo, setRdsTo] = useState('');
+  const [pageNo, setPageNo] = useState('');
+  const [registerNo, setRegisterNo] = useState('');
+
+  const [offlineStatus, setOfflineStatus] = useState({ count: 0, syncing: false });
+
+  useEffect(() => {
+    const update = () => {
+      setOfflineStatus({
+        count: offlineService.queue.length,
+        syncing: offlineService.isSyncing
+      });
+    };
+    const unsub = offlineService.subscribe(update);
+    update();
+    return unsub;
+  }, []);
 
   // Species master + selection (multi) + counts
   const [speciesRows, setSpeciesRows] = useState([]);
@@ -286,7 +303,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     return String(role || '').trim();
   };
 
-  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO', 'Surveyor'];
+  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO'];
   const nextRole = currentRole => {
     const idx = ROLE_ORDER.indexOf(currentRole);
     return idx >= 0 ? ROLE_ORDER[idx + 1] || null : null;
@@ -303,6 +320,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         showEdit: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
         _remarks: '',
       };
     }
@@ -313,6 +331,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         showEdit: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
         _remarks: '',
       };
     }
@@ -330,6 +349,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         showEdit: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
         _remarks: remarks,
       };
     }
@@ -342,6 +362,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         showEdit: true,
         rowAccent: 'rejected',
         isRejected: true,
+        isFinalApproved: false,
         _remarks: remarks,
         _rejectedBy: rejectBy,
       };
@@ -357,6 +378,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
           showEdit: false,
           rowAccent: null,
           isRejected: false,
+          isFinalApproved: true,
           _remarks: remarks,
         };
       }
@@ -366,6 +388,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         showEdit: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
         _remarks: remarks,
       };
     }
@@ -376,6 +399,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       showEdit: false,
       rowAccent: null,
       isRejected: false,
+      isFinalApproved: false,
       _remarks: remarks,
     };
   };
@@ -696,9 +720,9 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       },
       err => {
         setGpsLoading(false);
-        if (!silent) Alert.alert('Location Error', err.message);
+        if (!silent) Alert.alert('Location Error', err.message + '\nEnsure GPS is ON and you are outdoors.');
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 },
     );
   };
 
@@ -1003,7 +1027,10 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     editRecordRef.current = null;
 
     setRdsFrom('');
+    setRdsFrom('');
     setRdsTo('');
+    setPageNo('');
+    setRegisterNo('');
 
     setSpeciesIds([]);
     setSpeciesCounts({});
@@ -1089,6 +1116,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       record?.rds_from !== null && record?.rds_from !== undefined ? String(record.rds_from) : '',
     );
     setRdsTo(record?.rds_to !== null && record?.rds_to !== undefined ? String(record.rds_to) : '');
+    setPageNo(record?.page_no || record?.pageNo || '');
+    setRegisterNo(record?.register_no || record?.registerNo || '');
 
     const serverPics = Array.isArray(record?.pictures) ? record.pictures : [];
     setExistingPictures(serverPics);
@@ -1288,6 +1317,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
       rds_from: Number(String(rdsFrom).replace(/[^\d.]+/g, '')) || 0,
       rds_to: Number(String(rdsTo).replace(/[^\d.]+/g, '')) || 0,
+      page_no: String(pageNo || '').trim(),
+      register_no: String(registerNo || '').trim(),
 
       auto_lat: autoLat,
       auto_long: autoLng,
@@ -1416,6 +1447,47 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* --- Offline Sync Bar --- */}
+      {offlineStatus.count > 0 && (
+        <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: COLORS.warning,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={() => offlineService.processQueue()}
+            disabled={offlineStatus.syncing}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {offlineStatus.syncing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="cloud-offline" size={20} color="#fff" />
+              )}
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                {offlineStatus.syncing
+                  ? 'Syncing records...'
+                  : `${offlineStatus.count} Offline Records Pending`}
+              </Text>
+            </View>
+            {!offlineStatus.syncing && (
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
       <ScrollView
         style={styles.container}
@@ -1615,21 +1687,25 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                         )}
                       </View>
 
-                      {/* Audit */}
+                      {/* Audit / Update - Only if Final Approved */}
                       <View style={[styles.tdCell, styles.actionsCell, { width: 140 }]}>
-                        <TouchableOpacity
-                          style={[
-                            styles.actionButton,
-                            { backgroundColor: 'rgba(124, 58, 237, 0.10)' },
-                          ]}
-                          onPress={() => {
-                            console.log('📱 Clicked Audit for record:', r);
-                            openAuditForRecord(r);
-                          }}
-                          activeOpacity={0.7}>
-                          <Ionicons name="clipboard-outline" size={16} color={COLORS.info} />
-                          <Text style={[styles.actionButtonText, { color: COLORS.info }]}>Audit</Text>
-                        </TouchableOpacity>
+                        {ui.isFinalApproved ? (
+                          <TouchableOpacity
+                            style={[
+                              styles.actionButton,
+                              { backgroundColor: 'rgba(124, 58, 237, 0.10)' },
+                            ]}
+                            onPress={() => {
+                              console.log('📱 Clicked Update for record:', r);
+                              openAuditForRecord(r);
+                            }}
+                            activeOpacity={0.7}>
+                            <Ionicons name="clipboard-outline" size={16} color={COLORS.info} />
+                            <Text style={[styles.actionButtonText, { color: COLORS.info }]}>Update</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <Text style={styles.tdText}>—</Text>
+                        )}
                       </View>
 
                       {/* Actions (Edit only when rejected) */}
@@ -1953,6 +2029,27 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                     placeholder="e.g. 15"
                   />
 
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Page No (Optional)"
+                        value={pageNo}
+                        onChangeText={setPageNo}
+                        placeholder="PG-123"
+                        icon="document-text"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Register No (Optional)"
+                        value={registerNo}
+                        onChangeText={setRegisterNo}
+                        placeholder="REG-456"
+                        icon="book"
+                      />
+                    </View>
+                  </View>
+
                   <View style={styles.fieldWithButton}>
                     <Text style={styles.fieldLabel}>Species Selection</Text>
                     <TouchableOpacity
@@ -2142,6 +2239,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      <FullScreenLoader visible={offlineStatus.syncing} />
     </View>
   );
 }

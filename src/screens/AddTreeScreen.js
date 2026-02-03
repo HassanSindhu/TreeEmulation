@@ -180,6 +180,8 @@ export default function AddTreeScreen({ navigation }) {
   const [rdFrom, setRdFrom] = useState('');
   const [rdTo, setRdTo] = useState('');
   const [remarks, setRemarks] = useState('');
+  const [pageNo, setPageNo] = useState('');
+  const [registerNo, setRegisterNo] = useState('');
 
   const linearTypeOptions = ['Road Side', 'Rail Side', 'Canal Side'].map((name, idx) => ({
     id: String(idx + 1),
@@ -287,6 +289,8 @@ export default function AddTreeScreen({ navigation }) {
         rdFrom: apiItem?.rds_from != null ? String(apiItem.rds_from) : '',
         rdTo: apiItem?.rds_to != null ? String(apiItem.rds_to) : '',
         remarks: apiItem?.remarks || '',
+        page_no: apiItem?.page_no || '',
+        register_no: apiItem?.register_no || '',
 
         createdAt: apiItem?.created_at || apiItem?.createdAt || new Date().toISOString(),
       };
@@ -518,6 +522,8 @@ export default function AddTreeScreen({ navigation }) {
         side: side,
         rds_from,
         rds_to,
+        page_no: String(pageNo || '').trim(),
+        register_no: String(registerNo || '').trim(),
       };
 
       const json = await apiService.post(ENUM_CREATE_URL, payload);
@@ -536,7 +542,10 @@ export default function AddTreeScreen({ navigation }) {
       setSide('');
       setRdFrom('');
       setRdTo('');
+      setRdTo('');
       setRemarks('');
+      setPageNo('');
+      setRegisterNo('');
 
       setEnumModalVisible(false);
       Alert.alert(json.offline ? 'Saved Offline' : 'Success', json.message || 'Enumeration saved successfully.', [{ text: 'OK' }]);
@@ -605,6 +614,7 @@ export default function AddTreeScreen({ navigation }) {
         nameOfSiteId: resolvedSiteId,
         siteId: resolvedSiteId,
         site: item,
+        isFromSite: true,
       });
     }
 
@@ -617,6 +627,7 @@ export default function AddTreeScreen({ navigation }) {
         nameOfSiteId: resolvedSiteId,
         siteId: resolvedSiteId,
         site: item,
+        isFromSite: true,
       });
     }
   };
@@ -1228,6 +1239,27 @@ export default function AddTreeScreen({ navigation }) {
                 placeholder="Enter compartment (if any)"
                 icon="cube"
               />
+
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <FormRow
+                    label="Page No (Optional)"
+                    value={pageNo}
+                    onChangeText={setPageNo}
+                    placeholder="PG-123"
+                    icon="document-text"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <FormRow
+                    label="Register No (Optional)"
+                    value={registerNo}
+                    onChangeText={setRegisterNo}
+                    placeholder="REG-456"
+                    icon="book"
+                  />
+                </View>
+              </View>
 
               <DropdownRow
                 label="Year *"

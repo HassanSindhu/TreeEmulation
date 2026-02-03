@@ -20,6 +20,7 @@ import { launchImageLibrary } from 'react-native-image-picker';
 import FormRow from '../components/FormRow';
 import { DropdownRow } from '../components/SelectRows';
 import { apiService } from '../services/ApiService';
+import { Switch } from 'react-native';
 
 // Theme Colors (consistent with Disposal screen)
 const COLORS = {
@@ -48,11 +49,13 @@ const STORAGE_TOKEN = 'AUTH_TOKEN';
 // ✅ APIs
 const SUPERDARI_URL = `${API_BASE}/enum/superdari`;
 const TREE_CONDITION_SOURCE_URL = `${API_BASE}/forest-tree-conditions`; // as per your request
+const SPECIES_URL = `${API_BASE}/lpe3/species`;
+const CONDITION_URL = `${API_BASE}/forest-tree-conditions`;
 
 export default function SuperdariScreen({ navigation, route }) {
   // ✅ Now Superdari links to Tree ID (enumerationId) always.
   // disposalId is OPTIONAL (only if tree is disposed).
-  const { treeId, disposalId: routeDisposalId, enumeration } = route.params || {};
+  const { treeId, disposalId: routeDisposalId, enumeration, isFromSite } = route.params || {};
 
   const [record, setRecord] = useState(null);
 
@@ -66,13 +69,31 @@ export default function SuperdariScreen({ navigation, route }) {
 
   // Tree condition (fetched from API)
   const [conditionRows, setConditionRows] = useState([]); // [{id,label}]
-  const [conditionLoading, setConditionLoading] = useState(false);
-
   // GPS (auto + manual)
   const [autoGps, setAutoGps] = useState('');
   const [manualGps, setManualGps] = useState('');
   const [gpsLoading, setGpsLoading] = useState(false);
   const lastGpsRequestAtRef = useRef(0);
+
+  // Previous Data (2021-22)
+  const [usePreviousData, setUsePreviousData] = useState(false);
+  const [prevTakki, setPrevTakki] = useState('');
+  const [prevPage, setPrevPage] = useState('');
+  const [prevReg, setPrevReg] = useState('');
+  const [prevGirth, setPrevGirth] = useState('');
+  const [prevSpecies, setPrevSpecies] = useState('');
+  const [prevSpeciesId, setPrevSpeciesId] = useState(null);
+  const [prevCondition, setPrevCondition] = useState('');
+  const [prevConditionId, setPrevConditionId] = useState(null);
+
+  // Master Data for Previous Data Dropdowns
+  const [speciesRows, setSpeciesRows] = useState([]);
+  const [conditionRowsPrev, setConditionRowsPrev] = useState([]);
+  const [speciesOptions, setSpeciesOptions] = useState([]);
+  const [conditionOptionsPrev, setConditionOptionsPrev] = useState([]);
+  const [speciesLoading, setSpeciesLoading] = useState(false);
+  const [conditionLoadingPrev, setConditionLoadingPrev] = useState(false);
+  const [conditionLoading, setConditionLoading] = useState(false);
 
   // API state
   const [submitting, setSubmitting] = useState(false);
@@ -128,8 +149,53 @@ export default function SuperdariScreen({ navigation, route }) {
   useEffect(() => {
     loadLocal();
     fetchTreeConditionFromApi();
+    fetchSpecies();
+    fetchConditionsPrev();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Effects for Previous Data Species/Condition name resolving
+  useEffect(() => {
+    if (prevSpeciesId && !prevSpecies && speciesRows.length) {
+      const row = speciesRows.find(x => String(x.id) === String(prevSpeciesId));
+      if (row?.name) setPrevSpecies(row.name);
+    }
+  }, [prevSpeciesId, prevSpecies, speciesRows]);
+
+  useEffect(() => {
+    if (prevConditionId && !prevCondition && conditionRowsPrev.length) {
+      const row = conditionRowsPrev.find(x => String(x.id) === String(prevConditionId));
+      if (row?.name) setPrevCondition(row.name);
+    }
+  }, [prevConditionId, prevCondition, conditionRowsPrev]);
+
+  const fetchSpecies = async () => {
+    try {
+      setSpeciesLoading(true);
+      const res = await apiService.get(SPECIES_URL);
+      const list = Array.isArray(res?.data) ? res.data : [];
+      setSpeciesRows(list);
+      setSpeciesOptions(list.map(x => x.name).filter(Boolean).sort());
+    } catch (e) {
+      console.warn('Species Fetch Error', e);
+    } finally {
+      setSpeciesLoading(false);
+    }
+  };
+
+  const fetchConditionsPrev = async () => {
+    try {
+      setConditionLoadingPrev(true);
+      const res = await apiService.get(CONDITION_URL);
+      const list = Array.isArray(res?.data) ? res.data : [];
+      setConditionRowsPrev(list);
+      setConditionOptionsPrev(list.map(x => x.name).filter(Boolean));
+    } catch (e) {
+      console.warn('Conditions Prev Fetch Error', e);
+    } finally {
+      setConditionLoadingPrev(false);
+    }
+  };
 
   const loadLocal = async () => {
     try {
@@ -148,6 +214,36 @@ export default function SuperdariScreen({ navigation, route }) {
         setManualGps(r.superdari.manualGpsLatLong || '');
         setRemarks(r.superdari.remarks || '');
         setPictureUris(Array.isArray(r.superdari.pictureUris) ? r.superdari.pictureUris : []);
+
+        // Previous Data Population (if present in superdari object OR root object?? Assuming root object since it's tree property)
+        // Wait, 'DisposalScreen' checked 'd.previous...' where 'd' was 'r.disposal'.
+        // Here, 'MatureTreeRecords' stores previous data on the RECORD itself.
+        // But 'Disposal' and 'Superdari' are separate API calls.
+        // It seems the USER wants to EDIT these fields here too.
+        // If the record was saved with previous data in MatureTreeRecords, it might be on 'r'.
+        // BUT, these screens also post to their own endpoints.
+        // The user said "add that in disposed which is apears... i wanna add that into that disposal and superdari".
+        // This implies these endpoints ALSO accept these fields.
+        // So checking 'r.superdari.previous_...' is likely correct if we saved it there before.
+        // Or checking 'r' if it's common.
+        // Let's check 'r.superdari' first, fallback to 'r' keys if needed.
+        const s = r.superdari || {};
+        const hasPrevData = !!(
+          s.previous_takki_number ||
+          s.previous_page_no ||
+          s.previous_register_no ||
+          s.previous_girth ||
+          s.previous_species_id
+        );
+        setUsePreviousData(hasPrevData);
+        if (hasPrevData) {
+          setPrevTakki(s.previous_takki_number ? String(s.previous_takki_number) : '');
+          setPrevPage(s.previous_page_no || '');
+          setPrevReg(s.previous_register_no || '');
+          setPrevGirth(s.previous_girth ? String(s.previous_girth) : '');
+          setPrevSpeciesId(s.previous_species_id ?? null);
+          setPrevConditionId(s.previous_condition_id ?? null);
+        }
       }
 
       // auto fetch if no saved autoGps
@@ -290,7 +386,7 @@ export default function SuperdariScreen({ navigation, route }) {
 
     // ✅ Latest API body:
     const payload = {
-      enumerationId: Number(treeId), // TreeID linking
+      enumerationId: treeId ? Number(treeId) : null, // TreeID linking
       superdar_name: name.trim(),
       contact_no: contact.trim(),
       cnic_no: cnic.trim(),
@@ -300,6 +396,18 @@ export default function SuperdariScreen({ navigation, route }) {
       manual_lat: manual_lat ?? null,
       manual_long: manual_long ?? null,
       pictures: [], // Filled by ApiService
+
+      // Previous data fields (only if checked)
+      ...(usePreviousData
+        ? {
+          previous_takki_number: prevTakki ? Number(prevTakki) : null,
+          previous_page_no: String(prevPage || '').trim(),
+          previous_register_no: String(prevReg || '').trim(),
+          previous_girth: prevGirth ? Number(prevGirth) : null,
+          previous_species_id: prevSpeciesId ? Number(prevSpeciesId) : null,
+          previous_condition_id: prevConditionId ? Number(prevConditionId) : null,
+        }
+        : {}),
     };
 
     // only attach disposalId when present
@@ -426,6 +534,127 @@ export default function SuperdariScreen({ navigation, route }) {
             </View>
           </View>
         </View>
+
+
+
+        {/* Previous Data Checkbox */}
+        {!!isFromSite && (
+          <View style={{ marginHorizontal: 20, marginBottom: 20 }}>
+            <View style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              backgroundColor: '#fff',
+              padding: 16,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: COLORS.border,
+            }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text }}>
+                  Previous Data Available (2021-22)
+                </Text>
+                <Text style={{ fontSize: 13, color: COLORS.textLight, marginTop: 4 }}>
+                  Check to add previous record details.
+                </Text>
+              </View>
+              <Switch value={usePreviousData} onValueChange={setUsePreviousData} />
+            </View>
+
+            {usePreviousData && (
+              <View
+                style={{
+                  marginTop: 12,
+                  padding: 16,
+                  backgroundColor: '#f1f5f9',
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: '#cbd5e1',
+                }}>
+                <Text
+                  style={{
+                    marginBottom: 16,
+                    fontSize: 14,
+                    fontWeight: '700',
+                    color: COLORS.primary,
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.5,
+                  }}>
+                  Previous Record Details
+                </Text>
+
+                <FormRow
+                  label="Previous Takki No"
+                  value={prevTakki}
+                  onChangeText={setPrevTakki}
+                  placeholder="e.g. 99"
+                  keyboardType="numeric"
+                  style={{ backgroundColor: '#fff' }}
+                />
+
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <View style={{ flex: 1 }}>
+                    <FormRow
+                      label="Prev Page No"
+                      value={prevPage}
+                      onChangeText={setPrevPage}
+                      placeholder="Pg-202"
+                      style={{ backgroundColor: '#fff' }}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <FormRow
+                      label="Prev Reg No"
+                      value={prevReg}
+                      onChangeText={setPrevReg}
+                      placeholder="Reg-001"
+                      style={{ backgroundColor: '#fff' }}
+                    />
+                  </View>
+                </View>
+
+                <FormRow
+                  label="Previous Girth"
+                  value={prevGirth}
+                  onChangeText={setPrevGirth}
+                  placeholder="e.g. 10.0"
+                  keyboardType="numeric"
+                  style={{ backgroundColor: '#fff' }}
+                />
+
+                <DropdownRow
+                  label={speciesLoading ? 'Prev Species (Loading...)' : 'Prev Species'}
+                  value={prevSpecies}
+                  onChange={name => {
+                    setPrevSpecies(name);
+                    const row = speciesRows.find(x => x.name === name);
+                    setPrevSpeciesId(row?.id ?? null);
+                  }}
+                  options={speciesOptions}
+                  disabled={speciesLoading}
+                  searchable
+                  searchPlaceholder="Search species..."
+                  style={{ backgroundColor: '#fff' }}
+                />
+
+                <DropdownRow
+                  label={conditionLoadingPrev ? 'Prev Condition (Loading...)' : 'Prev Condition'}
+                  value={prevCondition}
+                  onChange={name => {
+                    setPrevCondition(name);
+                    const row = conditionRowsPrev.find(x => x.name === name);
+                    setPrevConditionId(row?.id ?? null);
+                  }}
+                  options={conditionOptionsPrev}
+                  disabled={conditionLoadingPrev}
+                  searchable
+                  searchPlaceholder="Search condition..."
+                  style={{ backgroundColor: '#fff' }}
+                />
+              </View>
+            )}
+          </View>
+        )}
 
         {/* Basic Information */}
         <View style={styles.card}>
@@ -569,8 +798,8 @@ export default function SuperdariScreen({ navigation, route }) {
             </>
           )}
         </TouchableOpacity>
-      </ScrollView>
-    </View>
+      </ScrollView >
+    </View >
   );
 }
 

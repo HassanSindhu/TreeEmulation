@@ -32,6 +32,7 @@ import { apiService } from '../services/ApiService';
 import { offlineService } from '../services/OfflineService';
 
 import FormRow from '../components/FormRow';
+import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
@@ -97,6 +98,20 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
   const [isEdit, setIsEdit] = useState(false);
   const [editingServerId, setEditingServerId] = useState(null);
 
+  const [offlineStatus, setOfflineStatus] = useState({ count: 0, syncing: false });
+
+  useEffect(() => {
+    const update = () => {
+      setOfflineStatus({
+        count: offlineService.queue.length,
+        syncing: offlineService.isSyncing
+      });
+    };
+    const unsub = offlineService.subscribe(update);
+    update();
+    return unsub;
+  }, []);
+
   const [search, setSearch] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filters, setFilters] = useState({
@@ -130,12 +145,25 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
   // Extra fields (snake_case align)
   const [takkiNumber, setTakkiNumber] = useState('');
+  const [pageNo, setPageNo] = useState('');
+  const [registerNo, setRegisterNo] = useState('');
   const [additionalRemarks, setAdditionalRemarks] = useState('');
   const [isDisputed, setIsDisputed] = useState(false);
   const [side, setSide] = useState(''); // "Left" | "Right"
 
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
+
+  // Previous Data (2021-22)
+  const [usePreviousData, setUsePreviousData] = useState(false);
+  const [prevTakki, setPrevTakki] = useState('');
+  const [prevPage, setPrevPage] = useState('');
+  const [prevReg, setPrevReg] = useState('');
+  const [prevGirth, setPrevGirth] = useState('');
+  const [prevSpecies, setPrevSpecies] = useState('');
+  const [prevSpeciesId, setPrevSpeciesId] = useState(null);
+  const [prevCondition, setPrevCondition] = useState('');
+  const [prevConditionId, setPrevConditionId] = useState(null);
   const [gpsSource, setGpsSource] = useState('');
   const [gpsFetching, setGpsFetching] = useState(false);
 
@@ -289,7 +317,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     return String(role || '').trim();
   };
 
-  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO', 'Surveyor'];
+  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO'];
 
   const nextRole = currentRole => {
     const idx = ROLE_ORDER.indexOf(currentRole);
@@ -314,43 +342,49 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         canSuperdari: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
+        _remarks: '',
       };
     }
 
-    if (disposalExists) {
+    // OVERRIDE: Disposed > Superdari > Workflow
+    if (r?.isDisposed) {
       return {
         statusText: 'Disposed',
-        statusColor: COLORS.secondary,
+        statusColor: COLORS.warning,
         showEdit: false,
         showPills: true,
-        canDispose: false,
-        canSuperdari: true,
-        rowAccent: null,
-        isRejected: false,
-      };
-    }
-
-    if (superdariExists) {
-      return {
-        statusText: 'Superdari',
-        statusColor: COLORS.info,
-        showEdit: false,
-        showPills: false,
         canDispose: false,
         canSuperdari: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
+        _remarks: '',
+      };
+    }
+    if (r?.hasSuperdari) {
+      return {
+        statusText: 'Superdari',
+        statusColor: COLORS.secondary,
+        showEdit: false,
+        showPills: true,
+        canDispose: false,
+        canSuperdari: false,
+        rowAccent: null,
+        isRejected: false,
+        isFinalApproved: false,
+        _remarks: '',
       };
     }
 
-    const latest = r?.latestStatus || null;
-    const actionRaw = String(latest?.action || '').trim();
+    const latestStatus = r?.latestStatus || null;
+    const actionRaw = String(latestStatus?.action || '').trim();
     const action = actionRaw.toLowerCase();
-    const byRole = normalizeRole(latest?.user_role || '');
-    const byDesignation = String(latest?.designation || '').trim();
-    const remarks = String(latest?.remarks || '').trim();
+    const byRole = normalizeRole(latestStatus?.user_role || '');
+    const byDesignation = String(latestStatus?.designation || '').trim();
+    const remarks = String(latestStatus?.remarks || '').trim();
 
-    if (!latest || !actionRaw) {
+    if (!latestStatus || !actionRaw) {
       return {
         statusText: 'Pending (Block Officer)',
         statusColor: COLORS.textLight,
@@ -360,6 +394,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         canSuperdari: true,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
+        _remarks: remarks,
       };
     }
 
@@ -374,15 +410,15 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         canSuperdari: true,
         rowAccent: 'rejected',
         isRejected: true,
+        isFinalApproved: false,
         _remarks: remarks,
         _rejectedBy: rejectBy,
       };
     }
 
-    if (action === 'approved' || action === 'verified') {
+    if (action === 'verified' || action === 'approved') {
       const approver = byRole || 'Block Officer';
       const nxt = nextRole(approver);
-
       if (!nxt) {
         return {
           statusText: 'Final Approved',
@@ -393,11 +429,12 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
           canSuperdari: true,
           rowAccent: null,
           isRejected: false,
+          isFinalApproved: true,
+          _remarks: remarks,
         };
       }
-
       return {
-        statusText: `Approved • Pending (${nxt})`,
+        statusText: `Verified • Pending (${nxt})`,
         statusColor: COLORS.warning,
         showEdit: false,
         showPills: true,
@@ -405,11 +442,13 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         canSuperdari: true,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
+        _remarks: remarks,
       };
     }
 
     return {
-      statusText: 'Pending',
+      statusText: actionRaw || 'Pending',
       statusColor: COLORS.textLight,
       showEdit: false,
       showPills: true,
@@ -417,6 +456,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       canSuperdari: true,
       rowAccent: null,
       isRejected: false,
+      isFinalApproved: false,
+      _remarks: remarks,
     };
   };
 
@@ -729,11 +770,11 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       setGpsFetching(true);
 
       const net = await NetInfo.fetch();
-      const online = !!net.isConnected && (net.isInternetReachable ?? true);
+      const online = !!net.isConnected && (net.isInternetReachable !== false);
 
-      const options = online
-        ? { enableHighAccuracy: false, timeout: 12000, maximumAge: 30000 }
-        : { enableHighAccuracy: true, timeout: 18000, maximumAge: 5000 };
+      // ALWAYS use High Accuracy for "exact coordinates" as requested.
+      // works offline via GPS. Increased timeout for cold locks.
+      const options = { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 };
 
       Geolocation.getCurrentPosition(
         pos => {
@@ -742,12 +783,15 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
           setGpsAuto(val);
           setGpsManual(prev => (String(prev || '').trim() ? prev : val));
-          setGpsSource(online ? 'NETWORK' : 'GPS');
+          setGpsSource('GPS');
           setGpsFetching(false);
         },
         err => {
+          console.warn('GPS Error', err);
           setGpsFetching(false);
-          if (!silent) Alert.alert('Location Error', err.message);
+          if (!silent) {
+            Alert.alert('Location Error', err.message + '\nEnsure GPS is ON and you are outdoors.');
+          }
         },
         options,
       );
@@ -872,6 +916,21 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     }
   }, [conditionId, condition, conditionRows]);
 
+  // Effects for Previous Data Species/Condition name resolving
+  useEffect(() => {
+    if (prevSpeciesId && !prevSpecies && speciesRows.length) {
+      const row = speciesRows.find(x => String(x.id) === String(prevSpeciesId));
+      if (row?.name) setPrevSpecies(row.name);
+    }
+  }, [prevSpeciesId, prevSpecies, speciesRows]);
+
+  useEffect(() => {
+    if (prevConditionId && !prevCondition && conditionRows.length) {
+      const row = conditionRows.find(x => String(x.id) === String(prevConditionId));
+      if (row?.name) setPrevCondition(row.name);
+    }
+  }, [prevConditionId, prevCondition, conditionRows]);
+
   useEffect(() => {
     if (!modalVisible) return;
     if (isEdit) return;
@@ -893,6 +952,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     setConditionId(null);
 
     setTakkiNumber('');
+    setPageNo('');
+    setRegisterNo('');
     setAdditionalRemarks('');
     setIsDisputed(false);
 
@@ -906,6 +967,16 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     setPictureAssets([]);
     setUploadingImages(false);
     setUploadedImageUrls([]);
+
+    setUsePreviousData(false);
+    setPrevTakki('');
+    setPrevPage('');
+    setPrevReg('');
+    setPrevGirth('');
+    setPrevSpecies('');
+    setPrevSpeciesId(null);
+    setPrevCondition('');
+    setPrevConditionId(null);
   };
 
   const openAddForm = () => {
@@ -934,7 +1005,11 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       row?.takki ??
       row?.takkiNum ??
       '';
+    '';
     setTakkiNumber(t != null ? String(t) : '');
+
+    setPageNo(row?.page_no || row?.pageNo || '');
+    setRegisterNo(row?.register_no || row?.registerNo || '');
 
     setAdditionalRemarks(
       String(row?.additional_remarks ?? row?.additionalRemarks ?? '').trim(),
@@ -961,6 +1036,36 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     setPictureAssets([]);
     const pics = Array.isArray(row?.pictures) ? row.pictures : [];
     setUploadedImageUrls(pics.slice(0, MAX_IMAGES));
+
+    // Previous Data Population
+    const hasPrevData = !!(
+      row?.previous_takki_number ||
+      row?.previous_page_no ||
+      row?.previous_register_no ||
+      row?.previous_girth ||
+      row?.previous_species_id
+    );
+    setUsePreviousData(hasPrevData);
+    if (hasPrevData) {
+      setPrevTakki(row?.previous_takki_number ? String(row.previous_takki_number) : '');
+      setPrevPage(row?.previous_page_no || '');
+      setPrevReg(row?.previous_register_no || '');
+      setPrevGirth(row?.previous_girth ? String(row.previous_girth) : '');
+      setPrevSpeciesId(row?.previous_species_id ?? null);
+      setPrevConditionId(row?.previous_condition_id ?? null);
+      // Names will trigger from useEffect logic
+      setPrevSpecies('');
+      setPrevCondition('');
+    } else {
+      setPrevTakki('');
+      setPrevPage('');
+      setPrevReg('');
+      setPrevGirth('');
+      setPrevSpeciesId(null);
+      setPrevConditionId(null);
+      setPrevSpecies('');
+      setPrevCondition('');
+    }
 
     setModalVisible(true);
   };
@@ -1100,6 +1205,20 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       additional_remarks: String(additionalRemarks || '').trim(),
       ...(takkiNumberValue != null ? { takki_number: takkiNumberValue } : {}),
       ...(finalSide ? { side: finalSide } : {}),
+      page_no: String(pageNo || '').trim(),
+      register_no: String(registerNo || '').trim(),
+
+      // Previous data fields (only if checked)
+      ...(usePreviousData
+        ? {
+          previous_takki_number: prevTakki ? Number(prevTakki) : null,
+          previous_page_no: String(prevPage || '').trim(),
+          previous_register_no: String(prevReg || '').trim(),
+          previous_girth: prevGirth ? Number(prevGirth) : null,
+          previous_species_id: prevSpeciesId ? Number(prevSpeciesId) : null,
+          previous_condition_id: prevConditionId ? Number(prevConditionId) : null,
+        }
+        : {}),
 
       pictures: [], // filled by ApiService attachments or preserved existing
       auto_lat: autoLat,
@@ -1340,6 +1459,47 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         </View>
       </LinearGradient>
 
+      {/* --- Offline Sync Bar --- */}
+      {offlineStatus.count > 0 && (
+        <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: COLORS.warning,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={() => offlineService.processQueue()}
+            disabled={offlineStatus.syncing}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {offlineStatus.syncing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="cloud-offline" size={20} color="#fff" />
+              )}
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                {offlineStatus.syncing
+                  ? 'Syncing records...'
+                  : `${offlineStatus.count} Offline Records Pending`}
+              </Text>
+            </View>
+            {!offlineStatus.syncing && (
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Main */}
       <ScrollView
         style={styles.container}
@@ -1448,7 +1608,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                     { label: 'Auto GPS', width: 180 },
                     { label: 'Manual GPS', width: 180 },
                     { label: 'Status', width: 220 },
-                    { label: 'Actions', width: 420 },
+                    { label: 'Actions', width: 460 },
                   ].map((col, idx) => (
                     <View key={idx} style={[styles.thCell, { width: col.width }]}>
                       <Text style={styles.thText}>{col.label}</Text>
@@ -1547,38 +1707,49 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                         )}
 
                         {/* ✅ NEW: Audit */}
-                        <TouchableOpacity
-                          style={[styles.actionPill, { backgroundColor: COLORS.secondary }]}
-                          onPress={() =>
-                            navigateSafe(AUDIT_ROUTE, {
-                              enumerationId: r.id,      // <-- used by audit api payload
-                              enumeration: r,           // <-- for auto takki + defaults
-                            })
-                          }>
-                          <Text style={styles.actionPillText}>Audit</Text>
-                        </TouchableOpacity>
 
-                        {ui.showPills && (
-                          <>
-                            {ui.canDispose && (
-                              <TouchableOpacity
-                                style={[styles.actionPill, { backgroundColor: COLORS.primaryDark }]}
-                                onPress={() => navigateSafe(DISPOSAL_ROUTE, { treeId: r.id, enumeration })}>
-                                <Text style={styles.actionPillText}>Dispose</Text>
-                              </TouchableOpacity>
-                            )}
 
-                            {ui.canSuperdari && (
-                              <TouchableOpacity
-                                style={[styles.actionPill, { backgroundColor: COLORS.info }]}
-                                onPress={() => navigateSafe(SUPERDARI_ROUTE, { treeId: r.id, enumeration })}>
-                                <Text style={styles.actionPillText}>Superdari</Text>
-                              </TouchableOpacity>
-                            )}
-                          </>
+                        {ui.canDispose && (
+                          <TouchableOpacity
+                            style={[styles.actionPill, { backgroundColor: COLORS.primaryDark }]}
+                            onPress={() => navigateSafe(DISPOSAL_ROUTE, { treeId: r.id, enumeration })}>
+                            <Text style={styles.actionPillText}>Dispose</Text>
+                          </TouchableOpacity>
+                        )}
+
+                        {ui.canSuperdari && (
+                          <TouchableOpacity
+                            style={[styles.actionPill, { backgroundColor: COLORS.info }]}
+                            onPress={() => navigateSafe(SUPERDARI_ROUTE, { treeId: r.id, enumeration })}>
+                            <Text style={styles.actionPillText}>Superdari</Text>
+                          </TouchableOpacity>
                         )}
                       </View>
 
+                      {/* Audit / Update - Only if Final Approved */}
+                      <View style={[styles.tdCell, styles.actionsCell, { width: 140 }]}>
+                        {ui.isFinalApproved ? (
+                          <TouchableOpacity
+                            style={[
+                              styles.actionButton,
+                              { backgroundColor: 'rgba(124, 58, 237, 0.10)' },
+                            ]}
+                            onPress={() =>
+                              navigateSafe(AUDIT_ROUTE, {
+                                enumerationId: r.id,
+                                enumeration: r,
+                              })
+                            }
+                            activeOpacity={0.7}>
+                            <Ionicons name="clipboard-outline" size={16} color={COLORS.info} />
+                            <Text style={[styles.actionButtonText, { color: COLORS.info }]}>
+                              Update
+                            </Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <Text style={styles.tdText}>—</Text>
+                        )}
+                      </View>
                     </View>
                   );
                 })}
@@ -1829,12 +2000,125 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled">
 
+                {/* Previous Data Checkbox - MOVED TO TOP */}
+                <View style={[styles.switchRow, { marginTop: 0, marginBottom: 12 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.switchLabel}>Previous Data Available (2021-22)</Text>
+                    <Text style={styles.switchHint}>Check to add previous record details.</Text>
+                  </View>
+                  <Switch value={usePreviousData} onValueChange={setUsePreviousData} />
+                </View>
+
+                {usePreviousData && (
+                  <View
+                    style={{
+                      marginTop: 0,
+                      marginBottom: 16,
+                      padding: 12,
+                      backgroundColor: '#f1f5f9',
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: '#cbd5e1',
+                    }}>
+                    <Text
+                      style={{
+                        marginBottom: 12,
+                        fontSize: 14,
+                        fontWeight: '700',
+                        color: COLORS.primary,
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.5,
+                      }}>
+                      Previous Record Details
+                    </Text>
+
+                    <FormRow
+                      label="Previous Takki No"
+                      value={prevTakki}
+                      onChangeText={setPrevTakki}
+                      placeholder="e.g. 99"
+                      keyboardType="numeric"
+                    />
+
+                    <View style={{ flexDirection: 'row', gap: 12 }}>
+                      <View style={{ flex: 1 }}>
+                        <FormRow
+                          label="Prev Page No"
+                          value={prevPage}
+                          onChangeText={setPrevPage}
+                          placeholder="Pg-202"
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <FormRow
+                          label="Prev Reg No"
+                          value={prevReg}
+                          onChangeText={setPrevReg}
+                          placeholder="Reg-001"
+                        />
+                      </View>
+                    </View>
+
+                    <FormRow
+                      label="Previous Girth"
+                      value={prevGirth}
+                      onChangeText={setPrevGirth}
+                      placeholder="e.g. 10.0"
+                      keyboardType="numeric"
+                    />
+
+                    <DropdownRow
+                      label={speciesLoading ? 'Prev Species (Loading...)' : 'Prev Species'}
+                      value={prevSpecies}
+                      onChange={name => {
+                        setPrevSpecies(name);
+                        const row = speciesRows.find(x => x.name === name);
+                        setPrevSpeciesId(row?.id ?? null);
+                      }}
+                      options={speciesOptions}
+                      disabled={speciesLoading}
+                      searchable
+                      searchPlaceholder="Search species..."
+                    />
+
+                    <DropdownRow
+                      label={conditionLoading ? 'Prev Condition (Loading...)' : 'Prev Condition'}
+                      value={prevCondition}
+                      onChange={name => {
+                        setPrevCondition(name);
+                        const row = conditionRows.find(x => x.name === name);
+                        setPrevConditionId(row?.id ?? null);
+                      }}
+                      options={conditionOptions}
+                      disabled={conditionLoading}
+                      searchable
+                      searchPlaceholder="Search condition..."
+                    />
+                  </View>
+                )}
+
                 <FormRow
                   label="Takki Number"
                   value={takkiNumber}
                   onChangeText={setTakkiNumber}
                   placeholder="e.g. 123"
                   keyboardType="numeric"
+                />
+
+                <FormRow
+                  label="Page No (Optional)"
+                  value={pageNo}
+                  onChangeText={setPageNo}
+                  placeholder="PG-123"
+                  icon="document-text"
+                />
+
+                <FormRow
+                  label="Register No (Optional)"
+                  value={registerNo}
+                  onChangeText={setRegisterNo}
+                  placeholder="REG-456"
+                  icon="book"
                 />
 
                 {showSideDropdown && (
@@ -1954,6 +2238,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                   </View>
                   <Switch value={isDisputed} onValueChange={setIsDisputed} />
                 </View>
+
+
 
                 {/* GPS Section */}
                 <View style={styles.gpsSection}>
@@ -2157,6 +2443,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      <FullScreenLoader visible={offlineStatus.syncing} />
     </View>
   );
 }

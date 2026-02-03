@@ -29,6 +29,7 @@ import { apiService } from '../services/ApiService';
 import { offlineService } from '../services/OfflineService';
 
 import FormRow from '../components/FormRow';
+import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
@@ -134,6 +135,23 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
   // additional API field
   const [replenishmentDetails, setReplenishmentDetails] = useState('');
+  // ✅ Initialize from navigation param if available
+  const [pageNo, setPageNo] = useState(enumeration?.page_no || '');
+  const [registerNo, setRegisterNo] = useState(enumeration?.register_no || '');
+
+  const [offlineStatus, setOfflineStatus] = useState({ count: 0, syncing: false });
+
+  useEffect(() => {
+    const update = () => {
+      setOfflineStatus({
+        count: offlineService.queue.length,
+        syncing: offlineService.isSyncing
+      });
+    };
+    const unsub = offlineService.subscribe(update);
+    update();
+    return unsub;
+  }, []);
 
   // species master + selection + per-species counts
   const [speciesRows, setSpeciesRows] = useState([]);
@@ -170,7 +188,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     return String(role || '').trim();
   };
 
-  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO', 'Surveyor'];
+  const ROLE_ORDER = ['Guard', 'Block Officer', 'SDFO', 'DFO'];
 
   const nextRole = currentRole => {
     const idx = ROLE_ORDER.indexOf(currentRole);
@@ -179,16 +197,16 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
   /**
    * Flow for Afforestation:
-   * Guard -> Block Officer -> SDFO -> DFO -> Surveyor -> Final Approved
+   * Guard -> Block Officer -> SDFO -> DFO -> Final Approved
    * Reject => goes back to Guard with remarks; Edit shows, user can resubmit.
    *
-   * ✅ UPDATE: Status override:
+   * UPDATE: Status override:
    * Disposed > Superdari > Workflow status
    */
   const deriveRowUi = r => {
     const latestStatus = r?.latestStatus || null;
 
-    // ✅ OVERRIDE STATUS if Disposal/Superdari exists
+    // OVERRIDE STATUS if Disposal/Superdari exists
     // Priority: Disposed > Superdari > Workflow status
     if (r?.isDisposed) {
       return {
@@ -197,6 +215,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         showEdit: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
         _remarks: '',
       };
     }
@@ -208,6 +227,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         showEdit: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
         _remarks: '',
       };
     }
@@ -226,6 +246,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         showEdit: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
         _remarks: remarks,
       };
     }
@@ -238,6 +259,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         showEdit: true,
         rowAccent: 'rejected',
         isRejected: true,
+        isFinalApproved: false,
         _remarks: remarks,
         _rejectedBy: rejectBy,
       };
@@ -247,7 +269,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       const approver = byRole || 'Block Officer';
       const nxt = nextRole(approver);
 
-      // Surveyor approved => final
+      // DFO approved => final
       if (!nxt) {
         return {
           statusText: 'Final Approved',
@@ -255,6 +277,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
           showEdit: false,
           rowAccent: null,
           isRejected: false,
+          isFinalApproved: true,
           _remarks: remarks,
         };
       }
@@ -265,6 +288,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         showEdit: false,
         rowAccent: null,
         isRejected: false,
+        isFinalApproved: false,
         _remarks: remarks,
       };
     }
@@ -275,6 +299,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       showEdit: false,
       rowAccent: null,
       isRejected: false,
+      isFinalApproved: false,
       _remarks: remarks,
     };
   };
@@ -853,7 +878,10 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     setSchemeType('');
     setProjectName('');
     setNonDevScheme('');
+    setNonDevScheme('');
     setReplenishmentDetails('');
+    setPageNo('');
+    setRegisterNo('');
 
     setSpeciesIds([]);
     setSpeciesCounts({});
@@ -882,9 +910,9 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       },
       err => {
         setGpsLoading(false);
-        if (!silent) Alert.alert('Location Error', err.message);
+        if (!silent) Alert.alert('Location Error', err.message + '\nEnsure GPS is ON and you are outdoors.');
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 },
     );
   };
 
@@ -918,6 +946,8 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     setProjectName(record.projectName || '');
     setNonDevScheme(record.nonDevScheme || '');
     setReplenishmentDetails(record?.replenishment_details || '');
+    setPageNo(record?.page_no || record?.pageNo || '');
+    setRegisterNo(record?.register_no || record?.registerNo || '');
 
     // ✅ keep existing server pictures so PATCH doesn't wipe them
     const serverPics = Array.isArray(record?.pictures) ? record.pictures : [];
@@ -1307,6 +1337,8 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       project_name:
         schemeType === 'Development' ? String(projectName || '') : String(nonDevScheme || ''),
       replenishment_details: String(replenishmentDetails || ''),
+      page_no: String(pageNo || '').trim(),
+      register_no: String(registerNo || '').trim(),
 
       auto_lat: autoLat,
       auto_long: autoLng,
@@ -1503,6 +1535,12 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                 <Ionicons name="calendar" size={12} color="#fff" />
                 <Text style={styles.infoChipText}>{enumeration?.year || '—'}</Text>
               </View>
+              {!!enumeration?.page_no && (
+                <View style={styles.infoChip}>
+                  <Ionicons name="document-text" size={12} color="#fff" />
+                  <Text style={styles.infoChipText}>{enumeration.page_no}</Text>
+                </View>
+              )}
             </View>
             {nameOfSiteId && <Text style={styles.siteId}>Site ID: {nameOfSiteId}</Text>}
           </View>
@@ -1814,21 +1852,25 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                       )}
 
 
-                      {/* ✅ Audit Column */}
+                      {/* Audit / Update - Only if Final Approved */}
                       {showAuditColumn && (
                         <View style={[styles.tdCell, styles.actionsCell, { width: 120 }]}>
-                          <TouchableOpacity
-                            style={[
-                              styles.actionButton,
-                              { backgroundColor: 'rgba(22, 163, 74, 0.10)' },
-                            ]}
-                            onPress={() => openAuditForRecord(r)}
-                            activeOpacity={0.7}>
-                            <Ionicons name="clipboard-outline" size={16} color={COLORS.success} />
-                            <Text style={[styles.actionButtonText, { color: COLORS.success }]}>
-                              Audit
-                            </Text>
-                          </TouchableOpacity>
+                          {ui.isFinalApproved ? (
+                            <TouchableOpacity
+                              style={[
+                                styles.actionButton,
+                                { backgroundColor: 'rgba(22, 163, 74, 0.10)' },
+                              ]}
+                              onPress={() => openAuditForRecord(r)}
+                              activeOpacity={0.7}>
+                              <Ionicons name="clipboard-outline" size={16} color={COLORS.success} />
+                              <Text style={[styles.actionButtonText, { color: COLORS.success }]}>
+                                Update
+                              </Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <Text style={styles.tdText}>—</Text>
+                          )}
                         </View>
                       )}
 
@@ -2370,6 +2412,27 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                     onChangeText={setReplenishmentDetails}
                     placeholder="e.g. Initial plantation completed"
                   />
+
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Page No (Optional)"
+                        value={pageNo}
+                        onChangeText={setPageNo}
+                        placeholder="PG-123"
+                        icon="document-text"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Register No (Optional)"
+                        value={registerNo}
+                        onChangeText={setRegisterNo}
+                        placeholder="REG-456"
+                        icon="book"
+                      />
+                    </View>
+                  </View>
                 </View>
 
                 <View style={styles.formSection}>
@@ -2534,6 +2597,8 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      <FullScreenLoader visible={offlineStatus.syncing} />
     </View>
   );
 }

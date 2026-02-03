@@ -22,6 +22,7 @@ import { Calendar } from 'react-native-calendars';
 import FormRow from '../components/FormRow';
 import { DropdownRow } from '../components/SelectRows';
 import { apiService } from '../services/ApiService';
+import { Switch } from 'react-native';
 
 // Theme Colors
 const COLORS = {
@@ -45,9 +46,11 @@ const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 
 const API_BASE = 'http://be.lte.gisforestry.com';
 const DISPOSAL_POST_URL = `${API_BASE}/enum/disposal`;
+const SPECIES_URL = `${API_BASE}/lpe3/species`;
+const CONDITION_URL = `${API_BASE}/forest-tree-conditions`;
 
 export default function DisposalScreen({ navigation, route }) {
-  const { treeId, enumeration } = route.params || {};
+  const { treeId, enumeration, isFromSite } = route.params || {};
 
   const [record, setRecord] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -92,6 +95,25 @@ export default function DisposalScreen({ navigation, route }) {
   const [peedaImages, setPeedaImages] = useState([]);
   const [auctionImages, setAuctionImages] = useState([]);
 
+  // Previous Data (2021-22)
+  const [usePreviousData, setUsePreviousData] = useState(false);
+  const [prevTakki, setPrevTakki] = useState('');
+  const [prevPage, setPrevPage] = useState('');
+  const [prevReg, setPrevReg] = useState('');
+  const [prevGirth, setPrevGirth] = useState('');
+  const [prevSpecies, setPrevSpecies] = useState('');
+  const [prevSpeciesId, setPrevSpeciesId] = useState(null);
+  const [prevCondition, setPrevCondition] = useState('');
+  const [prevConditionId, setPrevConditionId] = useState(null);
+
+  // Master Data for Previous Data Dropdowns
+  const [speciesRows, setSpeciesRows] = useState([]);
+  const [conditionRows, setConditionRows] = useState([]);
+  const [speciesOptions, setSpeciesOptions] = useState([]);
+  const [conditionOptions, setConditionOptions] = useState([]);
+  const [speciesLoading, setSpeciesLoading] = useState(false);
+  const [conditionLoading, setConditionLoading] = useState(false);
+
   // Date Picker State
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [currentDateField, setCurrentDateField] = useState('');
@@ -101,7 +123,52 @@ export default function DisposalScreen({ navigation, route }) {
 
   useEffect(() => {
     loadRecord();
+    fetchSpecies();
+    fetchConditions();
   }, []);
+
+  // Effects for Previous Data Species/Condition name resolving
+  useEffect(() => {
+    if (prevSpeciesId && !prevSpecies && speciesRows.length) {
+      const row = speciesRows.find(x => String(x.id) === String(prevSpeciesId));
+      if (row?.name) setPrevSpecies(row.name);
+    }
+  }, [prevSpeciesId, prevSpecies, speciesRows]);
+
+  useEffect(() => {
+    if (prevConditionId && !prevCondition && conditionRows.length) {
+      const row = conditionRows.find(x => String(x.id) === String(prevConditionId));
+      if (row?.name) setPrevCondition(row.name);
+    }
+  }, [prevConditionId, prevCondition, conditionRows]);
+
+  const fetchSpecies = async () => {
+    try {
+      setSpeciesLoading(true);
+      const res = await apiService.get(SPECIES_URL);
+      const list = Array.isArray(res?.data) ? res.data : [];
+      setSpeciesRows(list);
+      setSpeciesOptions(list.map(x => x.name).filter(Boolean).sort());
+    } catch (e) {
+      console.warn('Species Fetch Error', e);
+    } finally {
+      setSpeciesLoading(false);
+    }
+  };
+
+  const fetchConditions = async () => {
+    try {
+      setConditionLoading(true);
+      const res = await apiService.get(CONDITION_URL);
+      const list = Array.isArray(res?.data) ? res.data : [];
+      setConditionRows(list);
+      setConditionOptions(list.map(x => x.name).filter(Boolean));
+    } catch (e) {
+      console.warn('Conditions Fetch Error', e);
+    } finally {
+      setConditionLoading(false);
+    }
+  };
 
   const getAuthToken = async () => {
     const t = await AsyncStorage.getItem('AUTH_TOKEN');
@@ -151,6 +218,24 @@ export default function DisposalScreen({ navigation, route }) {
       setFirImages(Array.isArray(d.firImages) ? d.firImages : []);
       setPeedaImages(Array.isArray(d.peedaImages) ? d.peedaImages : []);
       setAuctionImages(Array.isArray(d.auctionImages) ? d.auctionImages : []);
+
+      // Previous Data Population
+      const hasPrevData = !!(
+        d.previous_takki_number ||
+        d.previous_page_no ||
+        d.previous_register_no ||
+        d.previous_girth ||
+        d.previous_species_id
+      );
+      setUsePreviousData(hasPrevData);
+      if (hasPrevData) {
+        setPrevTakki(d.previous_takki_number ? String(d.previous_takki_number) : '');
+        setPrevPage(d.previous_page_no || '');
+        setPrevReg(d.previous_register_no || '');
+        setPrevGirth(d.previous_girth ? String(d.previous_girth) : '');
+        setPrevSpeciesId(d.previous_species_id ?? null);
+        setPrevConditionId(d.previous_condition_id ?? null);
+      }
     } catch (e) {
       // ignore
     }
@@ -357,8 +442,8 @@ export default function DisposalScreen({ navigation, route }) {
   }, [enumeration?.id, record?.enumerationId]);
 
   const saveDisposal = async () => {
-    if (!treeId) return Alert.alert('Error', 'treeId missing.');
-    if (!enumerationIdResolved) return Alert.alert('Error', 'enumerationId missing.');
+    // if (!treeId) return Alert.alert('Error', 'treeId missing.');
+    // if (!enumerationIdResolved) return Alert.alert('Error', 'enumerationId missing.');
 
     // Validate FIR requirement
     if (firChecked && !firNo.trim()) {
@@ -385,7 +470,7 @@ export default function DisposalScreen({ navigation, route }) {
 
     // Build payload exactly per your curl
     const apiBody = {
-      enumerationId: Number(treeId),
+      enumerationId: treeId ? Number(treeId) : null,
 
       dr_no: drNo?.trim() || '',
       dr_date: toIsoDateOrNull(drDate),
@@ -414,6 +499,18 @@ export default function DisposalScreen({ navigation, route }) {
       auction_remarks: auctionChecked ? (auctionRemarks?.trim() || '') : null,
 
       pictures: [], // Filled by ApiService
+
+      // Previous data fields (only if checked)
+      ...(usePreviousData
+        ? {
+          previous_takki_number: prevTakki ? Number(prevTakki) : null,
+          previous_page_no: String(prevPage || '').trim(),
+          previous_register_no: String(prevReg || '').trim(),
+          previous_girth: prevGirth ? Number(prevGirth) : null,
+          previous_species_id: prevSpeciesId ? Number(prevSpeciesId) : null,
+          previous_condition_id: prevConditionId ? Number(prevConditionId) : null,
+        }
+        : {}),
     };
 
     try {
@@ -530,6 +627,129 @@ export default function DisposalScreen({ navigation, route }) {
             )}
           </View>
         </View>
+
+
+
+        {/* Previous Data Checkbox */}
+        {
+          !!isFromSite && (
+            <View style={{ marginHorizontal: 20, marginBottom: 20 }}>
+              <View style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                backgroundColor: '#fff',
+                padding: 16,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: COLORS.border,
+              }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text }}>
+                    Previous Data Available (2021-22)
+                  </Text>
+                  <Text style={{ fontSize: 13, color: COLORS.textLight, marginTop: 4 }}>
+                    Check to add previous record details.
+                  </Text>
+                </View>
+                <Switch value={usePreviousData} onValueChange={setUsePreviousData} />
+              </View>
+
+              {usePreviousData && (
+                <View
+                  style={{
+                    marginTop: 12,
+                    padding: 16,
+                    backgroundColor: '#f1f5f9',
+                    borderRadius: 16,
+                    borderWidth: 1,
+                    borderColor: '#cbd5e1',
+                  }}>
+                  <Text
+                    style={{
+                      marginBottom: 16,
+                      fontSize: 14,
+                      fontWeight: '700',
+                      color: COLORS.primary,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.5,
+                    }}>
+                    Previous Record Details
+                  </Text>
+
+                  <FormRow
+                    label="Previous Takki No"
+                    value={prevTakki}
+                    onChangeText={setPrevTakki}
+                    placeholder="e.g. 99"
+                    keyboardType="numeric"
+                    style={{ backgroundColor: '#fff' }}
+                  />
+
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Prev Page No"
+                        value={prevPage}
+                        onChangeText={setPrevPage}
+                        placeholder="Pg-202"
+                        style={{ backgroundColor: '#fff' }}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <FormRow
+                        label="Prev Reg No"
+                        value={prevReg}
+                        onChangeText={setPrevReg}
+                        placeholder="Reg-001"
+                        style={{ backgroundColor: '#fff' }}
+                      />
+                    </View>
+                  </View>
+
+                  <FormRow
+                    label="Previous Girth"
+                    value={prevGirth}
+                    onChangeText={setPrevGirth}
+                    placeholder="e.g. 10.0"
+                    keyboardType="numeric"
+                    style={{ backgroundColor: '#fff' }}
+                  />
+
+                  <DropdownRow
+                    label={speciesLoading ? 'Prev Species (Loading...)' : 'Prev Species'}
+                    value={prevSpecies}
+                    onChange={name => {
+                      setPrevSpecies(name);
+                      const row = speciesRows.find(x => x.name === name);
+                      setPrevSpeciesId(row?.id ?? null);
+                    }}
+                    options={speciesOptions}
+                    disabled={speciesLoading}
+                    searchable
+                    searchPlaceholder="Search species..."
+                    style={{ backgroundColor: '#fff' }}
+                  />
+
+                  <DropdownRow
+                    label={conditionLoading ? 'Prev Condition (Loading...)' : 'Prev Condition'}
+                    value={prevCondition}
+                    onChange={name => {
+                      setPrevCondition(name);
+                      const row = conditionRows.find(x => x.name === name);
+                      setPrevConditionId(row?.id ?? null);
+                    }}
+                    options={conditionOptions}
+                    disabled={conditionLoading}
+                    searchable
+                    searchPlaceholder="Search condition..."
+                    style={{ backgroundColor: '#fff' }}
+                  />
+                </View>
+              )}
+            </View>
+          )
+        }
 
         {/* Damage Report */}
         <View style={styles.card}>
@@ -822,14 +1042,15 @@ export default function DisposalScreen({ navigation, route }) {
             </>
           )}
         </TouchableOpacity>
-      </ScrollView>
+      </ScrollView >
 
       {/* Date Picker Modal */}
-      <Modal
+      < Modal
         visible={showDatePicker}
         transparent
         animationType="slide"
-        onRequestClose={() => setShowDatePicker(false)}>
+        onRequestClose={() => setShowDatePicker(false)
+        }>
         <View style={styles.modalOverlay}>
           <View style={styles.datePickerContainer}>
             <View style={styles.datePickerHeader}>
@@ -875,8 +1096,8 @@ export default function DisposalScreen({ navigation, route }) {
             </View>
           </View>
         </View>
-      </Modal>
-    </View>
+      </Modal >
+    </View >
   );
 }
 

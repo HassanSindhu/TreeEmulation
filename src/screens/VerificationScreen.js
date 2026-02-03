@@ -74,9 +74,28 @@ function getLatestAction(item) {
   return item?.latestStatus?.action ?? null;
 }
 
-function isFinalStatus(item) {
+const getRoleLevel = (roleVal) => {
+  const r = String(roleVal || '').toLowerCase().replace(/[\s-_]/g, '');
+  if (r === 'dfo' || r === 'divisionalforestofficer') return 3;
+  if (r === 'sdfo' || r === 'subdivisionalforestofficer') return 2;
+  if (r.includes('block')) return 1;
+  return 0;
+};
+
+function determineItemStatus(item, userRole) {
   const action = getLatestAction(item);
-  return action === 'Verified' || action === 'Rejected';
+  if (!action) return 'Pending';
+  if (action === 'Rejected') return 'Rejected';
+
+  if (action === 'Verified') {
+    const itemRole = item?.latestStatus?.user_role;
+    const itemLevel = getRoleLevel(itemRole);
+    const myLevel = getRoleLevel(userRole);
+
+    if (itemLevel < myLevel) return 'Pending';
+    return 'Verified';
+  }
+  return 'Pending';
 }
 
 function getSiteName(item) {
@@ -110,19 +129,10 @@ function matchesSearch(item, q) {
   return idStr.includes(query) || site.includes(query) || rd.includes(query);
 }
 
-function matchesStatus(item, statusFilter) {
+function matchesStatus(item, statusFilter, userRole) {
   if (!statusFilter || statusFilter === 'All') return true;
-
-  const action = getLatestAction(item); // null | "Rejected" | "Verified" | etc
-
-  if (statusFilter === 'Pending') {
-    // Pending: no latest action OR latest action not Verified and not Rejected
-    return action === null || (action !== 'Verified' && action !== 'Rejected');
-  }
-  if (statusFilter === 'Rejected') return action === 'Rejected';
-  if (statusFilter === 'Verified') return action === 'Verified';
-
-  return true;
+  const status = determineItemStatus(item, userRole);
+  return status === statusFilter;
 }
 
 function tableNameForModule(moduleKey) {
@@ -287,7 +297,9 @@ export default function VerificationScreen({ navigation }) {
     if (!item) return;
 
     // ✅ do not change anything if already Approved/Rejected
-    if (isFinalStatus(item)) {
+    // ✅ check final status for THIS user
+    const currentStatus = determineItemStatus(item, role);
+    if (currentStatus === 'Verified' || currentStatus === 'Rejected') {
       Alert.alert('Info', 'This record is already Approved/Rejected.');
       return;
     }
@@ -307,14 +319,16 @@ export default function VerificationScreen({ navigation }) {
       Alert.alert('Error', e?.message || 'Approve failed');
       setDetailsModal(s => ({ ...s, submitting: false }));
     }
-  }, [detailsModal, postVerification, closeDetails, fetchForModule, activeModule]);
+  }, [detailsModal, postVerification, closeDetails, fetchForModule, activeModule, role]);
 
   const rejectFromDetails = useCallback(async () => {
     const item = detailsModal.item;
     if (!item) return;
 
     // ✅ do not change anything if already Approved/Rejected
-    if (isFinalStatus(item)) {
+    // ✅ check final status for THIS user
+    const currentStatus = determineItemStatus(item, role);
+    if (currentStatus === 'Verified' || currentStatus === 'Rejected') {
       Alert.alert('Info', 'This record is already Approved/Rejected.');
       return;
     }
@@ -340,7 +354,7 @@ export default function VerificationScreen({ navigation }) {
       Alert.alert('Error', e?.message || 'Reject failed');
       setDetailsModal(s => ({ ...s, submitting: false }));
     }
-  }, [detailsModal, postVerification, closeDetails, fetchForModule, activeModule]);
+  }, [detailsModal, postVerification, closeDetails, fetchForModule, activeModule, role]);
 
   /* ------------------------------
      FILTERED LIST + COUNTS (for pills)
@@ -350,8 +364,8 @@ export default function VerificationScreen({ navigation }) {
   const filteredList = useMemo(() => {
     return rawList
       .filter(item => matchesSearch(item, search))
-      .filter(item => matchesStatus(item, statusFilter));
-  }, [rawList, search, statusFilter]);
+      .filter(item => matchesStatus(item, statusFilter, role));
+  }, [rawList, search, statusFilter, role]);
 
   const statusCounts = useMemo(() => {
     const all = rawList.length;
@@ -360,14 +374,14 @@ export default function VerificationScreen({ navigation }) {
     let rejected = 0;
 
     for (const it of rawList) {
-      const a = getLatestAction(it);
-      if (a === 'Verified') verified += 1;
-      else if (a === 'Rejected') rejected += 1;
+      const s = determineItemStatus(it, role);
+      if (s === 'Verified') verified += 1;
+      else if (s === 'Rejected') rejected += 1;
       else pending += 1;
     }
 
     return { all, pending, verified, rejected };
-  }, [rawList]);
+  }, [rawList, role]);
 
   const activeFilterCount = useMemo(() => {
     const s = search.trim() ? 1 : 0;
@@ -423,11 +437,15 @@ export default function VerificationScreen({ navigation }) {
     const rd = item?.rd_km ?? '-';
     const condition = item?.condition?.name || item?.condition_name || '-';
 
-    const badgeText = action ? action : 'Pending';
-    const badgeC = statusColor(action || 'Pending');
-    const badgeI = statusIcon(action || 'Pending');
+    // Logic updated to use determineItemStatus
+    const currentStatus = determineItemStatus(item, role);
 
-    const final = isFinalStatus(item);
+    // UI badge
+    const badgeText = currentStatus;
+    const badgeC = statusColor(currentStatus);
+    const badgeI = statusIcon(currentStatus);
+
+    const isFinal = currentStatus === 'Verified' || currentStatus === 'Rejected';
 
     return (
       <TouchableOpacity activeOpacity={0.85} onPress={() => openDetails(activeModule, item)}>
@@ -458,7 +476,7 @@ export default function VerificationScreen({ navigation }) {
           )}
 
           <Text style={styles.tapHint}>
-            {final ? 'Already decided (read-only)' : 'Tap to view details'}
+            {isFinal ? 'Already decided (read-only)' : 'Tap to view details'}
           </Text>
         </View>
       </TouchableOpacity>
@@ -484,8 +502,11 @@ export default function VerificationScreen({ navigation }) {
 
   const detailsItem = detailsModal.item;
   const detailsPics = detailsItem ? getPictures(detailsItem) : [];
-  const detailsAction = detailsItem ? getLatestAction(detailsItem) : null;
-  const detailsFinal = detailsItem ? isFinalStatus(detailsItem) : false;
+
+  // Fix: defined detailsAction using the new logic
+  const detailsAction = detailsItem ? determineItemStatus(detailsItem, role) : null;
+
+  const detailsFinal = detailsAction === 'Verified' || detailsAction === 'Rejected';
 
   // Filter modal handlers (UI like Registers)
   const openFilterModal = () => {

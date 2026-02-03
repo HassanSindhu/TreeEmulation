@@ -24,7 +24,7 @@ import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/ApiService';
 
 /* ===================== API ===================== */
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const ENUM_CREATE_URL = `${API_BASE}/lpe3/name-of-site`;
 const ENUM_MY_SITES_URL = `${API_BASE}/lpe3/name-of-site/my/sites`;
 

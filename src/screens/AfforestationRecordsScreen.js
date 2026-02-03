@@ -36,7 +36,7 @@ const { height } = Dimensions.get('window');
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
-const API_HOST = 'http://be.lte.gisforestry.com';
+const API_HOST = 'https://be.punjabtreeenumeration.com';
 
 // Theme Colors
 const COLORS = {

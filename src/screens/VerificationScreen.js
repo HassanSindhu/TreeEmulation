@@ -44,7 +44,7 @@ const COLORS = {
 const { width } = Dimensions.get('window');
 
 const STORAGE_TOKEN = 'AUTH_TOKEN';
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 // LIST APIs
 const ENUM_LIST_URL = `${API_BASE}/enum/enumeration`;
@@ -1463,7 +1463,7 @@ const styles = StyleSheet.create({
 //const {width} = Dimensions.get('window');
 //
 //const STORAGE_TOKEN = 'AUTH_TOKEN';
-//const API_BASE = 'http://be.lte.gisforestry.com';
+//const API_BASE = 'https://be.punjabtreeenumeration.com';
 //
 //// LIST APIs
 //const ENUM_LIST_URL = `${API_BASE}/enum/enumeration`;

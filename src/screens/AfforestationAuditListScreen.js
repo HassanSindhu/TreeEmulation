@@ -26,7 +26,7 @@ import { apiService } from '../services/ApiService';
 
 const { height } = Dimensions.get('window');
 
-const API_HOST = 'http://be.lte.gisforestry.com';
+const API_HOST = 'https://be.punjabtreeenumeration.com';
 
 // Endpoints
 const AFF_AUDIT_CREATE_URL = `${API_HOST}/enum/afforestation-audit`;

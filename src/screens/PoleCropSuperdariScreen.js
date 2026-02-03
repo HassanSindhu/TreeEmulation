@@ -1,6 +1,6 @@
 // /screens/PoleCropSuperdariScreen.js
 // ✅ NEW SCREEN: Pole Crop Superdari
-// ✅ Uses CURL: POST http://be.lte.gisforestry.com/pole-crop/superdari
+// ✅ Uses CURL: POST https://be.punjabtreeenumeration.com/pole-crop/superdari
 // ✅ Authorization: Bearer from AsyncStorage('AUTH_TOKEN')
 // ✅ Supports location (auto + manual) + pictures upload to AWS bucket
 // ✅ disposalId is optional (null allowed) as per curl
@@ -46,7 +46,7 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const AWS_Base = 'https://app.eco.gisforestry.com';
 
 // Superdari API

@@ -1,6 +1,6 @@
 // /screens/PoleCropDisposeScreen.js
 // ✅ NEW SCREEN: Pole Crop Disposal
-// ✅ Uses CURL: POST http://be.lte.gisforestry.com/pole-crop/disposal
+// ✅ Uses CURL: POST https://be.punjabtreeenumeration.com/pole-crop/disposal
 // ✅ Authorization: Bearer from AsyncStorage('AUTH_TOKEN')
 // ✅ Supports pictures upload to AWS bucket (same service as your other screens)
 // ✅ Conditional fields for Auction (only when auction=true)
@@ -44,7 +44,7 @@ const COLORS = {
   card: '#ffffff',
 };
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const AWS_Base = 'https://app.eco.gisforestry.com';
 
 // Disposal API

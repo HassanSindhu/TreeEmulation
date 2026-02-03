@@ -37,8 +37,8 @@ const COLORS = {
 };
 
 // ✅ Change this for production
-// const API_BASE = 'http://be.lte.gisforestry.com';
-const API_BASE = 'http://be.lte.gisforestry.com';
+// const API_BASE = 'https://be.punjabtreeenumeration.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 const STATS_URL = `${API_BASE}/lpe3/stats`;
 

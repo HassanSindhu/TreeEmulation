@@ -32,7 +32,7 @@ import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 // ---- CONDITIONS (adjust if your project has a different endpoint) ----
 const CONDITIONS_URL = `${API_BASE}/forest-tree-conditions`;

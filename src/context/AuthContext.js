@@ -5,7 +5,7 @@ import { apiService } from '../services/ApiService';
 
 const AuthContext = createContext(null);
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const STORAGE_TOKEN = 'AUTH_TOKEN';
 const STORAGE_USER = 'AUTH_USER';
 

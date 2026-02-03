@@ -26,7 +26,7 @@ import FormRow from '../components/FormRow';
 import { apiService } from '../services/ApiService';
 
 // ✅ IMPORTANT: Your cURL uses localhost:3000. In production, switch to be.lte.gisforestry.com.
-const API_HOST = 'http://be.lte.gisforestry.com';
+const API_HOST = 'https://be.punjabtreeenumeration.com';
 // const API_HOST = 'http://localhost:3000';
 
 const DISPOSAL_URL = `${API_HOST}/afforestation/disposal`;

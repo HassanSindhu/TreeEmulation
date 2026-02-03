@@ -43,7 +43,7 @@ const COLORS = {
 const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 
 // ✅ Same as your AuthContext
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const STORAGE_TOKEN = 'AUTH_TOKEN';
 
 // ✅ APIs

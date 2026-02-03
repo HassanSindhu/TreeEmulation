@@ -25,7 +25,7 @@ import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import FormRow from '../components/FormRow';
 import { apiService } from '../services/ApiService';
 
-const API_HOST = 'http://be.lte.gisforestry.com';
+const API_HOST = 'https://be.punjabtreeenumeration.com';
 
 // ✅ CURL endpoint you shared
 const SUPERDARI_URL = `${API_HOST}/afforestation/superdari`;

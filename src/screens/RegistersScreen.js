@@ -35,10 +35,10 @@ const { height } = Dimensions.get('window');
 
 /**
  * IMPORTANT
- * - For production you are using: http://be.lte.gisforestry.com
+ * - For production you are using: https://be.punjabtreeenumeration.com
  * - For local testing like your curl: http://localhost:5000
  */
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 // ---------- ENUM ENDPOINTS ----------
 const SPECIES_URL = `${API_BASE}/lpe3/species`;

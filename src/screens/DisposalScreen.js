@@ -44,7 +44,7 @@ const COLORS = {
 
 const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const DISPOSAL_POST_URL = `${API_BASE}/enum/disposal`;
 const SPECIES_URL = `${API_BASE}/lpe3/species`;
 const CONDITION_URL = `${API_BASE}/forest-tree-conditions`;

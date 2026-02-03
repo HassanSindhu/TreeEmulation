@@ -37,7 +37,7 @@ import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 // Lists / enums
 const SPECIES_URL = `${API_BASE}/lpe3/species`;

@@ -1142,7 +1142,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     const tn = String(takkiNumber || '').trim();
     const takkiNumberValue = tn ? Number(tn) : null;
     if (tn && !Number.isFinite(takkiNumberValue)) {
-      return Alert.alert('Invalid', 'Takki Number must be numeric');
+      return Alert.alert('Invalid', 'MDR No. (Takki No.) must be numeric');
     }
 
     // Resolve species id
@@ -1855,7 +1855,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 <View style={styles.filterRow}>
                   <View style={styles.filterColumn}>
                     <FormRow
-                      label="Takki Number From"
+                      label="MDR No. (Takki No.) From"
                       value={filters.takkiFrom}
                       onChangeText={v => setFilters(prev => ({ ...prev, takkiFrom: v }))}
                       placeholder="e.g. 1"
@@ -1864,7 +1864,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                   </View>
                   <View style={styles.filterColumn}>
                     <FormRow
-                      label="Takki Number To"
+                      label="MDR No. (Takki No.) To"
                       value={filters.takkiTo}
                       onChangeText={v => setFilters(prev => ({ ...prev, takkiTo: v }))}
                       placeholder="e.g. 500"
@@ -2098,7 +2098,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 )}
 
                 <FormRow
-                  label="Takki Number"
+                  label="MDR No. (Takki No.)"
                   value={takkiNumber}
                   onChangeText={setTakkiNumber}
                   placeholder="e.g. 123"

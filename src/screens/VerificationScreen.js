@@ -815,17 +815,115 @@ export default function VerificationScreen({ navigation }) {
                   <Text style={styles.kvVal}>{getSiteName(detailsItem)}</Text>
                 </View>
 
-                {'rd_km' in detailsItem && (
-                  <View style={styles.kvRow}>
-                    <Text style={styles.kvKey}>RD (km)</Text>
-                    <Text style={styles.kvVal}>{String(detailsItem.rd_km ?? '-')}</Text>
-                  </View>
+                {/* --- ENUMERATION SPECIFIC --- */}
+                {detailsModal.module === 'enumeration' && (
+                  <>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Species</Text>
+                      <Text style={styles.kvVal}>
+                        {detailsItem?.species?.name || detailsItem?.species_name || '-'}
+                      </Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>RD (km)</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.rd_km ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Girth</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.girth ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Condition</Text>
+                      <Text style={styles.kvVal}>
+                        {detailsItem?.condition?.name || detailsItem?.condition_name || '-'}
+                      </Text>
+                    </View>
+                  </>
                 )}
 
+                {/* --- POLE CROP SPECIFIC --- */}
+                {detailsModal.module === 'polecrop' && (
+                  <>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>RDS From</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.rds_from ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>RDS To</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.rds_to ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvBlock}>
+                      <Text style={styles.kvKey}>Species Details</Text>
+                      <Text style={[styles.kvVal, { textAlign: 'left', maxWidth: '100%' }]}>
+                        {(() => {
+                          const list = detailsItem?.poleCropSpecies || detailsItem?.species_counts || [];
+                          if (!list.length) return 'No species data';
+                          return list
+                            .map(x => `${x?.species?.name || x?.name || 'Species'}: ${x?.count || 0}`)
+                            .join('\n');
+                        })()}
+                      </Text>
+                    </View>
+                  </>
+                )}
+
+                {/* --- AFFORESTATION SPECIFIC --- */}
+                {detailsModal.module === 'afforestation' && (
+                  <>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Avg Miles/KM</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.av_miles_km ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>No. of Plants</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.no_of_plants ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvBlock}>
+                      <Text style={styles.kvKey}>Species Details</Text>
+                      <Text style={[styles.kvVal, { textAlign: 'left', maxWidth: '100%' }]}>
+                        {(() => {
+                          const list = detailsItem?.afforestationSpecies || detailsItem?.species_counts || [];
+                          if (!list.length) return 'No species data';
+                          return list
+                            .map(x => `${x?.species?.name || x?.name || 'Species'}: ${x?.count || 0}`)
+                            .join('\n');
+                        })()}
+                      </Text>
+                    </View>
+                  </>
+                )}
+
+                {/* --- COMMON EXTRA FIELDS --- */}
                 <View style={styles.kvRow}>
-                  <Text style={styles.kvKey}>Condition</Text>
-                  <Text style={styles.kvVal}>{detailsItem?.condition?.name || '-'}</Text>
+                  <Text style={styles.kvKey}>Disputed?</Text>
+                  <Text style={[styles.kvVal, { color: (detailsItem?.is_disputed || detailsItem?.isDisputed) ? COLORS.danger : COLORS.text }]}>
+                    {(detailsItem?.is_disputed || detailsItem?.isDisputed) ? 'YES' : 'NO'}
+                  </Text>
                 </View>
+
+                <View style={styles.kvRow}>
+                  <Text style={styles.kvKey}>Takki / MDR No.</Text>
+                  <Text style={styles.kvVal}>
+                    {detailsItem?.takki_number ?? detailsItem?.takki_no ?? detailsItem?.takki ?? '-'}
+                  </Text>
+                </View>
+
+                {(detailsItem?.auto_lat || detailsItem?.auto_long) && (
+                  <View style={styles.kvRow}>
+                    <Text style={styles.kvKey}>Auto GPS</Text>
+                    <Text style={styles.kvVal}>
+                      {detailsItem.auto_lat}, {detailsItem.auto_long}
+                    </Text>
+                  </View>
+                )}
+                {(detailsItem?.manual_lat || detailsItem?.manual_long) && (
+                  <View style={styles.kvRow}>
+                    <Text style={styles.kvKey}>Manual GPS</Text>
+                    <Text style={styles.kvVal}>
+                      {detailsItem.manual_lat}, {detailsItem.manual_long}
+                    </Text>
+                  </View>
+                )}
 
                 <View style={styles.kvRow}>
                   <Text style={styles.kvKey}>Latest Status</Text>

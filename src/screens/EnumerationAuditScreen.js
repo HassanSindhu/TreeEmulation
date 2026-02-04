@@ -534,7 +534,7 @@ export default function EnumerationAuditScreen({ navigation, route }) {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Tree (Read Only)</Text>
           <View style={{ position: 'relative' }}>
-            <FormRow label="Takki Number" value={takkiNumber || '—'} editable={false} />
+            <FormRow label="MDR No. (Takki No.)" value={takkiNumber || '—'} editable={false} />
             <Ionicons
               name="lock-closed"
               size={16}

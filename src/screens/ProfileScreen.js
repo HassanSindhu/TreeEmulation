@@ -189,15 +189,7 @@ export default function ProfileScreen() {
         </View>
 
         {/* ===== QUICK STATS ===== */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Activity Overview</Text>
-          <View style={styles.statsGrid}>
-            <Stat label="Total Sites" value="12" icon="business" />
-            <Stat label="Trees Added" value="248" icon="leaf" />
-            <Stat label="Verified" value="192" icon="checkmark-done" />
-            <Stat label="Pending" value="18" icon="time" />
-          </View>
-        </View>
+
 
         {/* ===== PERSONAL INFO ===== */}
         <View style={styles.card}>

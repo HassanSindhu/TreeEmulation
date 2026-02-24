@@ -23,6 +23,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import colors from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/ApiService';
+import { offlineService } from '../services/OfflineService';
 
 const COLORS = {
   primary: '#059669',
@@ -161,6 +162,20 @@ export default function VerificationScreen({ navigation }) {
   // Filters (same behaviour)
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('Pending'); // default Pending
+
+  const [offlineStatus, setOfflineStatus] = useState({ count: 0, syncing: false });
+
+  useEffect(() => {
+    const update = () => {
+      setOfflineStatus({
+        count: offlineService.queue.length,
+        syncing: offlineService.isSyncing
+      });
+    };
+    const unsub = offlineService.subscribe(update);
+    update();
+    return unsub;
+  }, []);
 
   // Filter modal (UI like Registers)
   const [filterModalVisible, setFilterModalVisible] = useState(false);
@@ -576,6 +591,47 @@ export default function VerificationScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* --- Offline Sync Bar --- */}
+      {offlineStatus.count > 0 && (
+        <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: COLORS.warning,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={() => offlineService.processQueue()}
+            disabled={offlineStatus.syncing}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {offlineStatus.syncing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="cloud-offline" size={20} color="#fff" />
+              )}
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                {offlineStatus.syncing
+                  ? 'Syncing records...'
+                  : `${offlineStatus.count} Offline Records Pending`}
+              </Text>
+            </View>
+            {!offlineStatus.syncing && (
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Content */}
       <View style={styles.content}>

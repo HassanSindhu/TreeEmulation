@@ -1,5 +1,5 @@
 // /screens/ProfileScreen.js
-import React, {useMemo} from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,12 +11,13 @@ import {
   Dimensions,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import {useAuth} from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
+import { versionService } from '../services/VersionService';
 
 const { width } = Dimensions.get('window');
 
 export default function ProfileScreen() {
-  const {user, logout} = useAuth();
+  const { user, logout } = useAuth();
 
   const profile = useMemo(() => {
     // role is already normalized in AuthContext, but keep safe
@@ -57,12 +58,12 @@ export default function ProfileScreen() {
 
   const handleLogout = () => {
     Alert.alert('Sign out', 'Do you want to sign out?', [
-      {text: 'Cancel', style: 'cancel'},
-      {text: 'Sign Out', style: 'destructive', onPress: logout},
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign Out', style: 'destructive', onPress: logout },
     ]);
   };
 
-  const InfoRow = ({icon, label, value, right}) => (
+  const InfoRow = ({ icon, label, value, right }) => (
     <View style={styles.infoRow}>
       <View style={styles.infoIcon}>
         <Ionicons name={icon} size={18} color="#059669" />
@@ -79,7 +80,7 @@ export default function ProfileScreen() {
     </View>
   );
 
-  const Chip = ({text, tone = 'primary'}) => {
+  const Chip = ({ text, tone = 'primary' }) => {
     const map = {
       primary: {
         bg: 'rgba(5, 150, 105, 0.14)',
@@ -110,13 +111,13 @@ export default function ProfileScreen() {
     const t = map[tone] || map.primary;
 
     return (
-      <View style={[styles.chip, {backgroundColor: t.bg, borderColor: t.bd}]}>
-        <Text style={[styles.chipText, {color: t.fg}]}>{text}</Text>
+      <View style={[styles.chip, { backgroundColor: t.bg, borderColor: t.bd }]}>
+        <Text style={[styles.chipText, { color: t.fg }]}>{text}</Text>
       </View>
     );
   };
 
-  const Stat = ({label, value, icon}) => (
+  const Stat = ({ label, value, icon }) => (
     <View style={styles.statCard}>
       <View style={styles.statIcon}>
         <Ionicons name={icon} size={20} color="#059669" />
@@ -144,7 +145,7 @@ export default function ProfileScreen() {
             <View style={styles.avatarSection}>
               <View style={styles.avatarContainer}>
                 {profile.avatarUrl ? (
-                  <Image source={{uri: profile.avatarUrl}} style={styles.avatarImg} />
+                  <Image source={{ uri: profile.avatarUrl }} style={styles.avatarImg} />
                 ) : (
                   <View style={styles.avatarFallback}>
                     <Ionicons name="person" size={48} color="#fff" />
@@ -282,7 +283,7 @@ export default function ProfileScreen() {
             style={styles.actionRow}
             activeOpacity={0.8}
             onPress={() => Alert.alert('Settings', 'App settings screen can be added later.')}>
-            <View style={[styles.actionIcon, {backgroundColor: 'rgba(5, 150, 105, 0.1)'}]}>
+            <View style={[styles.actionIcon, { backgroundColor: 'rgba(5, 150, 105, 0.1)' }]}>
               <Ionicons name="settings-outline" size={20} color="#059669" />
             </View>
             <View style={styles.actionBody}>
@@ -296,7 +297,7 @@ export default function ProfileScreen() {
             style={styles.actionRow}
             activeOpacity={0.8}
             onPress={() => Alert.alert('Support', 'Help & support screen can be added later.')}>
-            <View style={[styles.actionIcon, {backgroundColor: 'rgba(245, 158, 11, 0.1)'}]}>
+            <View style={[styles.actionIcon, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
               <Ionicons name="help-circle-outline" size={20} color="#f59e0b" />
             </View>
             <View style={styles.actionBody}>
@@ -310,7 +311,7 @@ export default function ProfileScreen() {
             style={styles.actionRow}
             activeOpacity={0.8}
             onPress={() => Alert.alert('Privacy', 'Privacy policy screen can be added later.')}>
-            <View style={[styles.actionIcon, {backgroundColor: 'rgba(59, 130, 246, 0.1)'}]}>
+            <View style={[styles.actionIcon, { backgroundColor: 'rgba(59, 130, 246, 0.1)' }]}>
               <Ionicons name="shield-checkmark-outline" size={20} color="#3b82f6" />
             </View>
             <View style={styles.actionBody}>
@@ -324,7 +325,7 @@ export default function ProfileScreen() {
             style={styles.actionRow}
             activeOpacity={0.8}
             onPress={() => Alert.alert('About', 'About screen can be added later.')}>
-            <View style={[styles.actionIcon, {backgroundColor: 'rgba(139, 92, 246, 0.1)'}]}>
+            <View style={[styles.actionIcon, { backgroundColor: 'rgba(139, 92, 246, 0.1)' }]}>
               <Ionicons name="information-circle-outline" size={20} color="#8b5cf6" />
             </View>
             <View style={styles.actionBody}>
@@ -347,7 +348,7 @@ export default function ProfileScreen() {
         {/* ===== APP VERSION ===== */}
         <View style={styles.footer}>
           <Text style={styles.versionText}>Forest Management System</Text>
-          <Text style={styles.versionSubText}>Version 1.0.0 • © 2024</Text>
+          <Text style={styles.versionSubText}>Version {versionService.currentVersion} • © 2024</Text>
         </View>
       </ScrollView>
     </View>

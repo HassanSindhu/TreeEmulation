@@ -1,47 +1,55 @@
-
 import React from 'react';
-import { View, Modal, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet, Platform, SafeAreaView } from 'react-native';
 
-const FullScreenLoader = ({ visible, text = 'Syncing records...' }) => {
+const FullScreenLoader = ({ visible, text = 'Syncing offline records...' }) => {
+    if (!visible) return null;
+
     return (
-        <Modal
-            transparent={true}
-            animationType="fade"
-            visible={visible}
-            onRequestClose={() => { }}>
+        <SafeAreaView pointerEvents="none" style={styles.safeArea}>
             <View style={styles.container}>
                 <View style={styles.content}>
-                    <ActivityIndicator size="large" color="#000" />
+                    <ActivityIndicator size="small" color="#059669" />
                     <Text style={styles.text}>{text}</Text>
                 </View>
             </View>
-        </Modal>
+        </SafeAreaView>
     );
 };
 
 const styles = StyleSheet.create({
+    safeArea: {
+        position: 'absolute',
+        top: Platform.OS === 'ios' ? 50 : 20,
+        left: 0,
+        right: 0,
+        zIndex: 9999,
+        elevation: 10,
+        alignItems: 'center',
+    },
     container: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'center',
+        width: '100%',
         alignItems: 'center',
     },
     content: {
+        flexDirection: 'row',
         backgroundColor: '#fff',
-        padding: 24,
-        borderRadius: 16,
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        borderRadius: 30,
         alignItems: 'center',
-        elevation: 5,
+        elevation: 8,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 8,
+        borderWidth: 1,
+        borderColor: '#e5e7eb',
     },
     text: {
-        marginTop: 16,
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#333',
+        marginLeft: 12,
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#059669',
     }
 });
 

@@ -1,7 +1,8 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
-import { Alert } from 'react-native';
+import { Alert, Platform, PermissionsAndroid } from 'react-native';
+import BackgroundService from 'react-native-background-actions';
 
 const QUEUE_KEY = 'OFFLINE_QUEUE';
 const CACHE_PREFIX = 'CACHE_';
@@ -105,12 +106,17 @@ class OfflineService {
         const state = await NetInfo.fetch();
         this.isOnline = state.isConnected && state.isInternetReachable !== false;
 
-        if (this.queue.length === 0 || !this.isOnline) return;
+        if (this.queue.length === 0 || !this.isOnline) {
+            this.stopBackgroundTask();
+            return;
+        }
 
         // Prevent concurrent syncs
         if (this.isSyncing) return;
         this.isSyncing = true;
         this.notifySubscribers();
+
+        this.startBackgroundTask();
 
         try {
             console.log('Sync: Processing Queue...', this.queue.length, 'items');
@@ -120,6 +126,9 @@ class OfflineService {
             if (pendingItems.length === 0) return;
 
             // Process items one by one
+            const totalToSync = pendingItems.length;
+            let syncedCount = 0;
+
             for (const item of pendingItems) {
                 // Check status again just in case (though filtered above)
                 if (item.status === 'processing') continue;
@@ -212,6 +221,20 @@ class OfflineService {
                     // Reset to pending so it can be picked up again
                     item.status = 'pending';
                 }
+
+                syncedCount++;
+                const percent = Math.round((syncedCount / totalToSync) * 100);
+
+                if (Platform.OS === 'android' && BackgroundService.isRunning()) {
+                    await BackgroundService.updateNotification({
+                        taskTitle: 'Syncing Offline Data',
+                        taskDesc: `Uploading... ${percent}% completed (${syncedCount}/${totalToSync})`,
+                        progressBar: {
+                            max: 100,
+                            value: percent,
+                        }
+                    });
+                }
             }
         } finally {
             this.isSyncing = false;
@@ -222,9 +245,62 @@ class OfflineService {
                 setTimeout(() => {
                     this.processQueue();
                 }, 5000); // retry in 5s
+            } else if (this.queue.length === 0) {
+                this.stopBackgroundTask();
             }
         }
     }
+
+    // ---------- BACKGROUND SYNCING ----------
+    async startBackgroundTask() {
+        if (Platform.OS !== 'android') return; // Background actions are mainly required/supported well on Android for this use case
+        if (BackgroundService.isRunning()) return;
+
+        const sleep = (time) => new Promise((resolve) => setTimeout(() => resolve(), time));
+
+        const backgroundTask = async (taskDataArguments) => {
+            const { delay } = taskDataArguments;
+            while (BackgroundService.isRunning()) {
+                if (this.queue.length === 0) {
+                    await BackgroundService.stop();
+                    break;
+                }
+                // Rely on the existing processing loop + timeouts, just keeps service alive.
+                await sleep(delay);
+            }
+        };
+
+        const options = {
+            taskName: 'OfflineSync',
+            taskTitle: 'Syncing Offline Data',
+            taskDesc: 'Starting sync... Please wait while your data is safely uploaded.',
+            taskIcon: {
+                name: 'ic_launcher',
+                type: 'mipmap',
+            },
+            color: '#059669',
+            linkingURI: 'treeenum://sync', // Assuming basic deep link
+            parameters: {
+                delay: 2000,
+            },
+        };
+
+        try {
+            if (Platform.Version >= 33) {
+                await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+            }
+            await BackgroundService.start(backgroundTask, options);
+        } catch (e) {
+            console.warn('Failed to start Background Service for sync:', e);
+        }
+    }
+
+    async stopBackgroundTask() {
+        if (Platform.OS === 'android' && BackgroundService.isRunning()) {
+            await BackgroundService.stop();
+        }
+    }
+    // -----------------------------------------
 
     async removeFromQueue(id) {
         this.queue = this.queue.filter(q => q.id !== id);

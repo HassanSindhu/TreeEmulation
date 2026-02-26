@@ -61,7 +61,7 @@ const AUDIT_ROUTE = 'EnumerationAudit';
 
 
 // Image rules
-const MIN_IMAGES = 1;
+const MIN_IMAGES = 3;
 const MAX_IMAGES = 4;
 
 // Species "Other"
@@ -541,7 +541,9 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
           launchCamera(
             {
               mediaType: 'photo',
-              quality: 0.7,
+              quality: 0.6,
+              maxWidth: 1024,
+              maxHeight: 1024,
               cameraType: 'back',
               saveToPhotos: false,
             },
@@ -583,7 +585,9 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
           launchImageLibrary(
             {
               mediaType: 'photo',
-              quality: 0.7,
+              quality: 0.6,
+              maxWidth: 1024,
+              maxHeight: 1024,
               selectionLimit: Math.min(remaining, MAX_IMAGES),
             },
             res => {
@@ -1119,6 +1123,14 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
   };
 
   const saveRecord = async () => {
+    const totalPics = (pictureAssets || []).length + (uploadedImageUrls || []).length;
+    if (totalPics < MIN_IMAGES) {
+      return Alert.alert(
+        'Images Required',
+        `Minimum ${MIN_IMAGES} images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree\n• 1 additional relevant photo`,
+      );
+    }
+
     const siteId = getNameOfSiteId();
     if (!siteId) return Alert.alert('Missing', 'name_of_site_id not found.');
 
@@ -2330,7 +2342,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                         {totalSelectedCount ? 'Add / Change Images' : 'Add Images'}
                       </Text>
                       <Text style={styles.imageButtonSubtitle}>
-                        Minimum {MIN_IMAGES}, Maximum {MAX_IMAGES} images. Selected: {totalSelectedCount}
+                        Min {MIN_IMAGES}, Max {MAX_IMAGES} images (Min: 1 Takki, 1 Complete Tree). Selected: {totalSelectedCount}
                       </Text>
                     </View>
 

@@ -748,7 +748,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
   const pickFromGallery = () => {
     setImagePickerModal(false);
     launchImageLibrary(
-      { mediaType: 'photo', quality: 0.7, selectionLimit: 0 },
+      { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 0 },
       onImagePickerResult,
     );
   };
@@ -761,7 +761,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       return;
     }
     launchCamera(
-      { mediaType: 'photo', quality: 0.7, saveToPhotos: true, cameraType: 'back' },
+      { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, saveToPhotos: true, cameraType: 'back' },
       onImagePickerResult,
     );
   };
@@ -1274,6 +1274,14 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
     const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : autoGps;
     const { lat: manualLat, lng: manualLng } = parseLatLng(lastManual || autoGps);
+
+    const totalPics = (pictureUris || []).length + (existingPictures || []).length;
+    if (totalPics < 3) {
+      return Alert.alert(
+        'Images Required',
+        'Minimum 3 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree\n• 1 additional relevant photo',
+      );
+    }
 
     // Prepare attachments
     const safeFileName = `pole_${Number(nameOfSiteId || 0)}_${Date.now()}`;
@@ -2154,6 +2162,9 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Images</Text>
+                  <Text style={{ fontSize: 11, color: COLORS.danger, fontWeight: '700', marginBottom: 8 }}>
+                    * Minimum 3 images: 1 Takki (MDR No.), 1 Complete Tree
+                  </Text>
 
                   <TouchableOpacity
                     style={styles.imageUploadButton}

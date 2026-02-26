@@ -445,7 +445,7 @@ export default function RegistersScreen({ navigation }) {
       {
         text: 'Take Photo',
         onPress: () => {
-          launchCamera({ mediaType: 'photo', quality: 0.7, selectionLimit: 10 }, res => {
+          launchCamera({ mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 10 }, res => {
             if (res?.didCancel) return;
             if (res?.errorCode) {
               Alert.alert('Camera Error', res?.errorMessage || res.errorCode);
@@ -490,7 +490,7 @@ export default function RegistersScreen({ navigation }) {
       {
         text: 'Choose from Gallery',
         onPress: () => {
-          launchImageLibrary({ mediaType: 'photo', quality: 0.7, selectionLimit: 10 }, res => {
+          launchImageLibrary({ mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 10 }, res => {
             if (res?.didCancel) return;
             if (res?.errorCode) {
               Alert.alert('Image Error', res?.errorMessage || res.errorCode);
@@ -1083,6 +1083,14 @@ export default function RegistersScreen({ navigation }) {
   const saveRecord = async () => {
     const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
     const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
+
+    const totalPics = (pictureAssets || []).length + (uploadedImageUrls || []).length;
+    if (totalPics < 3) {
+      return Alert.alert(
+        'Images Required',
+        'Minimum 3 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree\n• 1 additional relevant photo',
+      );
+    }
 
     // Prepare attachment metadata for ApiService
     const uploadPath = UPLOAD_PATHS[activeType] || UPLOAD_PATHS.enumeration;
@@ -1990,7 +1998,12 @@ export default function RegistersScreen({ navigation }) {
                       justifyContent: 'space-between',
                       alignItems: 'center',
                     }}>
-                    <Text style={styles.sectionLabel}>Pictures</Text>
+                    <View>
+                      <Text style={styles.sectionLabel}>Pictures</Text>
+                      <Text style={{ fontSize: 11, color: COLORS.danger, fontWeight: '700', marginBottom: 2 }}>
+                        * Min 3 images: 1 Takki (MDR No.), 1 Complete Tree
+                      </Text>
+                    </View>
                     <Text style={{ fontSize: 12, color: COLORS.textLight }}>
                       {pictureAssets.length + uploadedImageUrls.length} selected
                     </Text>

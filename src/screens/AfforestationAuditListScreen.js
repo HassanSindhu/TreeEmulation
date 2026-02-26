@@ -227,7 +227,7 @@ export default function AfforestationAuditScreen({ navigation, route }) {
   const pickFromGallery = () => {
     setImagePickerModal(false);
     launchImageLibrary(
-      { mediaType: 'photo', quality: 0.7, selectionLimit: 0 },
+      { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 0 },
       onImagePickerResult,
     );
   };
@@ -243,7 +243,9 @@ export default function AfforestationAuditScreen({ navigation, route }) {
     launchCamera(
       {
         mediaType: 'photo',
-        quality: 0.7,
+        quality: 0.6,
+        maxWidth: 1024,
+        maxHeight: 1024,
         saveToPhotos: true,
         cameraType: 'back',
       },

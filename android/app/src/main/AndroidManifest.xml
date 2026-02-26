@@ -4,6 +4,11 @@
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    
+    <!-- Background Task -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Camera / Location -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -34,6 +39,11 @@
             </intent-filter>
 
         </activity>
+
+        <service 
+            android:name="com.asterinet.react.bgactions.RNBackgroundActionsTask"
+            android:foregroundServiceType="dataSync" />
+
     </application>
 
 </manifest>

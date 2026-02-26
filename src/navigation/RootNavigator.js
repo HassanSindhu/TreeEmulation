@@ -1,10 +1,10 @@
 // /navigation/RootNavigator.js (or wherever this file lives)
-import React, {useEffect, useState, useMemo} from 'react';
-import {createNativeStackNavigator} from '@react-navigation/native-stack';
-import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
+import React, { useEffect, useState, useMemo } from 'react';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
-import {useAuth} from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import SplashScreen from '../screens/SplashScreen';
 import LoginScreen from '../screens/LoginScreen';
 import SignupScreen from '../screens/SignupScreen';
@@ -14,6 +14,8 @@ import AddTreeScreen from '../screens/AddTreeScreen';
 import VerificationScreen from '../screens/VerificationScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import colors from '../theme/colors';
+import UpdateModal from '../components/UpdateModal';
+import { versionService } from '../services/VersionService';
 
 import MatureTreeRecordsScreen from '../screens/MatureTreeRecordsScreen';
 import PoleCropRecordsScreen from '../screens/PoleCropRecordsScreen';
@@ -38,7 +40,7 @@ import AfforestationAuditListScreen from '../screens/AfforestationAuditListScree
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-function TabsForRole({role}) {
+function TabsForRole({ role }) {
   const r = String(role || '').toLowerCase();
 
   // Roles
@@ -47,12 +49,12 @@ function TabsForRole({role}) {
 
   return (
     <Tab.Navigator
-      screenOptions={({route}) => ({
+      screenOptions={({ route }) => ({
         headerShown: false,
         headerTitleAlign: 'center',
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: '#9ca3af',
-        tabBarIcon: ({color, size}) => {
+        tabBarIcon: ({ color, size }) => {
           const icons = {
             Dashboard: 'speedometer',
             Registers: 'book',
@@ -67,7 +69,7 @@ function TabsForRole({role}) {
 
       {isGuard && <Tab.Screen name="Registers" component={RegistersScreen} />}
       {isGuard && (
-        <Tab.Screen name="Add" component={AddTreeScreen} options={{title: 'Add Tree'}} />
+        <Tab.Screen name="Add" component={AddTreeScreen} options={{ title: 'Add Tree' }} />
       )}
 
       {isOfficer && <Tab.Screen name="Verification" component={VerificationScreen} />}
@@ -77,9 +79,9 @@ function TabsForRole({role}) {
   );
 }
 
-function MainStack({role}) {
+function MainStack({ role }) {
   return (
-    <Stack.Navigator screenOptions={{headerShown: false}}>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Tabs">{() => <TabsForRole role={role} />}</Stack.Screen>
 
       {/* Records (listing) screens */}
@@ -137,10 +139,10 @@ function AuthStack() {
         options={{
           title: 'Create Account',
           headerShown: true,
-          headerStyle: {backgroundColor: 'transparent'},
+          headerStyle: { backgroundColor: 'transparent' },
           headerTransparent: true,
           headerTintColor: '#111827',
-          headerTitleStyle: {fontWeight: '900'},
+          headerTitleStyle: { fontWeight: '900' },
           headerBackTitle: 'Back',
           animation: 'slide_from_right',
         }}
@@ -150,7 +152,7 @@ function AuthStack() {
 }
 
 function Gate() {
-  const {user, booting} = useAuth();
+  const { user, booting } = useAuth();
 
   const role = useMemo(() => {
     const rr = user?.role;
@@ -162,7 +164,7 @@ function Gate() {
   if (booting) return <SplashScreen />;
 
   return (
-    <Stack.Navigator screenOptions={{headerShown: false}}>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
       {user ? (
         <Stack.Screen name="Main">{() => <MainStack role={role} />}</Stack.Screen>
       ) : (
@@ -174,13 +176,26 @@ function Gate() {
 
 export default function RootNavigator() {
   const [ready, setReady] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState({ required: false, version: '' });
 
   useEffect(() => {
-    const t = setTimeout(() => setReady(true), 2600);
-    return () => clearTimeout(t);
+    const checkVersion = async () => {
+      const res = await versionService.checkForUpdate();
+      if (res.updateRequired) {
+        setUpdateInfo({ required: true, version: res.latestVersion });
+      }
+      setReady(true);
+    };
+
+    checkVersion();
   }, []);
 
   if (!ready) return <SplashScreen />;
 
-  return <Gate />;
+  return (
+    <>
+      <Gate />
+      <UpdateModal visible={updateInfo.required} latestVersion={updateInfo.version} />
+    </>
+  );
 }

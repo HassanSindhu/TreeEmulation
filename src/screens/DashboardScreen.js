@@ -287,7 +287,7 @@ export default function DashboardScreen() {
             </View>
             <View style={styles.infoChip}>
               <Ionicons name="calendar" size={12} color="#fff" />
-              <Text style={styles.infoChipText}>2024</Text>
+              <Text style={styles.infoChipText}>2026</Text>
             </View>
           </View>
         </View>

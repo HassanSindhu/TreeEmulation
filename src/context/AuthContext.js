@@ -177,7 +177,7 @@ async function postLogin(email, password) {
   // const token = await AsyncStorage.getItem('AUTH_TOKEN');
   // if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await apiService.post(`${API_BASE}/auth`, { email, password });
+  const res = await apiService.post(`${API_BASE}/auth`, { email, password }, { skipQueue: true });
 
   if (res.offline) {
     throw new Error('No internet connection. Login requires internet.');

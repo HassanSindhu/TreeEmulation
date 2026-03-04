@@ -14,6 +14,7 @@ class OfflineService {
         this.queue = [];
         this.isOnline = true;
         this.isSyncing = false; // ✅ New state
+        this.initialQueueSize = 0; // ✅ Global sync progress tracker
         this.subscribers = [];
 
         // Initialize NetInfo listener
@@ -91,6 +92,9 @@ class OfflineService {
         };
 
         this.queue.push(item);
+        if (this.isSyncing && this.initialQueueSize > 0) {
+            this.initialQueueSize++; // Keep total accurate if added mid-sync
+        }
         await this.saveQueue();
         Alert.alert('Offline', 'Data saved locally. Will sync when online.');
         this.notifySubscribers();
@@ -107,6 +111,7 @@ class OfflineService {
         this.isOnline = state.isConnected && state.isInternetReachable !== false;
 
         if (this.queue.length === 0 || !this.isOnline) {
+            this.initialQueueSize = 0;
             this.stopBackgroundTask();
             return;
         }
@@ -115,6 +120,11 @@ class OfflineService {
         if (this.isSyncing) return;
         this.isSyncing = true;
         this.notifySubscribers();
+
+        // Lock in the total batch size if it's a new sync process
+        if (this.initialQueueSize === 0 || this.queue.length > this.initialQueueSize) {
+            this.initialQueueSize = this.queue.length;
+        }
 
         this.startBackgroundTask();
 
@@ -126,9 +136,6 @@ class OfflineService {
             if (pendingItems.length === 0) return;
 
             // Process items one by one
-            const totalToSync = pendingItems.length;
-            let syncedCount = 0;
-
             for (const item of pendingItems) {
                 // Check status again just in case (though filtered above)
                 if (item.status === 'processing') continue;
@@ -222,13 +229,16 @@ class OfflineService {
                     item.status = 'pending';
                 }
 
-                syncedCount++;
-                const percent = Math.round((syncedCount / totalToSync) * 100);
+                // Mathematical percentage fix: Calculate remaining vs initial queue size rather than loop iterations
+                const totalToSync = this.initialQueueSize || 1;
+                // Since successful items are removed, remaining is just the queue length
+                const safeSyncedCount = Math.max(0, totalToSync - this.queue.length);
+                const percent = Math.min(100, Math.round((safeSyncedCount / totalToSync) * 100));
 
                 if (Platform.OS === 'android' && BackgroundService.isRunning()) {
                     await BackgroundService.updateNotification({
                         taskTitle: 'Syncing Offline Data',
-                        taskDesc: `Uploading... ${percent}% completed (${syncedCount}/${totalToSync})`,
+                        taskDesc: `Uploading... ${percent}% completed (${safeSyncedCount}/${totalToSync})`,
                         progressBar: {
                             max: 100,
                             value: percent,
@@ -246,6 +256,7 @@ class OfflineService {
                     this.processQueue();
                 }, 5000); // retry in 5s
             } else if (this.queue.length === 0) {
+                this.initialQueueSize = 0;
                 this.stopBackgroundTask();
             }
         }

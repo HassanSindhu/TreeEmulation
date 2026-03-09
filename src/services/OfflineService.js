@@ -130,6 +130,14 @@ class OfflineService {
 
         try {
             console.log('Sync: Processing Queue...', this.queue.length, 'items');
+
+            // FIX: Proactively purge any stuck soft-delete tasks that got trapped in the queue from earlier error
+            const initialLength = this.queue.length;
+            this.queue = this.queue.filter(q => !String(q?.url || '').includes('soft-delete'));
+            if (this.queue.length !== initialLength) {
+                await this.saveQueue();
+            }
+
             // Filter out items already processing to avoid duplication
             const pendingItems = this.queue.filter(q => q.status !== 'processing');
 

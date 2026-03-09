@@ -294,7 +294,7 @@ export default function RegistersScreen({ navigation }) {
     const s = String(str || '').trim();
     if (!s) return { lat: null, lng: null };
     const parts = s
-      .split(/,|\s+/)
+      .split(/[,\s]+/)
       .map(p => p.trim())
       .filter(Boolean);
     if (parts.length < 2) return { lat: null, lng: null };

@@ -197,6 +197,7 @@ export default function AddTreeScreen({ navigation }) {
   const [remarks, setRemarks] = useState('');
   const [pageNo, setPageNo] = useState('');
   const [registerNo, setRegisterNo] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const linearTypeOptions = ['Road Side', 'Rail Side', 'Canal Side'].map((name, idx) => ({
     id: String(idx + 1),
@@ -522,7 +523,10 @@ export default function AddTreeScreen({ navigation }) {
       return;
     }
 
+    if (isSaving) return;
+
     try {
+      setIsSaving(true);
       const payload = {
         site_name: canalName,
         plantation_type,
@@ -567,6 +571,8 @@ export default function AddTreeScreen({ navigation }) {
     } catch (e) {
       console.error('Save enumeration error:', e);
       Alert.alert('Error', e?.message || 'Unable to save enumeration.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -645,6 +651,57 @@ export default function AddTreeScreen({ navigation }) {
         isFromSite: true,
       });
     }
+  };
+
+  const handleDeleteSite = async (item) => {
+    const resolvedSiteId =
+      item?.name_of_site_id ??
+      item?.name_of_site?.id ??
+      item?.site_id ??
+      item?.siteId ??
+      item?.id;
+
+    if (!resolvedSiteId) {
+      Alert.alert('Error', 'Could not determine Site ID for deletion.');
+      return;
+    }
+
+    Alert.alert(
+      'Delete Site?',
+      `Are you sure you want to completely delete "${item.canalName || 'this site'}"? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await apiService.post(`${API_BASE}/lpe3/name-of-site/soft-delete`, {
+                id: Number(resolvedSiteId)
+              }, { skipQueue: true });
+
+              if (res?.data?.success === true) {
+                // Instantly remove from local list to avoid UI lagging
+                setEnumerations(prev => prev.filter(e => e.id !== resolvedSiteId));
+                Alert.alert('Success', res?.data?.message || 'Site deleted successfully.');
+              } else if (res?.data?.success === false) {
+                // Fails because of enumerations usually (from server data)
+                throw new Error(res?.data?.message || 'Cannot delete site because it has enumerations.');
+              } else if (res?.status === true || (res?.statusCode >= 200 && res?.statusCode < 300)) {
+                // Fallback for success
+                setEnumerations(prev => prev.filter(e => e.id !== resolvedSiteId));
+                Alert.alert('Success', 'Site deleted successfully.');
+              } else {
+                throw new Error(res?.message || res?.data?.message || 'Delete failed. Server response invalid.');
+              }
+            } catch (error) {
+              console.error('Delete Site Error:', error);
+              Alert.alert('Delete Failed', error.message || 'Could not delete the site from the server.');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const openRowActions = item => {
@@ -848,6 +905,7 @@ export default function AddTreeScreen({ navigation }) {
                       key={item.id}
                       activeOpacity={0.9}
                       onPress={() => openRowActions(item)}
+                      onLongPress={() => handleDeleteSite(item)}
                       style={styles.siteCard}>
                       {/* Card Header */}
                       <View style={styles.cardHeader}>
@@ -1372,12 +1430,20 @@ export default function AddTreeScreen({ navigation }) {
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   style={styles.modalCancelBtn}
-                  onPress={() => setEnumModalVisible(false)}>
+                  onPress={() => setEnumModalVisible(false)}
+                  disabled={isSaving}>
                   <Text style={styles.modalCancelText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.modalSaveBtn} onPress={saveEnumerationForm}>
-                  <Ionicons name="save" size={20} color="#fff" />
-                  <Text style={styles.modalSaveText}>Save Site</Text>
+                <TouchableOpacity
+                  style={[styles.modalSaveBtn, isSaving && { opacity: 0.7 }]}
+                  onPress={saveEnumerationForm}
+                  disabled={isSaving}>
+                  {isSaving ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="save" size={20} color="#fff" />
+                  )}
+                  <Text style={styles.modalSaveText}>{isSaving ? 'Saving...' : 'Save Site'}</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>

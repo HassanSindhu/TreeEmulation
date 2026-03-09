@@ -235,7 +235,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     const s = String(str || '').trim();
     if (!s) return { lat: null, lng: null };
     const parts = s
-      .split(/,|\s+/)
+      .split(/[,\s]+/)
       .map(p => p.trim())
       .filter(Boolean);
     if (parts.length < 2) return { lat: null, lng: null };
@@ -1150,6 +1150,15 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       else if (sideMode === 'right') finalSide = 'Right';
     }
 
+    const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
+    const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
+
+    if (!autoLat || !autoLng) {
+      if (!manualLat || !manualLng) {
+        return Alert.alert('Missing Location', 'Auto GPS coordinates could not be fetched. Please enter Manual GPS coordinates (Latitude and Longitude) to proceed.');
+      }
+    }
+
     // takki_number validation (numeric if filled)
     const tn = String(takkiNumber || '').trim();
     const takkiNumberValue = tn ? Number(tn) : null;
@@ -1173,8 +1182,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       conditionId ?? (conditionRows.find(x => x.name === condition)?.id ?? null);
     if (!finalConditionId) return Alert.alert('Missing', 'Condition is required');
 
-    const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
-    const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
+
 
     const chosenCount =
       (pictureAssets?.length || 0) > 0

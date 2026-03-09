@@ -393,7 +393,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     const s = String(str || '').trim();
     if (!s) return { lat: null, lng: null };
     const parts = s
-      .split(/,|\s+/)
+      .split(/[,\s]+/)
       .map(p => p.trim())
       .filter(Boolean);
     if (parts.length < 2) return { lat: null, lng: null };
@@ -1296,6 +1296,12 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
     const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : autoGps;
     const { lat: manualLat, lng: manualLng } = parseLatLng(lastManual || autoGps);
+
+    if (!autoLat || !autoLng) {
+      if (!manualLat || !manualLng) {
+        return Alert.alert('Missing Location', 'Auto GPS coordinates could not be fetched. Please enter Manual GPS coordinates (Latitude and Longitude) to proceed.');
+      }
+    }
 
     const av = Number(String(avgMilesKm).replace(/[^\d.]+/g, ''));
     const avMilesKmNum = Number.isFinite(av) ? av : 0;

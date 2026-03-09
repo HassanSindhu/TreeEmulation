@@ -1084,11 +1084,14 @@ export default function RegistersScreen({ navigation }) {
     const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
     const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
 
+    const isEnumNotPresent = activeType === 'enumeration' && String(condition || '').toLowerCase().includes('not present');
+    const requiredMinImages = isEnumNotPresent ? 0 : 2;
+
     const totalPics = (pictureAssets || []).length + (uploadedImageUrls || []).length;
-    if (totalPics < 3) {
+    if (totalPics < requiredMinImages) {
       return Alert.alert(
         'Images Required',
-        'Minimum 3 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree\n• 1 additional relevant photo',
+        'Minimum 2 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree',
       );
     }
 
@@ -1126,6 +1129,10 @@ export default function RegistersScreen({ navigation }) {
       if (!chosenSpeciesId) return Alert.alert('Missing', 'species_id is required');
       if (!chosenConditionId) return Alert.alert('Missing', 'condition_id is required');
 
+      if (!isEnumNotPresent && !String(girth || '').trim()) {
+        return Alert.alert('Missing', 'Girth is required');
+      }
+
       const rdNum = Number(String(rdKm || '').replace(/[^\d.]+/g, ''));
       const rdKmNumber = Number.isFinite(rdNum) ? rdNum : 0;
 
@@ -1133,7 +1140,7 @@ export default function RegistersScreen({ navigation }) {
         name_of_site_id: Number(nameOfSiteId),
         rd_km: rdKmNumber,
         species_id: Number(chosenSpeciesId),
-        girth: girth ? String(girth) : '',
+        girth: girth ? String(girth) : '0',
         condition_id: Number(chosenConditionId),
         auto_lat: autoLat,
         auto_long: autoLng,
@@ -1736,7 +1743,12 @@ export default function RegistersScreen({ navigation }) {
                       disabled={speciesLoading}
                       required
                     />
-                    <FormRow label="Girth" value={girth} onChangeText={setGirth} placeholder='e.g. "24"' />
+                    <FormRow
+                      label={`Girth${String(condition || '').toLowerCase().includes('not present') ? ' (Optional)' : ' *'}`}
+                      value={girth}
+                      onChangeText={setGirth}
+                      placeholder='e.g. "24"'
+                    />
                     <DropdownRow
                       label={conditionLoading ? 'Condition (Loading...)' : 'Condition'}
                       value={condition}

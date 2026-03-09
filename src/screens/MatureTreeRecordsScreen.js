@@ -61,7 +61,7 @@ const AUDIT_ROUTE = 'EnumerationAudit';
 
 
 // Image rules
-const MIN_IMAGES = 3;
+const MIN_IMAGES = 2;
 const MAX_IMAGES = 4;
 
 // Species "Other"
@@ -1123,11 +1123,16 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
   };
 
   const saveRecord = async () => {
+    const conditionName = condition?.toLowerCase()?.trim() || '';
+    const isTreeNotPresent = conditionName === 'tree not present at site' || conditionName === 'tree not present';
+
+    const requiredMinImages = isTreeNotPresent ? 0 : MIN_IMAGES;
+
     const totalPics = (pictureAssets || []).length + (uploadedImageUrls || []).length;
-    if (totalPics < MIN_IMAGES) {
+    if (totalPics < requiredMinImages) {
       return Alert.alert(
         'Images Required',
-        `Minimum ${MIN_IMAGES} images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree\n• 1 additional relevant photo`,
+        `Minimum ${MIN_IMAGES} images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree`,
       );
     }
 
@@ -1162,8 +1167,16 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     // takki_number validation (numeric if filled)
     const tn = String(takkiNumber || '').trim();
     const takkiNumberValue = tn ? Number(tn) : null;
+
+    if (!isTreeNotPresent && !tn) {
+      return Alert.alert('Missing', 'MDR No. (Takki No.) is required');
+    }
     if (tn && !Number.isFinite(takkiNumberValue)) {
       return Alert.alert('Invalid', 'MDR No. (Takki No.) must be numeric');
+    }
+
+    if (!isTreeNotPresent && !String(girth || '').trim()) {
+      return Alert.alert('Missing', 'Girth is required');
     }
 
     // Resolve species id
@@ -1189,8 +1202,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         ? pictureAssets?.length || 0
         : uploadedImageUrls?.length || 0;
 
-    if (chosenCount < MIN_IMAGES) {
-      return Alert.alert('Images Required', `Please add at least ${MIN_IMAGES} image.`);
+    if (chosenCount < requiredMinImages) {
+      return Alert.alert('Images Required', `Please add at least ${MIN_IMAGES} image(s).`);
     }
     if (chosenCount > MAX_IMAGES) {
       return Alert.alert('Too Many Images', `You can add maximum ${MAX_IMAGES} images.`);
@@ -1217,13 +1230,13 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       name_of_site_id: Number(siteId),
       rd_km: rdKmNumber,
       species_id: Number(finalSpeciesId),
-      girth: girth ? String(girth) : '',
+      girth: girth ? String(girth) : '0',
       condition_id: Number(finalConditionId),
 
       // extras (snake_case)
       is_disputed: !!isDisputed,
       additional_remarks: String(additionalRemarks || '').trim(),
-      ...(takkiNumberValue != null ? { takki_number: takkiNumberValue } : {}),
+      takki_number: takkiNumberValue != null ? takkiNumberValue : 0,
       ...(finalSide ? { side: finalSide } : {}),
       page_no: String(pageNo || '').trim(),
       register_no: String(registerNo || '').trim(),
@@ -2118,7 +2131,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 )}
 
                 <FormRow
-                  label="MDR No. (Takki No.)"
+                  label={`MDR No. (Takki No.)${String(condition || '').toLowerCase().includes('not present') ? ' (Optional)' : ' *'}`}
                   value={takkiNumber}
                   onChangeText={setTakkiNumber}
                   placeholder="e.g. 123"
@@ -2223,7 +2236,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 )}
 
                 <FormRow
-                  label="Girth"
+                  label={`Girth${String(condition || '').toLowerCase().includes('not present') ? ' (Optional)' : ' *'}`}
                   value={girth}
                   onChangeText={setGirth}
                   placeholder='e.g. "24 inches"'
@@ -2350,7 +2363,10 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                         {totalSelectedCount ? 'Add / Change Images' : 'Add Images'}
                       </Text>
                       <Text style={styles.imageButtonSubtitle}>
-                        Min {MIN_IMAGES}, Max {MAX_IMAGES} images (Min: 1 Takki, 1 Complete Tree). Selected: {totalSelectedCount}
+                        {String(condition || '').toLowerCase().includes('not present')
+                          ? `Optional Images (Max: ${MAX_IMAGES}). Selected: ${totalSelectedCount}`
+                          : `Min ${MIN_IMAGES}, Max ${MAX_IMAGES} images (Min: 1 Takki, 1 Complete Tree). Selected: ${totalSelectedCount}`
+                        }
                       </Text>
                     </View>
 

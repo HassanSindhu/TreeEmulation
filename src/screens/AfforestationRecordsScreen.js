@@ -1307,10 +1307,10 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     const avMilesKmNum = Number.isFinite(av) ? av : 0;
 
     const totalPics = (pictureUris || []).length + (existingPictures || []).length;
-    if (totalPics < 3) {
+    if (totalPics < 2) {
       return Alert.alert(
         'Images Required',
-        'Minimum 3 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree\n• 1 additional relevant photo',
+        'Minimum 2 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree',
       );
     }
 
@@ -2579,7 +2579,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Images</Text>
                   <Text style={{ fontSize: 11, color: COLORS.danger, fontWeight: '700', marginBottom: 8 }}>
-                    * Minimum 3 images: 1 Takki (MDR No.), 1 Complete Tree
+                    * Minimum 2 images: 1 Takki (MDR No.), 1 Complete Tree
                   </Text>
 
                   <TouchableOpacity style={styles.imageUploadButton} onPress={pickImage} activeOpacity={0.7}>

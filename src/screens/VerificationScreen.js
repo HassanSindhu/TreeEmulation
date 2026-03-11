@@ -610,7 +610,7 @@ export default function VerificationScreen({ navigation }) {
               shadowRadius: 4,
               elevation: 3,
             }}
-            onPress={() => offlineService.processQueue()}
+            onPress={() => offlineService.openSyncModal()}
             disabled={offlineStatus.syncing}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {offlineStatus.syncing ? (

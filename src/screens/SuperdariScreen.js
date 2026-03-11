@@ -72,6 +72,7 @@ export default function SuperdariScreen({ navigation, route }) {
   // GPS (auto + manual)
   const [autoGps, setAutoGps] = useState('');
   const [manualGps, setManualGps] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsLoading, setGpsLoading] = useState(false);
   const lastGpsRequestAtRef = useRef(0);
 
@@ -293,16 +294,17 @@ export default function SuperdariScreen({ navigation, route }) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
+        setGpsAccuracy(accuracy);
         setGpsLoading(false);
       },
       err => {
         setGpsLoading(false);
         if (!silent) Alert.alert('Location Error', err.message);
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
     );
   };
 
@@ -376,6 +378,13 @@ export default function SuperdariScreen({ navigation, route }) {
 
     const { lat: auto_lat, long: auto_long } = parseLatLong(autoGps);
     const { lat: manual_lat, long: manual_long } = parseLatLong(manualGps);
+
+    if (gpsAccuracy !== null && gpsAccuracy > 7) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
+    }
 
     // Attachments for ApiService
     const attachments = (pictureUris || []).map((uri, idx) => ({
@@ -713,9 +722,12 @@ export default function SuperdariScreen({ navigation, route }) {
           </View>
 
           <FormRow
-            label="Manual GPS (Optional)"
+            label="Manual Location (lat,lng)"
             value={manualGps}
-            onChangeText={setManualGps}
+            onChangeText={txt => {
+              setManualGps(txt);
+              setGpsAccuracy(null);
+            }}
             placeholder="31.5204, 74.3587"
           />
 
@@ -727,6 +739,12 @@ export default function SuperdariScreen({ navigation, route }) {
               <Ionicons name="locate" size={18} color="#fff" />
               <Text style={styles.gpsButtonText}>{gpsLoading ? 'Fetching...' : 'Refresh GPS'}</Text>
             </TouchableOpacity>
+
+            {gpsAccuracy !== null && (
+              <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                Accuracy: {Math.round(gpsAccuracy)}m {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Retry)'}
+              </Text>
+            )}
 
             {gpsLoading && (
               <ActivityIndicator size="small" color={COLORS.primary} style={styles.gpsLoading} />

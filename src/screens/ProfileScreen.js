@@ -273,68 +273,7 @@ export default function ProfileScreen() {
         </View>
 
         {/* ===== ACCOUNT ACTIONS ===== */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Ionicons name="settings" size={22} color="#065f46" />
-            <Text style={styles.cardTitle}>Account & Settings</Text>
-          </View>
 
-          <TouchableOpacity
-            style={styles.actionRow}
-            activeOpacity={0.8}
-            onPress={() => Alert.alert('Settings', 'App settings screen can be added later.')}>
-            <View style={[styles.actionIcon, { backgroundColor: 'rgba(5, 150, 105, 0.1)' }]}>
-              <Ionicons name="settings-outline" size={20} color="#059669" />
-            </View>
-            <View style={styles.actionBody}>
-              <Text style={styles.actionTitle}>App Settings</Text>
-              <Text style={styles.actionSub}>Preferences and configurations</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionRow}
-            activeOpacity={0.8}
-            onPress={() => Alert.alert('Support', 'Help & support screen can be added later.')}>
-            <View style={[styles.actionIcon, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
-              <Ionicons name="help-circle-outline" size={20} color="#f59e0b" />
-            </View>
-            <View style={styles.actionBody}>
-              <Text style={styles.actionTitle}>Help & Support</Text>
-              <Text style={styles.actionSub}>FAQs and contact information</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionRow}
-            activeOpacity={0.8}
-            onPress={() => Alert.alert('Privacy', 'Privacy policy screen can be added later.')}>
-            <View style={[styles.actionIcon, { backgroundColor: 'rgba(59, 130, 246, 0.1)' }]}>
-              <Ionicons name="shield-checkmark-outline" size={20} color="#3b82f6" />
-            </View>
-            <View style={styles.actionBody}>
-              <Text style={styles.actionTitle}>Privacy & Security</Text>
-              <Text style={styles.actionSub}>Data protection and policies</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionRow}
-            activeOpacity={0.8}
-            onPress={() => Alert.alert('About', 'About screen can be added later.')}>
-            <View style={[styles.actionIcon, { backgroundColor: 'rgba(139, 92, 246, 0.1)' }]}>
-              <Ionicons name="information-circle-outline" size={20} color="#8b5cf6" />
-            </View>
-            <View style={styles.actionBody}>
-              <Text style={styles.actionTitle}>About App</Text>
-              <Text style={styles.actionSub}>Version and app information</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
-          </TouchableOpacity>
-        </View>
 
         {/* ===== SIGN OUT BUTTON ===== */}
         <TouchableOpacity
@@ -348,7 +287,7 @@ export default function ProfileScreen() {
         {/* ===== APP VERSION ===== */}
         <View style={styles.footer}>
           <Text style={styles.versionText}>Forest Management System</Text>
-          <Text style={styles.versionSubText}>Version {versionService.currentVersion} • © 2024</Text>
+          <Text style={styles.versionSubText}>Version {versionService.currentVersion} • © 2026</Text>
         </View>
       </ScrollView>
     </View>

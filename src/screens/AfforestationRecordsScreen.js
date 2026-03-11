@@ -164,6 +164,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
   // GPS
   const [autoGps, setAutoGps] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsList, setGpsList] = useState(['']);
   const [gpsLoading, setGpsLoading] = useState(false);
 
@@ -887,6 +888,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     setSpeciesCounts({});
 
     setAutoGps('');
+    setGpsAccuracy(null);
     setGpsList(['']);
     setPictureUris([]);
   };
@@ -900,9 +902,10 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
+        setGpsAccuracy(accuracy);
 
         fillAutoIntoManual(value);
 
@@ -912,7 +915,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         setGpsLoading(false);
         if (!silent) Alert.alert('Location Error', err.message + '\nEnsure GPS is ON and you are outdoors.');
       },
-      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
     );
   };
 
@@ -1276,8 +1279,14 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       return;
     }
     if (!speciesIds.length) {
-      Alert.alert('Missing', 'Please select at least 1 species.');
-      return;
+      return Alert.alert('Invalid ID', 'Please fill the form correctly.');
+    }
+
+    if (gpsAccuracy !== null && gpsAccuracy > 7) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
     }
 
     // Validate per-species counts
@@ -1595,7 +1604,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
               shadowRadius: 4,
               elevation: 3,
             }}
-            onPress={() => offlineService.processQueue()}
+            onPress={() => offlineService.openSyncModal()}
             disabled={offlineStatus.syncing}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {offlineStatus.syncing ? (
@@ -2511,6 +2520,11 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
                     <View style={styles.gpsCardBody}>
                       <Text style={styles.gpsValue}>{autoGps || 'No coordinates fetched'}</Text>
+                      {gpsAccuracy !== null && (
+                        <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                          GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Retry)'}
+                        </Text>
+                      )}
                       {gpsLoading && (
                         <View style={styles.gpsLoading}>
                           <ActivityIndicator size="small" color={COLORS.primary} />
@@ -2559,6 +2573,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                           onChangeText={text => {
                             const copy = [...gpsList];
                             copy[index] = text;
+                            if (text && text !== autoGps) setGpsAccuracy(null);
                             setGpsList(copy);
                           }}
                           placeholder="31.5204, 74.3587"

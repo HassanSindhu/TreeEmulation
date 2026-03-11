@@ -14,6 +14,7 @@ class OfflineService {
         this.queue = [];
         this.isOnline = true;
         this.isSyncing = false; // ✅ New state
+        this.isModalVisible = false; // ✅ UI State for Selective Sync Modal
         this.initialQueueSize = 0; // ✅ Global sync progress tracker
         this.subscribers = [];
 
@@ -105,7 +106,18 @@ class OfflineService {
         }
     }
 
-    async processQueue() {
+    openSyncModal() {
+        if (this.queue.length === 0) return;
+        this.isModalVisible = true;
+        this.notifySubscribers();
+    }
+
+    closeSyncModal() {
+        this.isModalVisible = false;
+        this.notifySubscribers();
+    }
+
+    async processQueue(selectedIds = null) {
         // Double check network state effectively
         const state = await NetInfo.fetch();
         this.isOnline = state.isConnected && state.isInternetReachable !== false;
@@ -138,10 +150,15 @@ class OfflineService {
                 await this.saveQueue();
             }
 
-            // Filter out items already processing to avoid duplication
-            const pendingItems = this.queue.filter(q => q.status !== 'processing');
+            // Filter out items already processing to avoid duplication, and enforce selective IDs if provided
+            const pendingItems = this.queue.filter(q => 
+                q.status !== 'processing' && (!selectedIds || selectedIds.includes(q.id))
+            );
 
             if (pendingItems.length === 0) return;
+            
+            // If we are selectively syncing a specific batch, update the tracker to their size instead of the whole queue
+            this.initialQueueSize = selectedIds ? pendingItems.length : this.queue.length;
 
             // Process items one by one
             for (const item of pendingItems) {
@@ -239,8 +256,12 @@ class OfflineService {
 
                 // Mathematical percentage fix: Calculate remaining vs initial queue size rather than loop iterations
                 const totalToSync = this.initialQueueSize || 1;
-                // Since successful items are removed, remaining is just the queue length
-                const safeSyncedCount = Math.max(0, totalToSync - this.queue.length);
+                // Since successful items are removed, remaining is just the subset length or queue length
+                const currentRemaining = selectedIds 
+                    ? this.queue.filter(q => selectedIds.includes(q.id)).length 
+                    : this.queue.length;
+                    
+                const safeSyncedCount = Math.max(0, totalToSync - currentRemaining);
                 const percent = Math.min(100, Math.round((safeSyncedCount / totalToSync) * 100));
 
                 if (Platform.OS === 'android' && BackgroundService.isRunning()) {

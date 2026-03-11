@@ -241,6 +241,7 @@ export default function RegistersScreen({ navigation }) {
   // ---------- GPS ----------
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsSource, setGpsSource] = useState('');
   const [gpsFetching, setGpsFetching] = useState(false);
 
@@ -517,15 +518,16 @@ export default function RegistersScreen({ navigation }) {
 
       // ALWAYS use High Accuracy for "exact coordinates" as requested.
       // works offline via GPS. Increased timeout for cold locks.
-      const options = { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 };
+      const options = { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 };
 
       Geolocation.getCurrentPosition(
         pos => {
-          const { latitude, longitude } = pos.coords;
+          const { latitude, longitude, accuracy } = pos.coords;
           const val = formatLatLng(latitude, longitude);
 
           setGpsAuto(val);
           setGpsManual(prev => (String(prev || '').trim() ? prev : val));
+          setGpsAccuracy(accuracy);
           // Since we use high accuracy, it's effectively GPS/HighPrecision
           setGpsSource('GPS');
           setGpsFetching(false);
@@ -908,6 +910,7 @@ export default function RegistersScreen({ navigation }) {
 
     setGpsAuto('');
     setGpsManual('');
+    setGpsAccuracy(null);
     setGpsSource('');
 
     setPictureAssets([]);
@@ -1083,6 +1086,13 @@ export default function RegistersScreen({ navigation }) {
   const saveRecord = async () => {
     const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
     const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
+
+    if (gpsAccuracy !== null && gpsAccuracy > 7) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
+    }
 
     const isEnumNotPresent = activeType === 'enumeration' && String(condition || '').toLowerCase().includes('not present');
     const requiredMinImages = isEnumNotPresent ? 0 : 2;
@@ -1371,7 +1381,7 @@ export default function RegistersScreen({ navigation }) {
               shadowRadius: 4,
               elevation: 3,
             }}
-            onPress={() => offlineService.processQueue()}
+            onPress={() => offlineService.openSyncModal()}
             disabled={offlineStatus.syncing}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {offlineStatus.syncing ? (
@@ -1979,7 +1989,10 @@ export default function RegistersScreen({ navigation }) {
                       <TextInput
                         style={styles.gpsInput}
                         value={gpsManual}
-                        onChangeText={setGpsManual}
+                        onChangeText={text => {
+                          setGpsManual(text);
+                          setGpsAccuracy(null);
+                        }}
                         placeholder="lat, lng"
                         placeholderTextColor={COLORS.textLight}
                       />
@@ -2000,6 +2013,11 @@ export default function RegistersScreen({ navigation }) {
                     )}
                   </TouchableOpacity>
                   {!!gpsSource && <Text style={styles.gpsSourceText}>Source: {gpsSource}</Text>}
+                  {gpsAccuracy !== null && (
+                    <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                      GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Please Retry/Shake Phone)'}
+                    </Text>
+                  )}
                 </View>
 
                 {/* Images Section */}

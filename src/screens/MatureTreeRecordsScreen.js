@@ -153,6 +153,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
 
   // Previous Data (2021-22)
   const [usePreviousData, setUsePreviousData] = useState(false);
@@ -778,15 +779,16 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
       // ALWAYS use High Accuracy for "exact coordinates" as requested.
       // works offline via GPS. Increased timeout for cold locks.
-      const options = { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 };
+      const options = { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 };
 
       Geolocation.getCurrentPosition(
         pos => {
-          const { latitude, longitude } = pos.coords;
+          const { latitude, longitude, accuracy } = pos.coords;
           const val = formatLatLng(latitude, longitude);
 
           setGpsAuto(val);
           setGpsManual(prev => (String(prev || '').trim() ? prev : val));
+          setGpsAccuracy(accuracy);
           setGpsSource('GPS');
           setGpsFetching(false);
         },
@@ -968,6 +970,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     setGpsAuto('');
     setGpsManual('');
     setGpsSource('');
+    setGpsFetching(false);
+    setGpsAccuracy(null);
     setPictureAssets([]);
     setUploadingImages(false);
     setUploadedImageUrls([]);
@@ -1157,6 +1161,13 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
     const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
     const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
+
+    if (gpsAccuracy !== null && gpsAccuracy > 7) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
+    }
 
     if (!autoLat || !autoLng) {
       if (!manualLat || !manualLng) {
@@ -1510,7 +1521,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
               shadowRadius: 4,
               elevation: 3,
             }}
-            onPress={() => offlineService.processQueue()}
+            onPress={() => offlineService.openSyncModal()}
             disabled={offlineStatus.syncing}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {offlineStatus.syncing ? (
@@ -2313,10 +2324,11 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                           setGpsFetching(true);
                           Geolocation.getCurrentPosition(
                             pos => {
-                              const { latitude, longitude } = pos.coords;
+                              const { latitude, longitude, accuracy } = pos.coords;
                               const val = formatLatLng(latitude, longitude);
                               setGpsAuto(val);
                               setGpsManual(prev => (String(prev || '').trim() ? prev : val));
+                              setGpsAccuracy(accuracy);
                               setGpsSource('GPS');
                               setGpsFetching(false);
                             },
@@ -2324,13 +2336,18 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                               setGpsFetching(false);
                               Alert.alert('Location Error', err.message);
                             },
-                            { enableHighAccuracy: true, timeout: 18000, maximumAge: 5000 },
+                            { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
                           );
                         }}>
                         <Ionicons name="navigate" size={16} color="#fff" />
                         <Text style={styles.gpsButtonText}>High Accuracy</Text>
                       </TouchableOpacity>
                     </View>
+                    {gpsAccuracy !== null && (
+                      <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                        GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Please Retry/Shake Phone)'}
+                      </Text>
+                    )}
                   </View>
 
                   <FormRow
@@ -2338,6 +2355,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                     value={gpsManual}
                     onChangeText={t => {
                       setGpsManual(t);
+                      setGpsAccuracy(null);
                       setGpsSource(String(t || '').trim() ? 'MANUAL' : gpsSource);
                     }}
                     placeholder="e.g. 31.520370, 74.358749"

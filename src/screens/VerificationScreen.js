@@ -54,6 +54,7 @@ const POLECROP_LIST_URL = `${API_BASE}/enum/pole-crop`; // ✅ added
 
 // VERIFY API (same endpoint, different table_name)
 const VERIFY_URL = `${API_BASE}/enum/verification`;
+const REJECT_BY_RECORD_URL = `${API_BASE}/enum/verification/reject-by-record`;
 
 // Modules (same)
 const MODULES = [
@@ -340,10 +341,12 @@ export default function VerificationScreen({ navigation }) {
     const item = detailsModal.item;
     if (!item) return;
 
-    // ✅ do not change anything if already Approved/Rejected
     // ✅ check final status for THIS user
     const currentStatus = determineItemStatus(item, role);
-    if (currentStatus === 'Verified' || currentStatus === 'Rejected') {
+    const isDFO = role === 'dfo' || role === 'divisionalforestofficer';
+
+    // DFO can reject even if verified. Others cannot.
+    if (currentStatus === 'Rejected' || (currentStatus === 'Verified' && !isDFO)) {
       Alert.alert('Info', 'This record is already Approved/Rejected.');
       return;
     }
@@ -356,12 +359,24 @@ export default function VerificationScreen({ navigation }) {
 
     try {
       setDetailsModal(s => ({ ...s, submitting: true }));
-      await postVerification({
-        module: detailsModal.module,
-        tableId: item.id,
-        action: 'Rejected',
-        remarks: r,
-      });
+
+      // Use specific API for DFO rejecting an already verified record
+      if (isDFO && currentStatus === 'Verified') {
+        const table_name = tableNameForModule(detailsModal.module);
+        await apiService.post(REJECT_BY_RECORD_URL, {
+          id: Number(item.id),
+          tableName: table_name,
+          remarks: r,
+        });
+      } else {
+        await postVerification({
+          module: detailsModal.module,
+          tableId: item.id,
+          action: 'Rejected',
+          remarks: r,
+        });
+      }
+
       Alert.alert('Done', 'Rejected successfully');
       closeDetails();
       fetchForModule(activeModule);
@@ -461,6 +476,16 @@ export default function VerificationScreen({ navigation }) {
     const badgeI = statusIcon(currentStatus);
 
     const isFinal = currentStatus === 'Verified' || currentStatus === 'Rejected';
+    const isDFO = role === 'dfo' || role === 'divisionalforestofficer';
+
+    let tapHintText = 'Tap to view details';
+    if (isFinal) {
+      if (currentStatus === 'Verified' && isDFO) {
+        tapHintText = 'Tap to Review / Re-Open';
+      } else {
+        tapHintText = 'Already decided (read-only)';
+      }
+    }
 
     return (
       <TouchableOpacity activeOpacity={0.85} onPress={() => openDetails(activeModule, item)}>
@@ -491,7 +516,7 @@ export default function VerificationScreen({ navigation }) {
           )}
 
           <Text style={styles.tapHint}>
-            {isFinal ? 'Already decided (read-only)' : 'Tap to view details'}
+            {tapHintText}
           </Text>
         </View>
       </TouchableOpacity>
@@ -521,7 +546,8 @@ export default function VerificationScreen({ navigation }) {
   // Fix: defined detailsAction using the new logic
   const detailsAction = detailsItem ? determineItemStatus(detailsItem, role) : null;
 
-  const detailsFinal = detailsAction === 'Verified' || detailsAction === 'Rejected';
+  const isDetailsModeDFO = role === 'dfo' || role === 'divisionalforestofficer';
+  const detailsFinal = detailsAction === 'Rejected' || (detailsAction === 'Verified' && !isDetailsModeDFO);
 
   // Filter modal handlers (UI like Registers)
   const openFilterModal = () => {
@@ -1033,7 +1059,7 @@ export default function VerificationScreen({ navigation }) {
                 )}
 
                 {/* Reject Mode input */}
-                {detailsModal.rejectMode && !detailsFinal && (
+                {detailsModal.rejectMode && (
                   <View style={{ marginTop: 12 }}>
                     <Text style={styles.sectionTitle}>Rejection Remarks (Required)</Text>
                     <TextInput
@@ -1048,7 +1074,7 @@ export default function VerificationScreen({ navigation }) {
                 )}
 
                 {/* Final status info */}
-                {detailsFinal && (
+                {detailsFinal && !detailsModal.rejectMode && (
                   <View style={styles.finalInfo}>
                     <Ionicons name="information-circle" size={18} color={COLORS.textLight} />
                     <Text style={styles.finalInfoText}>
@@ -1078,18 +1104,18 @@ export default function VerificationScreen({ navigation }) {
 
               {!detailsModal.rejectMode ? (
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.rejectBtn, detailsFinal && { opacity: 0.45 }]}
+                  style={[styles.actionBtn, styles.rejectBtn, (detailsFinal && !isDetailsModeDFO) && { opacity: 0.45 }]}
                   onPress={() => setDetailsModal(s => ({ ...s, rejectMode: true }))}
-                  disabled={detailsModal.submitting || !detailsItem || detailsFinal}
+                  disabled={detailsModal.submitting || !detailsItem || (detailsFinal && !isDetailsModeDFO)}
                   activeOpacity={0.85}>
                   <Ionicons name="close-circle" size={18} color="#fff" />
                   <Text style={styles.actionBtnText}>Reject</Text>
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.rejectBtn, detailsFinal && { opacity: 0.45 }]}
+                  style={[styles.actionBtn, styles.rejectBtn, (detailsFinal && !isDetailsModeDFO) && { opacity: 0.45 }]}
                   onPress={rejectFromDetails}
-                  disabled={detailsModal.submitting || !detailsItem || detailsFinal}
+                  disabled={detailsModal.submitting || !detailsItem}
                   activeOpacity={0.85}>
                   {detailsModal.submitting ? (
                     <ActivityIndicator color="#fff" />
@@ -1103,7 +1129,7 @@ export default function VerificationScreen({ navigation }) {
               )}
             </View>
 
-            {detailsModal.rejectMode && !detailsFinal && (
+            {detailsModal.rejectMode && (
               <TouchableOpacity
                 onPress={() => setDetailsModal(s => ({ ...s, rejectMode: false, remarks: '' }))}
                 style={styles.rejectCancelLink}

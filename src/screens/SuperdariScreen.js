@@ -411,7 +411,7 @@ export default function SuperdariScreen({ navigation, route }) {
       // Previous data fields (only if checked)
       ...(usePreviousData
         ? {
-          previous_takki_number: prevTakki ? Number(prevTakki) : null,
+          previous_takki_number: prevTakki ? String(prevTakki).trim() : '',
           previous_page_no: String(prevPage || '').trim(),
           previous_register_no: String(prevReg || '').trim(),
           previous_girth: prevGirth ? Number(prevGirth) : null,
@@ -599,7 +599,6 @@ export default function SuperdariScreen({ navigation, route }) {
                   value={prevTakki}
                   onChangeText={setPrevTakki}
                   placeholder="e.g. 99"
-                  keyboardType="numeric"
                   style={{ backgroundColor: '#fff' }}
                 />
 

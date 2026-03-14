@@ -1175,15 +1175,11 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       }
     }
 
-    // takki_number validation (numeric if filled)
+    // takki_number validation
     const tn = String(takkiNumber || '').trim();
-    const takkiNumberValue = tn ? Number(tn) : null;
 
     if (!isTreeNotPresent && !tn) {
       return Alert.alert('Missing', 'MDR No. (Takki No.) is required');
-    }
-    if (tn && !Number.isFinite(takkiNumberValue)) {
-      return Alert.alert('Invalid', 'MDR No. (Takki No.) must be numeric');
     }
 
     if (!isTreeNotPresent && !String(girth || '').trim()) {
@@ -1247,7 +1243,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       // extras (snake_case)
       is_disputed: !!isDisputed,
       additional_remarks: String(additionalRemarks || '').trim(),
-      takki_number: takkiNumberValue != null ? takkiNumberValue : 0,
+      takki_number: tn || '',
       ...(finalSide ? { side: finalSide } : {}),
       page_no: String(pageNo || '').trim(),
       register_no: String(registerNo || '').trim(),
@@ -1255,7 +1251,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       // Previous data fields (only if checked)
       ...(usePreviousData
         ? {
-          previous_takki_number: prevTakki ? Number(prevTakki) : null,
+          previous_takki_number: prevTakki ? String(prevTakki).trim() : '',
           previous_page_no: String(prevPage || '').trim(),
           previous_register_no: String(prevReg || '').trim(),
           previous_girth: prevGirth ? Number(prevGirth) : null,
@@ -1423,11 +1419,23 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         if (kmT !== null && num > kmT) return false;
       }
 
-      if (tkF !== null || tkT !== null) {
-        const num = Number(r?.takkiNumber);
-        if (!Number.isFinite(num)) return false;
-        if (tkF !== null && num < tkF) return false;
-        if (tkT !== null && num > tkT) return false;
+      if (filters.takkiFrom || filters.takkiTo) {
+        const val = String(r?.takki_number ?? r?.takkiNumber ?? '').trim();
+        const f = String(filters.takkiFrom || '').trim();
+        const t = String(filters.takkiTo || '').trim();
+
+        // If both are numeric, use numeric comparison
+        const valNum = Number(val);
+        const fNum = f ? Number(f) : null;
+        const tNum = t ? Number(t) : null;
+
+        if (f && t && Number.isFinite(valNum) && Number.isFinite(fNum) && Number.isFinite(tNum)) {
+          if (valNum < fNum || valNum > tNum) return false;
+        } else {
+          // Lexical fallback
+          if (f && val < f) return false;
+          if (t && val > t) return false;
+        }
       }
 
       if (!q) return true;
@@ -1902,8 +1910,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                       label="MDR No. (Takki No.) From"
                       value={filters.takkiFrom}
                       onChangeText={v => setFilters(prev => ({ ...prev, takkiFrom: v }))}
-                      placeholder="e.g. 1"
-                      keyboardType="numeric"
+                      placeholder="e.g. A1"
                     />
                   </View>
                   <View style={styles.filterColumn}>
@@ -1911,8 +1918,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                       label="MDR No. (Takki No.) To"
                       value={filters.takkiTo}
                       onChangeText={v => setFilters(prev => ({ ...prev, takkiTo: v }))}
-                      placeholder="e.g. 500"
-                      keyboardType="numeric"
+                      placeholder="e.g. A34"
                     />
                   </View>
                 </View>
@@ -2081,7 +2087,6 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                       value={prevTakki}
                       onChangeText={setPrevTakki}
                       placeholder="e.g. 99"
-                      keyboardType="numeric"
                     />
 
                     <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -2146,7 +2151,6 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                   value={takkiNumber}
                   onChangeText={setTakkiNumber}
                   placeholder="e.g. 123"
-                  keyboardType="numeric"
                 />
 
                 <FormRow

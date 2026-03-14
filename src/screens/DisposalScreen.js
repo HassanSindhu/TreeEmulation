@@ -503,7 +503,7 @@ export default function DisposalScreen({ navigation, route }) {
       // Previous data fields (only if checked)
       ...(usePreviousData
         ? {
-          previous_takki_number: prevTakki ? Number(prevTakki) : null,
+          previous_takki_number: prevTakki ? String(prevTakki).trim() : null,
           previous_page_no: String(prevPage || '').trim(),
           previous_register_no: String(prevReg || '').trim(),
           previous_girth: prevGirth ? Number(prevGirth) : null,
@@ -681,8 +681,7 @@ export default function DisposalScreen({ navigation, route }) {
                     label="Previous Takki No"
                     value={prevTakki}
                     onChangeText={setPrevTakki}
-                    placeholder="e.g. 99"
-                    keyboardType="numeric"
+                    placeholder="e.g. A34"
                     style={{ backgroundColor: '#fff' }}
                   />
 

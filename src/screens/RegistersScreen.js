@@ -259,6 +259,7 @@ export default function RegistersScreen({ navigation }) {
   const [girth, setGirth] = useState('');
   const [condition, setCondition] = useState('');
   const [conditionId, setConditionId] = useState(null);
+  const [takkiNumber, setTakkiNumber] = useState('');
 
   // Pole Crop fields
   const [rdsFrom, setRdsFrom] = useState('');
@@ -950,6 +951,7 @@ export default function RegistersScreen({ navigation }) {
       setGirth(String(row?.girth ?? ''));
       setCondition('');
       setConditionId(row?.condition_id ?? null);
+      setTakkiNumber(String(row?.takki_number ?? row?.takki_no ?? row?.takki ?? ''));
     }
 
     if (activeType === 'pole') {
@@ -1156,6 +1158,7 @@ export default function RegistersScreen({ navigation }) {
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
+        takki_number: String(takkiNumber || '').trim(),
         pictures: initialPictures, // ApiService will append new ones
       };
     }
@@ -1733,6 +1736,7 @@ export default function RegistersScreen({ navigation }) {
                 {/* TYPE SPECIFIC */}
                 {activeType === 'enumeration' && (
                   <>
+                    <FormRow label="MDR No. (Takki No.)" value={takkiNumber} onChangeText={setTakkiNumber} placeholder='e.g. "A34"' />
                     <FormRow label="RD/KM" value={rdKm} onChangeText={setRdKm} placeholder="e.g. 5.5" />
                     <DropdownRow
                       label={speciesLoading ? 'Species (Loading...)' : 'Species'}

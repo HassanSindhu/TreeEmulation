@@ -379,7 +379,7 @@ export default function SuperdariScreen({ navigation, route }) {
     const { lat: auto_lat, long: auto_long } = parseLatLong(autoGps);
     const { lat: manual_lat, long: manual_long } = parseLatLong(manualGps);
 
-    if (gpsAccuracy !== null && gpsAccuracy > 7) {
+    if (gpsAccuracy !== null && gpsAccuracy > 10) {
       return Alert.alert(
         'Poor GPS Accuracy',
         `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`

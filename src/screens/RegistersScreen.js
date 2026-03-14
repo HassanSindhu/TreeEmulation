@@ -1089,7 +1089,7 @@ export default function RegistersScreen({ navigation }) {
     const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
     const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
 
-    if (gpsAccuracy !== null && gpsAccuracy > 7) {
+    if (gpsAccuracy !== null && gpsAccuracy > 10) {
       return Alert.alert(
         'Poor GPS Accuracy',
         `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`

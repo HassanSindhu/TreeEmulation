@@ -67,7 +67,7 @@ const COLORS = {
 };
 
 // API
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const AWS_Base = 'https://app.eco.gisforestry.com';
 
 const POLE_CROP_AUDIT_CREATE_URL = `${API_BASE}/enum/pole-crop-audit`;

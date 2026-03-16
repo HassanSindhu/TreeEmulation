@@ -1,7 +1,8 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
-import { Alert } from 'react-native';
+import { Alert, Platform, PermissionsAndroid } from 'react-native';
+import BackgroundService from 'react-native-background-actions';
 
 const QUEUE_KEY = 'OFFLINE_QUEUE';
 const CACHE_PREFIX = 'CACHE_';
@@ -13,6 +14,8 @@ class OfflineService {
         this.queue = [];
         this.isOnline = true;
         this.isSyncing = false; // ✅ New state
+        this.isModalVisible = false; // ✅ UI State for Selective Sync Modal
+        this.initialQueueSize = 0; // ✅ Global sync progress tracker
         this.subscribers = [];
 
         // Initialize NetInfo listener
@@ -90,6 +93,9 @@ class OfflineService {
         };
 
         this.queue.push(item);
+        if (this.isSyncing && this.initialQueueSize > 0) {
+            this.initialQueueSize++; // Keep total accurate if added mid-sync
+        }
         await this.saveQueue();
         Alert.alert('Offline', 'Data saved locally. Will sync when online.');
         this.notifySubscribers();
@@ -100,24 +106,59 @@ class OfflineService {
         }
     }
 
-    async processQueue() {
+    openSyncModal() {
+        if (this.queue.length === 0) return;
+        this.isModalVisible = true;
+        this.notifySubscribers();
+    }
+
+    closeSyncModal() {
+        this.isModalVisible = false;
+        this.notifySubscribers();
+    }
+
+    async processQueue(selectedIds = null) {
         // Double check network state effectively
         const state = await NetInfo.fetch();
         this.isOnline = state.isConnected && state.isInternetReachable !== false;
 
-        if (this.queue.length === 0 || !this.isOnline) return;
+        if (this.queue.length === 0 || !this.isOnline) {
+            this.initialQueueSize = 0;
+            this.stopBackgroundTask();
+            return;
+        }
 
         // Prevent concurrent syncs
         if (this.isSyncing) return;
         this.isSyncing = true;
         this.notifySubscribers();
 
+        // Lock in the total batch size if it's a new sync process
+        if (this.initialQueueSize === 0 || this.queue.length > this.initialQueueSize) {
+            this.initialQueueSize = this.queue.length;
+        }
+
+        this.startBackgroundTask();
+
         try {
             console.log('Sync: Processing Queue...', this.queue.length, 'items');
-            // Filter out items already processing to avoid duplication
-            const pendingItems = this.queue.filter(q => q.status !== 'processing');
+
+            // FIX: Proactively purge any stuck soft-delete tasks that got trapped in the queue from earlier error
+            const initialLength = this.queue.length;
+            this.queue = this.queue.filter(q => !String(q?.url || '').includes('soft-delete'));
+            if (this.queue.length !== initialLength) {
+                await this.saveQueue();
+            }
+
+            // Filter out items already processing to avoid duplication, and enforce selective IDs if provided
+            const pendingItems = this.queue.filter(q => 
+                q.status !== 'processing' && (!selectedIds || selectedIds.includes(q.id))
+            );
 
             if (pendingItems.length === 0) return;
+            
+            // If we are selectively syncing a specific batch, update the tracker to their size instead of the whole queue
+            this.initialQueueSize = selectedIds ? pendingItems.length : this.queue.length;
 
             // Process items one by one
             for (const item of pendingItems) {
@@ -212,6 +253,27 @@ class OfflineService {
                     // Reset to pending so it can be picked up again
                     item.status = 'pending';
                 }
+
+                // Mathematical percentage fix: Calculate remaining vs initial queue size rather than loop iterations
+                const totalToSync = this.initialQueueSize || 1;
+                // Since successful items are removed, remaining is just the subset length or queue length
+                const currentRemaining = selectedIds 
+                    ? this.queue.filter(q => selectedIds.includes(q.id)).length 
+                    : this.queue.length;
+                    
+                const safeSyncedCount = Math.max(0, totalToSync - currentRemaining);
+                const percent = Math.min(100, Math.round((safeSyncedCount / totalToSync) * 100));
+
+                if (Platform.OS === 'android' && BackgroundService.isRunning()) {
+                    await BackgroundService.updateNotification({
+                        taskTitle: 'Syncing Offline Data',
+                        taskDesc: `Uploading... ${percent}% completed (${safeSyncedCount}/${totalToSync})`,
+                        progressBar: {
+                            max: 100,
+                            value: percent,
+                        }
+                    });
+                }
             }
         } finally {
             this.isSyncing = false;
@@ -222,9 +284,63 @@ class OfflineService {
                 setTimeout(() => {
                     this.processQueue();
                 }, 5000); // retry in 5s
+            } else if (this.queue.length === 0) {
+                this.initialQueueSize = 0;
+                this.stopBackgroundTask();
             }
         }
     }
+
+    // ---------- BACKGROUND SYNCING ----------
+    async startBackgroundTask() {
+        if (Platform.OS !== 'android') return; // Background actions are mainly required/supported well on Android for this use case
+        if (BackgroundService.isRunning()) return;
+
+        const sleep = (time) => new Promise((resolve) => setTimeout(() => resolve(), time));
+
+        const backgroundTask = async (taskDataArguments) => {
+            const { delay } = taskDataArguments;
+            while (BackgroundService.isRunning()) {
+                if (this.queue.length === 0) {
+                    await BackgroundService.stop();
+                    break;
+                }
+                // Rely on the existing processing loop + timeouts, just keeps service alive.
+                await sleep(delay);
+            }
+        };
+
+        const options = {
+            taskName: 'OfflineSync',
+            taskTitle: 'Syncing Offline Data',
+            taskDesc: 'Starting sync... Please wait while your data is safely uploaded.',
+            taskIcon: {
+                name: 'ic_launcher',
+                type: 'mipmap',
+            },
+            color: '#059669',
+            linkingURI: 'treeenum://sync', // Assuming basic deep link
+            parameters: {
+                delay: 2000,
+            },
+        };
+
+        try {
+            if (Platform.Version >= 33) {
+                await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+            }
+            await BackgroundService.start(backgroundTask, options);
+        } catch (e) {
+            console.warn('Failed to start Background Service for sync:', e);
+        }
+    }
+
+    async stopBackgroundTask() {
+        if (Platform.OS === 'android' && BackgroundService.isRunning()) {
+            await BackgroundService.stop();
+        }
+    }
+    // -----------------------------------------
 
     async removeFromQueue(id) {
         this.queue = this.queue.filter(q => q.id !== id);

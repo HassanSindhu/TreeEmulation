@@ -176,11 +176,6 @@ export default function LoginScreen({ navigation }) {
                   <Text style={styles.chkTxt}>Remember me</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  accessibilityLabel="Forgot password"
-                  accessibilityRole="link">
-                  <Text style={styles.link}>Forgot password?</Text>
-                </TouchableOpacity>
               </View>
 
               <TouchableOpacity

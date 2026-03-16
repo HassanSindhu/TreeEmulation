@@ -37,7 +37,7 @@ import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 // Lists / enums
 const SPECIES_URL = `${API_BASE}/lpe3/species`;
@@ -61,7 +61,7 @@ const AUDIT_ROUTE = 'EnumerationAudit';
 
 
 // Image rules
-const MIN_IMAGES = 1;
+const MIN_IMAGES = 2;
 const MAX_IMAGES = 4;
 
 // Species "Other"
@@ -153,6 +153,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
 
   // Previous Data (2021-22)
   const [usePreviousData, setUsePreviousData] = useState(false);
@@ -235,7 +236,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     const s = String(str || '').trim();
     if (!s) return { lat: null, lng: null };
     const parts = s
-      .split(/,|\s+/)
+      .split(/[,\s]+/)
       .map(p => p.trim())
       .filter(Boolean);
     if (parts.length < 2) return { lat: null, lng: null };
@@ -541,7 +542,9 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
           launchCamera(
             {
               mediaType: 'photo',
-              quality: 0.7,
+              quality: 0.6,
+              maxWidth: 1024,
+              maxHeight: 1024,
               cameraType: 'back',
               saveToPhotos: false,
             },
@@ -583,7 +586,9 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
           launchImageLibrary(
             {
               mediaType: 'photo',
-              quality: 0.7,
+              quality: 0.6,
+              maxWidth: 1024,
+              maxHeight: 1024,
               selectionLimit: Math.min(remaining, MAX_IMAGES),
             },
             res => {
@@ -774,15 +779,16 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
       // ALWAYS use High Accuracy for "exact coordinates" as requested.
       // works offline via GPS. Increased timeout for cold locks.
-      const options = { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 };
+      const options = { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 };
 
       Geolocation.getCurrentPosition(
         pos => {
-          const { latitude, longitude } = pos.coords;
+          const { latitude, longitude, accuracy } = pos.coords;
           const val = formatLatLng(latitude, longitude);
 
           setGpsAuto(val);
           setGpsManual(prev => (String(prev || '').trim() ? prev : val));
+          setGpsAccuracy(accuracy);
           setGpsSource('GPS');
           setGpsFetching(false);
         },
@@ -964,6 +970,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     setGpsAuto('');
     setGpsManual('');
     setGpsSource('');
+    setGpsFetching(false);
+    setGpsAccuracy(null);
     setPictureAssets([]);
     setUploadingImages(false);
     setUploadedImageUrls([]);
@@ -1119,6 +1127,19 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
   };
 
   const saveRecord = async () => {
+    const conditionName = condition?.toLowerCase()?.trim() || '';
+    const isTreeNotPresent = conditionName === 'tree not present at site' || conditionName === 'tree not present';
+
+    const requiredMinImages = isTreeNotPresent ? 0 : MIN_IMAGES;
+
+    const totalPics = (pictureAssets || []).length + (uploadedImageUrls || []).length;
+    if (totalPics < requiredMinImages) {
+      return Alert.alert(
+        'Images Required',
+        `Minimum ${MIN_IMAGES} images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree`,
+      );
+    }
+
     const siteId = getNameOfSiteId();
     if (!siteId) return Alert.alert('Missing', 'name_of_site_id not found.');
 
@@ -1138,11 +1159,31 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       else if (sideMode === 'right') finalSide = 'Right';
     }
 
-    // takki_number validation (numeric if filled)
+    const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
+    const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
+
+    if (gpsAccuracy !== null && gpsAccuracy > 10) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 10 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
+    }
+
+    if (!autoLat || !autoLng) {
+      if (!manualLat || !manualLng) {
+        return Alert.alert('Missing Location', 'Auto GPS coordinates could not be fetched. Please enter Manual GPS coordinates (Latitude and Longitude) to proceed.');
+      }
+    }
+
+    // takki_number validation
     const tn = String(takkiNumber || '').trim();
-    const takkiNumberValue = tn ? Number(tn) : null;
-    if (tn && !Number.isFinite(takkiNumberValue)) {
-      return Alert.alert('Invalid', 'Takki Number must be numeric');
+
+    if (!isTreeNotPresent && !tn) {
+      return Alert.alert('Missing', 'MDR No. (Takki No.) is required');
+    }
+
+    if (!isTreeNotPresent && !String(girth || '').trim()) {
+      return Alert.alert('Missing', 'Girth is required');
     }
 
     // Resolve species id
@@ -1161,16 +1202,15 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       conditionId ?? (conditionRows.find(x => x.name === condition)?.id ?? null);
     if (!finalConditionId) return Alert.alert('Missing', 'Condition is required');
 
-    const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
-    const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
+
 
     const chosenCount =
       (pictureAssets?.length || 0) > 0
         ? pictureAssets?.length || 0
         : uploadedImageUrls?.length || 0;
 
-    if (chosenCount < MIN_IMAGES) {
-      return Alert.alert('Images Required', `Please add at least ${MIN_IMAGES} image.`);
+    if (chosenCount < requiredMinImages) {
+      return Alert.alert('Images Required', `Please add at least ${MIN_IMAGES} image(s).`);
     }
     if (chosenCount > MAX_IMAGES) {
       return Alert.alert('Too Many Images', `You can add maximum ${MAX_IMAGES} images.`);
@@ -1197,13 +1237,13 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       name_of_site_id: Number(siteId),
       rd_km: rdKmNumber,
       species_id: Number(finalSpeciesId),
-      girth: girth ? String(girth) : '',
+      girth: girth ? String(girth) : '0',
       condition_id: Number(finalConditionId),
 
       // extras (snake_case)
       is_disputed: !!isDisputed,
       additional_remarks: String(additionalRemarks || '').trim(),
-      ...(takkiNumberValue != null ? { takki_number: takkiNumberValue } : {}),
+      takki_number: tn || '',
       ...(finalSide ? { side: finalSide } : {}),
       page_no: String(pageNo || '').trim(),
       register_no: String(registerNo || '').trim(),
@@ -1211,7 +1251,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       // Previous data fields (only if checked)
       ...(usePreviousData
         ? {
-          previous_takki_number: prevTakki ? Number(prevTakki) : null,
+          previous_takki_number: prevTakki ? String(prevTakki).trim() : '',
           previous_page_no: String(prevPage || '').trim(),
           previous_register_no: String(prevReg || '').trim(),
           previous_girth: prevGirth ? Number(prevGirth) : null,
@@ -1354,7 +1394,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     const tkF = filters.takkiFrom !== '' ? Number(filters.takkiFrom) : null;
     const tkT = filters.takkiTo !== '' ? Number(filters.takkiTo) : null;
 
-    return serverRowsDecorated.filter(r => {
+    const result = serverRowsDecorated.filter(r => {
       if (filters.species) {
         const label = String(r?._speciesLabel || '').toLowerCase();
         if (!label.includes(String(filters.species).toLowerCase())) return false;
@@ -1379,11 +1419,23 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         if (kmT !== null && num > kmT) return false;
       }
 
-      if (tkF !== null || tkT !== null) {
-        const num = Number(r?.takkiNumber);
-        if (!Number.isFinite(num)) return false;
-        if (tkF !== null && num < tkF) return false;
-        if (tkT !== null && num > tkT) return false;
+      if (filters.takkiFrom || filters.takkiTo) {
+        const val = String(r?.takki_number ?? r?.takkiNumber ?? '').trim();
+        const f = String(filters.takkiFrom || '').trim();
+        const t = String(filters.takkiTo || '').trim();
+
+        // If both are numeric, use numeric comparison
+        const valNum = Number(val);
+        const fNum = f ? Number(f) : null;
+        const tNum = t ? Number(t) : null;
+
+        if (f && t && Number.isFinite(valNum) && Number.isFinite(fNum) && Number.isFinite(tNum)) {
+          if (valNum < fNum || valNum > tNum) return false;
+        } else {
+          // Lexical fallback
+          if (f && val < f) return false;
+          if (t && val > t) return false;
+        }
       }
 
       if (!q) return true;
@@ -1412,6 +1464,28 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
       return blob.includes(q);
     });
+
+    // Sort by Takki Number (Numeric-aware)
+    result.sort((a, b) => {
+      const valA = a.takkiNumber;
+      const valB = b.takkiNumber;
+
+      if (valA == null && valB == null) return 0;
+      if (valA == null) return 1;
+      if (valB == null) return -1;
+
+      const strA = String(valA).trim();
+      const strB = String(valB).trim();
+
+      if (strA === '' && strB === '') return 0;
+      if (strA === '') return 1;
+      if (strB === '') return -1;
+
+      // LocaleCompare with numeric:true handles both "1, 2, 10" and "A1, A2, A10" correctly
+      return strA.localeCompare(strB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    return result;
   }, [serverRowsDecorated, search, filters]);
 
   // ---------- RENDER ----------
@@ -1477,7 +1551,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
               shadowRadius: 4,
               elevation: 3,
             }}
-            onPress={() => offlineService.processQueue()}
+            onPress={() => offlineService.openSyncModal()}
             disabled={offlineStatus.syncing}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {offlineStatus.syncing ? (
@@ -1855,20 +1929,18 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 <View style={styles.filterRow}>
                   <View style={styles.filterColumn}>
                     <FormRow
-                      label="Takki Number From"
+                      label="MDR No. (Takki No.) From"
                       value={filters.takkiFrom}
                       onChangeText={v => setFilters(prev => ({ ...prev, takkiFrom: v }))}
-                      placeholder="e.g. 1"
-                      keyboardType="numeric"
+                      placeholder="e.g. A1"
                     />
                   </View>
                   <View style={styles.filterColumn}>
                     <FormRow
-                      label="Takki Number To"
+                      label="MDR No. (Takki No.) To"
                       value={filters.takkiTo}
                       onChangeText={v => setFilters(prev => ({ ...prev, takkiTo: v }))}
-                      placeholder="e.g. 500"
-                      keyboardType="numeric"
+                      placeholder="e.g. A34"
                     />
                   </View>
                 </View>
@@ -2037,7 +2109,6 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                       value={prevTakki}
                       onChangeText={setPrevTakki}
                       placeholder="e.g. 99"
-                      keyboardType="numeric"
                     />
 
                     <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -2098,11 +2169,10 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 )}
 
                 <FormRow
-                  label="Takki Number"
+                  label={`MDR No. (Takki No.)${String(condition || '').toLowerCase().includes('not present') ? ' (Optional)' : ' *'}`}
                   value={takkiNumber}
                   onChangeText={setTakkiNumber}
                   placeholder="e.g. 123"
-                  keyboardType="numeric"
                 />
 
                 <FormRow
@@ -2203,7 +2273,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 )}
 
                 <FormRow
-                  label="Girth"
+                  label={`Girth${String(condition || '').toLowerCase().includes('not present') ? ' (Optional)' : ' *'}`}
                   value={girth}
                   onChangeText={setGirth}
                   placeholder='e.g. "24 inches"'
@@ -2280,10 +2350,11 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                           setGpsFetching(true);
                           Geolocation.getCurrentPosition(
                             pos => {
-                              const { latitude, longitude } = pos.coords;
+                              const { latitude, longitude, accuracy } = pos.coords;
                               const val = formatLatLng(latitude, longitude);
                               setGpsAuto(val);
                               setGpsManual(prev => (String(prev || '').trim() ? prev : val));
+                              setGpsAccuracy(accuracy);
                               setGpsSource('GPS');
                               setGpsFetching(false);
                             },
@@ -2291,13 +2362,18 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                               setGpsFetching(false);
                               Alert.alert('Location Error', err.message);
                             },
-                            { enableHighAccuracy: true, timeout: 18000, maximumAge: 5000 },
+                            { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
                           );
                         }}>
                         <Ionicons name="navigate" size={16} color="#fff" />
                         <Text style={styles.gpsButtonText}>High Accuracy</Text>
                       </TouchableOpacity>
                     </View>
+                    {gpsAccuracy !== null && (
+                      <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                        GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Please Retry/Shake Phone)'}
+                      </Text>
+                    )}
                   </View>
 
                   <FormRow
@@ -2305,6 +2381,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                     value={gpsManual}
                     onChangeText={t => {
                       setGpsManual(t);
+                      setGpsAccuracy(null);
                       setGpsSource(String(t || '').trim() ? 'MANUAL' : gpsSource);
                     }}
                     placeholder="e.g. 31.520370, 74.358749"
@@ -2330,7 +2407,10 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                         {totalSelectedCount ? 'Add / Change Images' : 'Add Images'}
                       </Text>
                       <Text style={styles.imageButtonSubtitle}>
-                        Minimum {MIN_IMAGES}, Maximum {MAX_IMAGES} images. Selected: {totalSelectedCount}
+                        {String(condition || '').toLowerCase().includes('not present')
+                          ? `Optional Images (Max: ${MAX_IMAGES}). Selected: ${totalSelectedCount}`
+                          : `Min ${MIN_IMAGES}, Max ${MAX_IMAGES} images (Min: 1 Takki, 1 Complete Tree). Selected: ${totalSelectedCount}`
+                        }
                       </Text>
                     </View>
 

@@ -22,9 +22,10 @@ import FormRow from '../components/FormRow';
 import colors from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/ApiService';
+import { offlineService } from '../services/OfflineService';
 
 /* ===================== API ===================== */
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const ENUM_CREATE_URL = `${API_BASE}/lpe3/name-of-site`;
 const ENUM_MY_SITES_URL = `${API_BASE}/lpe3/name-of-site/my/sites`;
 
@@ -144,6 +145,20 @@ export default function AddTreeScreen({ navigation }) {
   // Search (body)
   const [search, setSearch] = useState('');
 
+  const [offlineStatus, setOfflineStatus] = useState({ count: 0, syncing: false });
+
+  useEffect(() => {
+    const update = () => {
+      setOfflineStatus({
+        count: offlineService.queue.length,
+        syncing: offlineService.isSyncing
+      });
+    };
+    const unsub = offlineService.subscribe(update);
+    update();
+    return unsub;
+  }, []);
+
   // Filters
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filters, setFilters] = useState({
@@ -182,6 +197,7 @@ export default function AddTreeScreen({ navigation }) {
   const [remarks, setRemarks] = useState('');
   const [pageNo, setPageNo] = useState('');
   const [registerNo, setRegisterNo] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const linearTypeOptions = ['Road Side', 'Rail Side', 'Canal Side'].map((name, idx) => ({
     id: String(idx + 1),
@@ -507,7 +523,10 @@ export default function AddTreeScreen({ navigation }) {
       return;
     }
 
+    if (isSaving) return;
+
     try {
+      setIsSaving(true);
       const payload = {
         site_name: canalName,
         plantation_type,
@@ -552,6 +571,8 @@ export default function AddTreeScreen({ navigation }) {
     } catch (e) {
       console.error('Save enumeration error:', e);
       Alert.alert('Error', e?.message || 'Unable to save enumeration.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -632,6 +653,57 @@ export default function AddTreeScreen({ navigation }) {
     }
   };
 
+  const handleDeleteSite = async (item) => {
+    const resolvedSiteId =
+      item?.name_of_site_id ??
+      item?.name_of_site?.id ??
+      item?.site_id ??
+      item?.siteId ??
+      item?.id;
+
+    if (!resolvedSiteId) {
+      Alert.alert('Error', 'Could not determine Site ID for deletion.');
+      return;
+    }
+
+    Alert.alert(
+      'Delete Site?',
+      `Are you sure you want to completely delete "${item.canalName || 'this site'}"? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await apiService.post(`${API_BASE}/lpe3/name-of-site/soft-delete`, {
+                id: Number(resolvedSiteId)
+              }, { skipQueue: true });
+
+              if (res?.data?.success === true) {
+                // Instantly remove from local list to avoid UI lagging
+                setEnumerations(prev => prev.filter(e => e.id !== resolvedSiteId));
+                Alert.alert('Success', res?.data?.message || 'Site deleted successfully.');
+              } else if (res?.data?.success === false) {
+                // Fails because of enumerations usually (from server data)
+                throw new Error(res?.data?.message || 'Cannot delete site because it has enumerations.');
+              } else if (res?.status === true || (res?.statusCode >= 200 && res?.statusCode < 300)) {
+                // Fallback for success
+                setEnumerations(prev => prev.filter(e => e.id !== resolvedSiteId));
+                Alert.alert('Success', 'Site deleted successfully.');
+              } else {
+                throw new Error(res?.message || res?.data?.message || 'Delete failed. Server response invalid.');
+              }
+            } catch (error) {
+              console.error('Delete Site Error:', error);
+              Alert.alert('Delete Failed', error.message || 'Could not delete the site from the server.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const openRowActions = item => {
     setSelectedEnum(item);
     setActionModalVisible(true);
@@ -672,6 +744,47 @@ export default function AddTreeScreen({ navigation }) {
           <Ionicons name="refresh" size={20} color="#fff" />
         </TouchableOpacity>
       </View>
+
+      {/* --- Offline Sync Bar --- */}
+      {offlineStatus.count > 0 && (
+        <View style={{ backgroundColor: '#f8fafc', paddingHorizontal: 20, paddingTop: 10 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#f97316', // COLORS.warning
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={() => offlineService.openSyncModal()}
+            disabled={offlineStatus.syncing}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {offlineStatus.syncing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="cloud-offline" size={20} color="#fff" />
+              )}
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                {offlineStatus.syncing
+                  ? 'Syncing records...'
+                  : `${offlineStatus.count} Offline Records Pending`}
+              </Text>
+            </View>
+            {!offlineStatus.syncing && (
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
       <KeyboardAvoidingView
         style={styles.container}
@@ -792,6 +905,7 @@ export default function AddTreeScreen({ navigation }) {
                       key={item.id}
                       activeOpacity={0.9}
                       onPress={() => openRowActions(item)}
+                      onLongPress={() => handleDeleteSite(item)}
                       style={styles.siteCard}>
                       {/* Card Header */}
                       <View style={styles.cardHeader}>
@@ -1316,12 +1430,20 @@ export default function AddTreeScreen({ navigation }) {
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   style={styles.modalCancelBtn}
-                  onPress={() => setEnumModalVisible(false)}>
+                  onPress={() => setEnumModalVisible(false)}
+                  disabled={isSaving}>
                   <Text style={styles.modalCancelText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.modalSaveBtn} onPress={saveEnumerationForm}>
-                  <Ionicons name="save" size={20} color="#fff" />
-                  <Text style={styles.modalSaveText}>Save Site</Text>
+                <TouchableOpacity
+                  style={[styles.modalSaveBtn, isSaving && { opacity: 0.7 }]}
+                  onPress={saveEnumerationForm}
+                  disabled={isSaving}>
+                  {isSaving ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="save" size={20} color="#fff" />
+                  )}
+                  <Text style={styles.modalSaveText}>{isSaving ? 'Saving...' : 'Save Site'}</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>

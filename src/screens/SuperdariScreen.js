@@ -43,7 +43,7 @@ const COLORS = {
 const STORAGE_KEY = 'MATURE_TREE_RECORDS';
 
 // ✅ Same as your AuthContext
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const STORAGE_TOKEN = 'AUTH_TOKEN';
 
 // ✅ APIs
@@ -72,6 +72,7 @@ export default function SuperdariScreen({ navigation, route }) {
   // GPS (auto + manual)
   const [autoGps, setAutoGps] = useState('');
   const [manualGps, setManualGps] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsLoading, setGpsLoading] = useState(false);
   const lastGpsRequestAtRef = useRef(0);
 
@@ -293,16 +294,17 @@ export default function SuperdariScreen({ navigation, route }) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
+        setGpsAccuracy(accuracy);
         setGpsLoading(false);
       },
       err => {
         setGpsLoading(false);
         if (!silent) Alert.alert('Location Error', err.message);
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
     );
   };
 
@@ -311,7 +313,9 @@ export default function SuperdariScreen({ navigation, route }) {
     launchImageLibrary(
       {
         mediaType: 'photo',
-        quality: 0.7,
+        quality: 0.6,
+        maxWidth: 1024,
+        maxHeight: 1024,
         selectionLimit: 0,
       },
       res => {
@@ -375,6 +379,13 @@ export default function SuperdariScreen({ navigation, route }) {
     const { lat: auto_lat, long: auto_long } = parseLatLong(autoGps);
     const { lat: manual_lat, long: manual_long } = parseLatLong(manualGps);
 
+    if (gpsAccuracy !== null && gpsAccuracy > 10) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
+    }
+
     // Attachments for ApiService
     const attachments = (pictureUris || []).map((uri, idx) => ({
       uri, type: 'image/jpeg', name: `super_${treeId}_${idx}_${Date.now()}.jpg`,
@@ -400,7 +411,7 @@ export default function SuperdariScreen({ navigation, route }) {
       // Previous data fields (only if checked)
       ...(usePreviousData
         ? {
-          previous_takki_number: prevTakki ? Number(prevTakki) : null,
+          previous_takki_number: prevTakki ? String(prevTakki).trim() : '',
           previous_page_no: String(prevPage || '').trim(),
           previous_register_no: String(prevReg || '').trim(),
           previous_girth: prevGirth ? Number(prevGirth) : null,
@@ -588,7 +599,6 @@ export default function SuperdariScreen({ navigation, route }) {
                   value={prevTakki}
                   onChangeText={setPrevTakki}
                   placeholder="e.g. 99"
-                  keyboardType="numeric"
                   style={{ backgroundColor: '#fff' }}
                 />
 
@@ -711,9 +721,12 @@ export default function SuperdariScreen({ navigation, route }) {
           </View>
 
           <FormRow
-            label="Manual GPS (Optional)"
+            label="Manual Location (lat,lng)"
             value={manualGps}
-            onChangeText={setManualGps}
+            onChangeText={txt => {
+              setManualGps(txt);
+              setGpsAccuracy(null);
+            }}
             placeholder="31.5204, 74.3587"
           />
 
@@ -725,6 +738,12 @@ export default function SuperdariScreen({ navigation, route }) {
               <Ionicons name="locate" size={18} color="#fff" />
               <Text style={styles.gpsButtonText}>{gpsLoading ? 'Fetching...' : 'Refresh GPS'}</Text>
             </TouchableOpacity>
+
+            {gpsAccuracy !== null && (
+              <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                Accuracy: {Math.round(gpsAccuracy)}m {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
+              </Text>
+            )}
 
             {gpsLoading && (
               <ActivityIndicator size="small" color={COLORS.primary} style={styles.gpsLoading} />

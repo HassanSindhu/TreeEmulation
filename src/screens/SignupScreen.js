@@ -24,7 +24,7 @@ import Clipboard from '@react-native-clipboard/clipboard';
 import colors from '../theme/colors';
 
 // ✅ API base
-const API_BASE_URL = 'http://be.lte.gisforestry.com';
+const API_BASE_URL = 'https://be.punjabtreeenumeration.com';
 
 // ✅ Empty token (as per your requirement)
 const EMPTY_TOKEN = '';

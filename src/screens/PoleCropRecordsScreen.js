@@ -36,7 +36,7 @@ const { height } = Dimensions.get('window');
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
-const API_HOST = 'http://be.lte.gisforestry.com';
+const API_HOST = 'https://be.punjabtreeenumeration.com';
 
 const COLORS = {
   primary: '#059669',
@@ -130,6 +130,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
   // GPS
   const [autoGps, setAutoGps] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsList, setGpsList] = useState(['']);
   const [gpsLoading, setGpsLoading] = useState(false);
   const lastGpsRequestAtRef = useRef(0);
@@ -255,7 +256,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     const s = String(str || '').trim();
     if (!s) return { lat: null, lng: null };
     const parts = s
-      .split(/,|\s+/)
+      .split(/[,\s]+/)
       .map(p => p.trim())
       .filter(Boolean);
     if (parts.length < 2) return { lat: null, lng: null };
@@ -712,9 +713,10 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
+        setGpsAccuracy(accuracy);
         fillAutoIntoManual(value);
         setGpsLoading(false);
       },
@@ -722,7 +724,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         setGpsLoading(false);
         if (!silent) Alert.alert('Location Error', err.message + '\nEnsure GPS is ON and you are outdoors.');
       },
-      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
     );
   };
 
@@ -748,7 +750,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
   const pickFromGallery = () => {
     setImagePickerModal(false);
     launchImageLibrary(
-      { mediaType: 'photo', quality: 0.7, selectionLimit: 0 },
+      { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 0 },
       onImagePickerResult,
     );
   };
@@ -761,7 +763,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       return;
     }
     launchCamera(
-      { mediaType: 'photo', quality: 0.7, saveToPhotos: true, cameraType: 'back' },
+      { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, saveToPhotos: true, cameraType: 'back' },
       onImagePickerResult,
     );
   };
@@ -1275,6 +1277,28 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : autoGps;
     const { lat: manualLat, lng: manualLng } = parseLatLng(lastManual || autoGps);
 
+    if (!autoLat || !autoLng) {
+      if (!manualLat || !manualLng) {
+        return Alert.alert('Missing Location', 'Auto GPS coordinates could not be fetched. Please enter Manual GPS coordinates (Latitude and Longitude) to proceed.');
+      }
+    }
+
+    // GPS Accuracy Check
+    if (gpsAccuracy !== null && gpsAccuracy > 10) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
+    }
+
+    const totalPics = (pictureUris || []).length + (existingPictures || []).length;
+    if (totalPics < 2) {
+      return Alert.alert(
+        'Images Required',
+        'Minimum 2 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree',
+      );
+    }
+
     // Prepare attachments
     const safeFileName = `pole_${Number(nameOfSiteId || 0)}_${Date.now()}`;
     const attachments = pictureUris.map((uri, idx) => ({
@@ -1466,7 +1490,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
               shadowRadius: 4,
               elevation: 3,
             }}
-            onPress={() => offlineService.processQueue()}
+            onPress={() => offlineService.openSyncModal()}
             disabled={offlineStatus.syncing}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {offlineStatus.syncing ? (
@@ -2121,6 +2145,11 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
                     <View style={styles.gpsCardBody}>
                       <Text style={styles.gpsValue}>{autoGps || 'No coordinates fetched'}</Text>
+                      {gpsAccuracy !== null && (
+                        <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                          GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
+                        </Text>
+                      )}
                       {gpsLoading && (
                         <View style={styles.gpsLoading}>
                           <ActivityIndicator size="small" color={COLORS.primary} />
@@ -2143,6 +2172,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                           onChangeText={text => {
                             const copy = [...gpsList];
                             copy[index] = text;
+                            if (text && text !== autoGps) setGpsAccuracy(null);
                             setGpsList(copy);
                           }}
                           placeholder="31.5204, 74.3587"
@@ -2154,6 +2184,9 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Images</Text>
+                  <Text style={{ fontSize: 11, color: COLORS.danger, fontWeight: '700', marginBottom: 8 }}>
+                    * Minimum 2 images: 1 Takki (MDR No.), 1 Complete Tree
+                  </Text>
 
                   <TouchableOpacity
                     style={styles.imageUploadButton}

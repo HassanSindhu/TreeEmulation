@@ -35,10 +35,10 @@ const { height } = Dimensions.get('window');
 
 /**
  * IMPORTANT
- * - For production you are using: http://be.lte.gisforestry.com
+ * - For production you are using: https://be.punjabtreeenumeration.com
  * - For local testing like your curl: http://localhost:5000
  */
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 // ---------- ENUM ENDPOINTS ----------
 const SPECIES_URL = `${API_BASE}/lpe3/species`;
@@ -241,6 +241,7 @@ export default function RegistersScreen({ navigation }) {
   // ---------- GPS ----------
   const [gpsAuto, setGpsAuto] = useState('');
   const [gpsManual, setGpsManual] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsSource, setGpsSource] = useState('');
   const [gpsFetching, setGpsFetching] = useState(false);
 
@@ -258,6 +259,7 @@ export default function RegistersScreen({ navigation }) {
   const [girth, setGirth] = useState('');
   const [condition, setCondition] = useState('');
   const [conditionId, setConditionId] = useState(null);
+  const [takkiNumber, setTakkiNumber] = useState('');
 
   // Pole Crop fields
   const [rdsFrom, setRdsFrom] = useState('');
@@ -294,7 +296,7 @@ export default function RegistersScreen({ navigation }) {
     const s = String(str || '').trim();
     if (!s) return { lat: null, lng: null };
     const parts = s
-      .split(/,|\s+/)
+      .split(/[,\s]+/)
       .map(p => p.trim())
       .filter(Boolean);
     if (parts.length < 2) return { lat: null, lng: null };
@@ -445,7 +447,7 @@ export default function RegistersScreen({ navigation }) {
       {
         text: 'Take Photo',
         onPress: () => {
-          launchCamera({ mediaType: 'photo', quality: 0.7, selectionLimit: 10 }, res => {
+          launchCamera({ mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 10 }, res => {
             if (res?.didCancel) return;
             if (res?.errorCode) {
               Alert.alert('Camera Error', res?.errorMessage || res.errorCode);
@@ -490,7 +492,7 @@ export default function RegistersScreen({ navigation }) {
       {
         text: 'Choose from Gallery',
         onPress: () => {
-          launchImageLibrary({ mediaType: 'photo', quality: 0.7, selectionLimit: 10 }, res => {
+          launchImageLibrary({ mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 10 }, res => {
             if (res?.didCancel) return;
             if (res?.errorCode) {
               Alert.alert('Image Error', res?.errorMessage || res.errorCode);
@@ -517,15 +519,16 @@ export default function RegistersScreen({ navigation }) {
 
       // ALWAYS use High Accuracy for "exact coordinates" as requested.
       // works offline via GPS. Increased timeout for cold locks.
-      const options = { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 };
+      const options = { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 };
 
       Geolocation.getCurrentPosition(
         pos => {
-          const { latitude, longitude } = pos.coords;
+          const { latitude, longitude, accuracy } = pos.coords;
           const val = formatLatLng(latitude, longitude);
 
           setGpsAuto(val);
           setGpsManual(prev => (String(prev || '').trim() ? prev : val));
+          setGpsAccuracy(accuracy);
           // Since we use high accuracy, it's effectively GPS/HighPrecision
           setGpsSource('GPS');
           setGpsFetching(false);
@@ -908,6 +911,7 @@ export default function RegistersScreen({ navigation }) {
 
     setGpsAuto('');
     setGpsManual('');
+    setGpsAccuracy(null);
     setGpsSource('');
 
     setPictureAssets([]);
@@ -947,6 +951,7 @@ export default function RegistersScreen({ navigation }) {
       setGirth(String(row?.girth ?? ''));
       setCondition('');
       setConditionId(row?.condition_id ?? null);
+      setTakkiNumber(String(row?.takki_number ?? row?.takki_no ?? row?.takki ?? ''));
     }
 
     if (activeType === 'pole') {
@@ -1084,6 +1089,24 @@ export default function RegistersScreen({ navigation }) {
     const { lat: autoLat, lng: autoLng } = parseLatLng(gpsAuto);
     const { lat: manualLat, lng: manualLng } = parseLatLng(gpsManual);
 
+    if (gpsAccuracy !== null && gpsAccuracy > 10) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
+    }
+
+    const isEnumNotPresent = activeType === 'enumeration' && String(condition || '').toLowerCase().includes('not present');
+    const requiredMinImages = isEnumNotPresent ? 0 : 2;
+
+    const totalPics = (pictureAssets || []).length + (uploadedImageUrls || []).length;
+    if (totalPics < requiredMinImages) {
+      return Alert.alert(
+        'Images Required',
+        'Minimum 2 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree',
+      );
+    }
+
     // Prepare attachment metadata for ApiService
     const uploadPath = UPLOAD_PATHS[activeType] || UPLOAD_PATHS.enumeration;
     const attachments = (pictureAssets || []).map((a, idx) => ({
@@ -1118,6 +1141,10 @@ export default function RegistersScreen({ navigation }) {
       if (!chosenSpeciesId) return Alert.alert('Missing', 'species_id is required');
       if (!chosenConditionId) return Alert.alert('Missing', 'condition_id is required');
 
+      if (!isEnumNotPresent && !String(girth || '').trim()) {
+        return Alert.alert('Missing', 'Girth is required');
+      }
+
       const rdNum = Number(String(rdKm || '').replace(/[^\d.]+/g, ''));
       const rdKmNumber = Number.isFinite(rdNum) ? rdNum : 0;
 
@@ -1125,12 +1152,13 @@ export default function RegistersScreen({ navigation }) {
         name_of_site_id: Number(nameOfSiteId),
         rd_km: rdKmNumber,
         species_id: Number(chosenSpeciesId),
-        girth: girth ? String(girth) : '',
+        girth: girth ? String(girth) : '0',
         condition_id: Number(chosenConditionId),
         auto_lat: autoLat,
         auto_long: autoLng,
         manual_lat: manualLat,
         manual_long: manualLng,
+        takki_number: String(takkiNumber || '').trim(),
         pictures: initialPictures, // ApiService will append new ones
       };
     }
@@ -1255,7 +1283,7 @@ export default function RegistersScreen({ navigation }) {
         { key: 'rd', label: 'RD/KM', width: 110 },
         { key: 'species', label: 'Species', width: 200 },
         { key: 'condition', label: 'Condition', width: 160 },
-        { key: 'takki', label: 'Takki #', width: 120 },
+        { key: 'takki', label: 'MDR No. (Takki No.)', width: 120 },
         { key: 'disputed', label: 'Disputed', width: 110 },
         { key: 'auto', label: 'Auto GPS', width: 180 },
         { key: 'manual', label: 'Manual GPS', width: 180 },
@@ -1271,7 +1299,7 @@ export default function RegistersScreen({ navigation }) {
         { key: 'rds_from', label: 'RDS From', width: 110 },
         { key: 'rds_to', label: 'RDS To', width: 110 },
         { key: 'species_multi', label: 'Species : Count', width: 260 },
-        { key: 'takki', label: 'Takki #', width: 120 },
+        { key: 'takki', label: 'MDR No. (Takki No.)', width: 120 },
         { key: 'disputed', label: 'Disputed', width: 110 },
         { key: 'auto', label: 'Auto GPS', width: 180 },
         { key: 'manual', label: 'Manual GPS', width: 180 },
@@ -1286,7 +1314,7 @@ export default function RegistersScreen({ navigation }) {
       { key: 'avg', label: 'Avg KM', width: 110 },
       { key: 'plants', label: 'Plants', width: 110 },
       { key: 'species_multi', label: 'Species : Count', width: 260 },
-      { key: 'takki', label: 'Takki #', width: 120 },
+      { key: 'takki', label: 'MDR No. (Takki No.)', width: 120 },
       { key: 'disputed', label: 'Disputed', width: 110 },
       { key: 'auto', label: 'Auto GPS', width: 180 },
       { key: 'manual', label: 'Manual GPS', width: 180 },
@@ -1337,6 +1365,47 @@ export default function RegistersScreen({ navigation }) {
           })}
         </View>
       </LinearGradient>
+
+      {/* --- Offline Sync Bar --- */}
+      {offlineStatus.count > 0 && (
+        <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: COLORS.warning,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={() => offlineService.openSyncModal()}
+            disabled={offlineStatus.syncing}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {offlineStatus.syncing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="cloud-offline" size={20} color="#fff" />
+              )}
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                {offlineStatus.syncing
+                  ? 'Syncing records...'
+                  : `${offlineStatus.count} Offline Records Pending`}
+              </Text>
+            </View>
+            {!offlineStatus.syncing && (
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Main */}
       <ScrollView
@@ -1623,46 +1692,7 @@ export default function RegistersScreen({ navigation }) {
                   </Text>
                 </View>
 
-                {/* --- Offline Sync Bar --- */}
-                {offlineStatus.count > 0 && (
-                  <View style={{ marginBottom: 16 }}>
-                    <TouchableOpacity
-                      style={{
-                        backgroundColor: COLORS.warning,
-                        paddingVertical: 12,
-                        paddingHorizontal: 16,
-                        borderRadius: 12,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 2 },
-                        shadowOpacity: 0.1,
-                        shadowRadius: 4,
-                        elevation: 3,
-                      }}
-                      onPress={() => offlineService.processQueue()}
-                      disabled={offlineStatus.syncing}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        {offlineStatus.syncing ? (
-                          <ActivityIndicator size="small" color="#fff" />
-                        ) : (
-                          <Ionicons name="cloud-offline" size={20} color="#fff" />
-                        )}
-                        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
-                          {offlineStatus.syncing
-                            ? 'Syncing records...'
-                            : `${offlineStatus.count} Offline Records Pending`}
-                        </Text>
-                      </View>
-                      {!offlineStatus.syncing && (
-                        <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
-                          <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                )}
+
 
                 <TouchableOpacity
                   style={{ marginTop: 16, backgroundColor: COLORS.danger, paddingVertical: 14, borderRadius: 14, alignItems: 'center' }}
@@ -1706,6 +1736,7 @@ export default function RegistersScreen({ navigation }) {
                 {/* TYPE SPECIFIC */}
                 {activeType === 'enumeration' && (
                   <>
+                    <FormRow label="MDR No. (Takki No.)" value={takkiNumber} onChangeText={setTakkiNumber} placeholder='e.g. "A34"' />
                     <FormRow label="RD/KM" value={rdKm} onChangeText={setRdKm} placeholder="e.g. 5.5" />
                     <DropdownRow
                       label={speciesLoading ? 'Species (Loading...)' : 'Species'}
@@ -1726,7 +1757,12 @@ export default function RegistersScreen({ navigation }) {
                       disabled={speciesLoading}
                       required
                     />
-                    <FormRow label="Girth" value={girth} onChangeText={setGirth} placeholder='e.g. "24"' />
+                    <FormRow
+                      label={`Girth${String(condition || '').toLowerCase().includes('not present') ? ' (Optional)' : ' *'}`}
+                      value={girth}
+                      onChangeText={setGirth}
+                      placeholder='e.g. "24"'
+                    />
                     <DropdownRow
                       label={conditionLoading ? 'Condition (Loading...)' : 'Condition'}
                       value={condition}
@@ -1957,7 +1993,10 @@ export default function RegistersScreen({ navigation }) {
                       <TextInput
                         style={styles.gpsInput}
                         value={gpsManual}
-                        onChangeText={setGpsManual}
+                        onChangeText={text => {
+                          setGpsManual(text);
+                          setGpsAccuracy(null);
+                        }}
                         placeholder="lat, lng"
                         placeholderTextColor={COLORS.textLight}
                       />
@@ -1978,6 +2017,11 @@ export default function RegistersScreen({ navigation }) {
                     )}
                   </TouchableOpacity>
                   {!!gpsSource && <Text style={styles.gpsSourceText}>Source: {gpsSource}</Text>}
+                  {gpsAccuracy !== null && (
+                    <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                      GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Please Retry/Shake Phone)'}
+                    </Text>
+                  )}
                 </View>
 
                 {/* Images Section */}
@@ -1988,7 +2032,12 @@ export default function RegistersScreen({ navigation }) {
                       justifyContent: 'space-between',
                       alignItems: 'center',
                     }}>
-                    <Text style={styles.sectionLabel}>Pictures</Text>
+                    <View>
+                      <Text style={styles.sectionLabel}>Pictures</Text>
+                      <Text style={{ fontSize: 11, color: COLORS.danger, fontWeight: '700', marginBottom: 2 }}>
+                        * Min 3 images: 1 Takki (MDR No.), 1 Complete Tree
+                      </Text>
+                    </View>
                     <Text style={{ fontSize: 12, color: COLORS.textLight }}>
                       {pictureAssets.length + uploadedImageUrls.length} selected
                     </Text>

@@ -25,7 +25,7 @@ import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import FormRow from '../components/FormRow';
 import { apiService } from '../services/ApiService';
 
-const API_HOST = 'http://be.lte.gisforestry.com';
+const API_HOST = 'https://be.punjabtreeenumeration.com';
 
 // ✅ CURL endpoint you shared
 const SUPERDARI_URL = `${API_HOST}/afforestation/superdari`;
@@ -62,7 +62,7 @@ const parseLatLng = str => {
   const s = String(str || '').trim();
   if (!s) return { lat: null, lng: null };
   const parts = s
-    .split(/,|\s+/)
+    .split(/[,\s]+/)
     .map(p => p.trim())
     .filter(Boolean);
   if (parts.length < 2) return { lat: null, lng: null };
@@ -91,6 +91,7 @@ export default function AfforestationSuperdariScreen({ navigation, route }) {
   // GPS
   const [autoGps, setAutoGps] = useState('');
   const [manualGps, setManualGps] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsLoading, setGpsLoading] = useState(false);
   const lastGpsRequestAtRef = useRef(0);
 
@@ -209,9 +210,10 @@ export default function AfforestationSuperdariScreen({ navigation, route }) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
+        setGpsAccuracy(accuracy);
         if (alsoFillManual) setManualGps(value);
         setGpsLoading(false);
       },
@@ -219,7 +221,7 @@ export default function AfforestationSuperdariScreen({ navigation, route }) {
         setGpsLoading(false);
         Alert.alert('Location Error', err.message);
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
     );
   }, []);
 
@@ -257,6 +259,13 @@ export default function AfforestationSuperdariScreen({ navigation, route }) {
     // GPS
     const { lat: autoLat, lng: autoLng } = parseLatLng(autoGps);
     const { lat: manualLat, lng: manualLng } = parseLatLng(manualGps || autoGps);
+
+    if (gpsAccuracy !== null && gpsAccuracy > 10) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
+    }
 
     // images upload via attachments
     const safeFileName = `aff_super_${afforestationId}_${Date.now()}`;
@@ -376,6 +385,11 @@ export default function AfforestationSuperdariScreen({ navigation, route }) {
             <Text style={styles.smallLabel}>Auto GPS</Text>
             <View style={styles.gpsBox}>
               <Text style={styles.gpsText}>{autoGps || '—'}</Text>
+              {gpsAccuracy !== null && (
+                <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                  GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
+                </Text>
+              )}
               {gpsLoading && <ActivityIndicator size="small" color={COLORS.primary} />}
             </View>
 
@@ -383,7 +397,10 @@ export default function AfforestationSuperdariScreen({ navigation, route }) {
             <TextInput
               style={styles.input}
               value={manualGps}
-              onChangeText={setManualGps}
+              onChangeText={text => {
+                setManualGps(text);
+                setGpsAccuracy(null);
+              }}
               placeholder="31.5205, 74.3588"
               placeholderTextColor={COLORS.textLight}
             />

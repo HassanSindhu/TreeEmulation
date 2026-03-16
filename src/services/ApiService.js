@@ -93,25 +93,43 @@ class ApiService {
                     });
                 }
 
-                const res = await fetch(url, { method, body: JSON.stringify(finalBody), headers: finalHeaders });
-                const json = await res.json();
+                let res;
+                try {
+                    res = await fetch(url, { method, body: JSON.stringify(finalBody), headers: finalHeaders });
+                } catch (networkError) {
+                    console.warn(`[Api] ${method} network failed. Saving to offline queue.`, networkError);
+                    if (options.skipQueue) throw networkError;
+                    await offlineService.addToQueue(url, method, body, finalHeaders, options.attachments);
+                    return { status: true, offline: true, message: 'Network failed. Saved to offline queue.' };
+                }
+
+                const json = await res.json().catch(() => null);
 
                 if (!res.ok) {
-                    throw new Error(json?.message || json?.error || `Request failed (${res.status})`);
+                    const errorMsg = json?.message || json?.error || `Request failed (${res.status})`;
+
+                    // If it's a 5xx error, we might want to queue it as the server is down, unless it's login.
+                    // But for 4xx (400, 401, 403, 404, 409, 422), it's a permanent client/auth error. NEVER queue 4xx.
+                    if (res.status >= 500 && !options.skipQueue) {
+                        console.warn(`[Api] Server error ${res.status}. Saving to offline queue.`);
+                        await offlineService.addToQueue(url, method, body, finalHeaders, options.attachments);
+                        return { status: true, offline: true, message: 'Server unavailable. Saved to offline queue.' };
+                    }
+
+                    throw new Error(errorMsg);
                 }
+
                 return json;
 
             } catch (e) {
-                console.warn(`[Api] ${method} failed. Saving to offline queue.`, e);
-                // Optional: fallback to queue if online request fails randomly?
-                // For now, only queue if explicitly offline or if user wants that behavior.
-                // Let's assume if network fetch throws, we queue it.
-
-                await offlineService.addToQueue(url, method, body, finalHeaders, options.attachments);
-                return { status: true, offline: true, message: 'Network failed. Saved to offline queue.' };
+                // If it's a manually thrown Error (like the 4xx check above or processAttachments error), bubble it up
+                throw e;
             }
         } else {
             // Offline
+            if (options.skipQueue) {
+                throw new Error('You are offline.');
+            }
             await offlineService.addToQueue(url, method, body, finalHeaders, options.attachments);
             return { status: true, offline: true, message: 'You are offline. Data saved locally and will sync later.' };
         }

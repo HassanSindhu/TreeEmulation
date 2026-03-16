@@ -36,7 +36,7 @@ const { height } = Dimensions.get('window');
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
-const API_HOST = 'http://be.lte.gisforestry.com';
+const API_HOST = 'https://be.punjabtreeenumeration.com';
 
 // Theme Colors
 const COLORS = {
@@ -164,6 +164,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
   // GPS
   const [autoGps, setAutoGps] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsList, setGpsList] = useState(['']);
   const [gpsLoading, setGpsLoading] = useState(false);
 
@@ -393,7 +394,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     const s = String(str || '').trim();
     if (!s) return { lat: null, lng: null };
     const parts = s
-      .split(/,|\s+/)
+      .split(/[,\s]+/)
       .map(p => p.trim())
       .filter(Boolean);
     if (parts.length < 2) return { lat: null, lng: null };
@@ -887,6 +888,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     setSpeciesCounts({});
 
     setAutoGps('');
+    setGpsAccuracy(null);
     setGpsList(['']);
     setPictureUris([]);
   };
@@ -900,9 +902,10 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     setGpsLoading(true);
     Geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         const value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         setAutoGps(value);
+        setGpsAccuracy(accuracy);
 
         fillAutoIntoManual(value);
 
@@ -912,7 +915,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         setGpsLoading(false);
         if (!silent) Alert.alert('Location Error', err.message + '\nEnsure GPS is ON and you are outdoors.');
       },
-      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
     );
   };
 
@@ -1112,7 +1115,9 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     launchImageLibrary(
       {
         mediaType: 'photo',
-        quality: 0.7,
+        quality: 0.6,
+        maxWidth: 1024,
+        maxHeight: 1024,
         selectionLimit: 0,
       },
       onImagePickerResult,
@@ -1131,7 +1136,9 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     launchCamera(
       {
         mediaType: 'photo',
-        quality: 0.7,
+        quality: 0.6,
+        maxWidth: 1024,
+        maxHeight: 1024,
         saveToPhotos: true,
         cameraType: 'back',
       },
@@ -1272,8 +1279,14 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       return;
     }
     if (!speciesIds.length) {
-      Alert.alert('Missing', 'Please select at least 1 species.');
-      return;
+      return Alert.alert('Invalid ID', 'Please fill the form correctly.');
+    }
+
+    if (gpsAccuracy !== null && gpsAccuracy > 10) {
+      return Alert.alert(
+        'Poor GPS Accuracy',
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+      );
     }
 
     // Validate per-species counts
@@ -1293,8 +1306,22 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     const lastManual = cleanGps.length ? cleanGps[cleanGps.length - 1] : autoGps;
     const { lat: manualLat, lng: manualLng } = parseLatLng(lastManual || autoGps);
 
+    if (!autoLat || !autoLng) {
+      if (!manualLat || !manualLng) {
+        return Alert.alert('Missing Location', 'Auto GPS coordinates could not be fetched. Please enter Manual GPS coordinates (Latitude and Longitude) to proceed.');
+      }
+    }
+
     const av = Number(String(avgMilesKm).replace(/[^\d.]+/g, ''));
     const avMilesKmNum = Number.isFinite(av) ? av : 0;
+
+    const totalPics = (pictureUris || []).length + (existingPictures || []).length;
+    if (totalPics < 2) {
+      return Alert.alert(
+        'Images Required',
+        'Minimum 2 images must be added:\n• 1 image of Takki (MDR No.)\n• 1 complete image of the Tree',
+      );
+    }
 
     // Prepare attachments
     const safeFileName = `aff_${Number(nameOfSiteId)}_${Date.now()}`;
@@ -1558,6 +1585,47 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* --- Offline Sync Bar --- */}
+      {offlineStatus.count > 0 && (
+        <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: COLORS.warning,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={() => offlineService.openSyncModal()}
+            disabled={offlineStatus.syncing}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {offlineStatus.syncing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="cloud-offline" size={20} color="#fff" />
+              )}
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                {offlineStatus.syncing
+                  ? 'Syncing records...'
+                  : `${offlineStatus.count} Offline Records Pending`}
+              </Text>
+            </View>
+            {!offlineStatus.syncing && (
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Main Content */}
       <ScrollView
@@ -2452,6 +2520,11 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
                     <View style={styles.gpsCardBody}>
                       <Text style={styles.gpsValue}>{autoGps || 'No coordinates fetched'}</Text>
+                      {gpsAccuracy !== null && (
+                        <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                          GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
+                        </Text>
+                      )}
                       {gpsLoading && (
                         <View style={styles.gpsLoading}>
                           <ActivityIndicator size="small" color={COLORS.primary} />
@@ -2500,6 +2573,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                           onChangeText={text => {
                             const copy = [...gpsList];
                             copy[index] = text;
+                            if (text && text !== autoGps) setGpsAccuracy(null);
                             setGpsList(copy);
                           }}
                           placeholder="31.5204, 74.3587"
@@ -2519,6 +2593,9 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
 
                 <View style={styles.formSection}>
                   <Text style={styles.formSectionTitle}>Images</Text>
+                  <Text style={{ fontSize: 11, color: COLORS.danger, fontWeight: '700', marginBottom: 8 }}>
+                    * Minimum 2 images: 1 Takki (MDR No.), 1 Complete Tree
+                  </Text>
 
                   <TouchableOpacity style={styles.imageUploadButton} onPress={pickImage} activeOpacity={0.7}>
                     <View style={styles.imageUploadContent}>

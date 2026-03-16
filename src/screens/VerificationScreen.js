@@ -23,6 +23,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import colors from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/ApiService';
+import { offlineService } from '../services/OfflineService';
 
 const COLORS = {
   primary: '#059669',
@@ -44,7 +45,7 @@ const COLORS = {
 const { width } = Dimensions.get('window');
 
 const STORAGE_TOKEN = 'AUTH_TOKEN';
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 // LIST APIs
 const ENUM_LIST_URL = `${API_BASE}/enum/enumeration`;
@@ -53,6 +54,7 @@ const POLECROP_LIST_URL = `${API_BASE}/enum/pole-crop`; // ✅ added
 
 // VERIFY API (same endpoint, different table_name)
 const VERIFY_URL = `${API_BASE}/enum/verification`;
+const REJECT_BY_RECORD_URL = `${API_BASE}/enum/verification/reject-by-record`;
 
 // Modules (same)
 const MODULES = [
@@ -161,6 +163,20 @@ export default function VerificationScreen({ navigation }) {
   // Filters (same behaviour)
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('Pending'); // default Pending
+
+  const [offlineStatus, setOfflineStatus] = useState({ count: 0, syncing: false });
+
+  useEffect(() => {
+    const update = () => {
+      setOfflineStatus({
+        count: offlineService.queue.length,
+        syncing: offlineService.isSyncing
+      });
+    };
+    const unsub = offlineService.subscribe(update);
+    update();
+    return unsub;
+  }, []);
 
   // Filter modal (UI like Registers)
   const [filterModalVisible, setFilterModalVisible] = useState(false);
@@ -325,10 +341,12 @@ export default function VerificationScreen({ navigation }) {
     const item = detailsModal.item;
     if (!item) return;
 
-    // ✅ do not change anything if already Approved/Rejected
     // ✅ check final status for THIS user
     const currentStatus = determineItemStatus(item, role);
-    if (currentStatus === 'Verified' || currentStatus === 'Rejected') {
+    const isDFO = role === 'dfo' || role === 'divisionalforestofficer';
+
+    // DFO can reject even if verified. Others cannot.
+    if (currentStatus === 'Rejected' || (currentStatus === 'Verified' && !isDFO)) {
       Alert.alert('Info', 'This record is already Approved/Rejected.');
       return;
     }
@@ -341,12 +359,24 @@ export default function VerificationScreen({ navigation }) {
 
     try {
       setDetailsModal(s => ({ ...s, submitting: true }));
-      await postVerification({
-        module: detailsModal.module,
-        tableId: item.id,
-        action: 'Rejected',
-        remarks: r,
-      });
+
+      // Use specific API for DFO rejecting an already verified record
+      if (isDFO && currentStatus === 'Verified') {
+        const table_name = tableNameForModule(detailsModal.module);
+        await apiService.post(REJECT_BY_RECORD_URL, {
+          id: Number(item.id),
+          tableName: table_name,
+          remarks: r,
+        });
+      } else {
+        await postVerification({
+          module: detailsModal.module,
+          tableId: item.id,
+          action: 'Rejected',
+          remarks: r,
+        });
+      }
+
       Alert.alert('Done', 'Rejected successfully');
       closeDetails();
       fetchForModule(activeModule);
@@ -446,6 +476,16 @@ export default function VerificationScreen({ navigation }) {
     const badgeI = statusIcon(currentStatus);
 
     const isFinal = currentStatus === 'Verified' || currentStatus === 'Rejected';
+    const isDFO = role === 'dfo' || role === 'divisionalforestofficer';
+
+    let tapHintText = 'Tap to view details';
+    if (isFinal) {
+      if (currentStatus === 'Verified' && isDFO) {
+        tapHintText = 'Tap to Review / Re-Open';
+      } else {
+        tapHintText = 'Already decided (read-only)';
+      }
+    }
 
     return (
       <TouchableOpacity activeOpacity={0.85} onPress={() => openDetails(activeModule, item)}>
@@ -476,7 +516,7 @@ export default function VerificationScreen({ navigation }) {
           )}
 
           <Text style={styles.tapHint}>
-            {isFinal ? 'Already decided (read-only)' : 'Tap to view details'}
+            {tapHintText}
           </Text>
         </View>
       </TouchableOpacity>
@@ -506,7 +546,8 @@ export default function VerificationScreen({ navigation }) {
   // Fix: defined detailsAction using the new logic
   const detailsAction = detailsItem ? determineItemStatus(detailsItem, role) : null;
 
-  const detailsFinal = detailsAction === 'Verified' || detailsAction === 'Rejected';
+  const isDetailsModeDFO = role === 'dfo' || role === 'divisionalforestofficer';
+  const detailsFinal = detailsAction === 'Rejected' || (detailsAction === 'Verified' && !isDetailsModeDFO);
 
   // Filter modal handlers (UI like Registers)
   const openFilterModal = () => {
@@ -576,6 +617,47 @@ export default function VerificationScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* --- Offline Sync Bar --- */}
+      {offlineStatus.count > 0 && (
+        <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: COLORS.warning,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={() => offlineService.openSyncModal()}
+            disabled={offlineStatus.syncing}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {offlineStatus.syncing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="cloud-offline" size={20} color="#fff" />
+              )}
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                {offlineStatus.syncing
+                  ? 'Syncing records...'
+                  : `${offlineStatus.count} Offline Records Pending`}
+              </Text>
+            </View>
+            {!offlineStatus.syncing && (
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Content */}
       <View style={styles.content}>
@@ -815,17 +897,115 @@ export default function VerificationScreen({ navigation }) {
                   <Text style={styles.kvVal}>{getSiteName(detailsItem)}</Text>
                 </View>
 
-                {'rd_km' in detailsItem && (
-                  <View style={styles.kvRow}>
-                    <Text style={styles.kvKey}>RD (km)</Text>
-                    <Text style={styles.kvVal}>{String(detailsItem.rd_km ?? '-')}</Text>
-                  </View>
+                {/* --- ENUMERATION SPECIFIC --- */}
+                {detailsModal.module === 'enumeration' && (
+                  <>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Species</Text>
+                      <Text style={styles.kvVal}>
+                        {detailsItem?.species?.name || detailsItem?.species_name || '-'}
+                      </Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>RD (km)</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.rd_km ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Girth</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.girth ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Condition</Text>
+                      <Text style={styles.kvVal}>
+                        {detailsItem?.condition?.name || detailsItem?.condition_name || '-'}
+                      </Text>
+                    </View>
+                  </>
                 )}
 
+                {/* --- POLE CROP SPECIFIC --- */}
+                {detailsModal.module === 'polecrop' && (
+                  <>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>RDS From</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.rds_from ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>RDS To</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.rds_to ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvBlock}>
+                      <Text style={styles.kvKey}>Species Details</Text>
+                      <Text style={[styles.kvVal, { textAlign: 'left', maxWidth: '100%' }]}>
+                        {(() => {
+                          const list = detailsItem?.poleCropSpecies || detailsItem?.species_counts || [];
+                          if (!list.length) return 'No species data';
+                          return list
+                            .map(x => `${x?.species?.name || x?.name || 'Species'}: ${x?.count || 0}`)
+                            .join('\n');
+                        })()}
+                      </Text>
+                    </View>
+                  </>
+                )}
+
+                {/* --- AFFORESTATION SPECIFIC --- */}
+                {detailsModal.module === 'afforestation' && (
+                  <>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Avg Miles/KM</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.av_miles_km ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>No. of Plants</Text>
+                      <Text style={styles.kvVal}>{String(detailsItem?.no_of_plants ?? '-')}</Text>
+                    </View>
+                    <View style={styles.kvBlock}>
+                      <Text style={styles.kvKey}>Species Details</Text>
+                      <Text style={[styles.kvVal, { textAlign: 'left', maxWidth: '100%' }]}>
+                        {(() => {
+                          const list = detailsItem?.afforestationSpecies || detailsItem?.species_counts || [];
+                          if (!list.length) return 'No species data';
+                          return list
+                            .map(x => `${x?.species?.name || x?.name || 'Species'}: ${x?.count || 0}`)
+                            .join('\n');
+                        })()}
+                      </Text>
+                    </View>
+                  </>
+                )}
+
+                {/* --- COMMON EXTRA FIELDS --- */}
                 <View style={styles.kvRow}>
-                  <Text style={styles.kvKey}>Condition</Text>
-                  <Text style={styles.kvVal}>{detailsItem?.condition?.name || '-'}</Text>
+                  <Text style={styles.kvKey}>Disputed?</Text>
+                  <Text style={[styles.kvVal, { color: (detailsItem?.is_disputed || detailsItem?.isDisputed) ? COLORS.danger : COLORS.text }]}>
+                    {(detailsItem?.is_disputed || detailsItem?.isDisputed) ? 'YES' : 'NO'}
+                  </Text>
                 </View>
+
+                <View style={styles.kvRow}>
+                  <Text style={styles.kvKey}>Takki / MDR No.</Text>
+                  <Text style={styles.kvVal}>
+                    {detailsItem?.takki_number ?? detailsItem?.takki_no ?? detailsItem?.takki ?? '-'}
+                  </Text>
+                </View>
+
+                {(detailsItem?.auto_lat || detailsItem?.auto_long) && (
+                  <View style={styles.kvRow}>
+                    <Text style={styles.kvKey}>Auto GPS</Text>
+                    <Text style={styles.kvVal}>
+                      {detailsItem.auto_lat}, {detailsItem.auto_long}
+                    </Text>
+                  </View>
+                )}
+                {(detailsItem?.manual_lat || detailsItem?.manual_long) && (
+                  <View style={styles.kvRow}>
+                    <Text style={styles.kvKey}>Manual GPS</Text>
+                    <Text style={styles.kvVal}>
+                      {detailsItem.manual_lat}, {detailsItem.manual_long}
+                    </Text>
+                  </View>
+                )}
 
                 <View style={styles.kvRow}>
                   <Text style={styles.kvKey}>Latest Status</Text>
@@ -879,7 +1059,7 @@ export default function VerificationScreen({ navigation }) {
                 )}
 
                 {/* Reject Mode input */}
-                {detailsModal.rejectMode && !detailsFinal && (
+                {detailsModal.rejectMode && (
                   <View style={{ marginTop: 12 }}>
                     <Text style={styles.sectionTitle}>Rejection Remarks (Required)</Text>
                     <TextInput
@@ -894,7 +1074,7 @@ export default function VerificationScreen({ navigation }) {
                 )}
 
                 {/* Final status info */}
-                {detailsFinal && (
+                {detailsFinal && !detailsModal.rejectMode && (
                   <View style={styles.finalInfo}>
                     <Ionicons name="information-circle" size={18} color={COLORS.textLight} />
                     <Text style={styles.finalInfoText}>
@@ -924,18 +1104,18 @@ export default function VerificationScreen({ navigation }) {
 
               {!detailsModal.rejectMode ? (
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.rejectBtn, detailsFinal && { opacity: 0.45 }]}
+                  style={[styles.actionBtn, styles.rejectBtn, (detailsFinal && !isDetailsModeDFO) && { opacity: 0.45 }]}
                   onPress={() => setDetailsModal(s => ({ ...s, rejectMode: true }))}
-                  disabled={detailsModal.submitting || !detailsItem || detailsFinal}
+                  disabled={detailsModal.submitting || !detailsItem || (detailsFinal && !isDetailsModeDFO)}
                   activeOpacity={0.85}>
                   <Ionicons name="close-circle" size={18} color="#fff" />
                   <Text style={styles.actionBtnText}>Reject</Text>
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.rejectBtn, detailsFinal && { opacity: 0.45 }]}
+                  style={[styles.actionBtn, styles.rejectBtn, (detailsFinal && !isDetailsModeDFO) && { opacity: 0.45 }]}
                   onPress={rejectFromDetails}
-                  disabled={detailsModal.submitting || !detailsItem || detailsFinal}
+                  disabled={detailsModal.submitting || !detailsItem}
                   activeOpacity={0.85}>
                   {detailsModal.submitting ? (
                     <ActivityIndicator color="#fff" />
@@ -949,7 +1129,7 @@ export default function VerificationScreen({ navigation }) {
               )}
             </View>
 
-            {detailsModal.rejectMode && !detailsFinal && (
+            {detailsModal.rejectMode && (
               <TouchableOpacity
                 onPress={() => setDetailsModal(s => ({ ...s, rejectMode: false, remarks: '' }))}
                 style={styles.rejectCancelLink}
@@ -1463,7 +1643,7 @@ const styles = StyleSheet.create({
 //const {width} = Dimensions.get('window');
 //
 //const STORAGE_TOKEN = 'AUTH_TOKEN';
-//const API_BASE = 'http://be.lte.gisforestry.com';
+//const API_BASE = 'https://be.punjabtreeenumeration.com';
 //
 //// LIST APIs
 //const ENUM_LIST_URL = `${API_BASE}/enum/enumeration`;

@@ -5,7 +5,7 @@ import { apiService } from '../services/ApiService';
 
 const AuthContext = createContext(null);
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const STORAGE_TOKEN = 'AUTH_TOKEN';
 const STORAGE_USER = 'AUTH_USER';
 
@@ -177,7 +177,7 @@ async function postLogin(email, password) {
   // const token = await AsyncStorage.getItem('AUTH_TOKEN');
   // if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await apiService.post(`${API_BASE}/auth`, { email, password });
+  const res = await apiService.post(`${API_BASE}/auth`, { email, password }, { skipQueue: true });
 
   if (res.offline) {
     throw new Error('No internet connection. Login requires internet.');
@@ -239,13 +239,45 @@ export function AuthProvider({ children }) {
 
         if (!mounted) return;
 
-        if (savedToken) setToken(savedToken);
+        if (savedToken) {
+          try {
+            // Verify token silently
+            const res = await fetch(`${API_BASE}/auth/validate-token`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: savedToken }),
+            });
 
-        if (savedUser) {
+            if (res.status === 401 || res.status === 403) {
+              // Token definitively expired/invalid. Auto logout.
+              throw new Error('Token is expired or invalid');
+            }
+
+            const json = await res.json().catch(() => null);
+            if (res.ok && json && (json.statusCode === 401 || json.data === null)) {
+              // Sometimes backend returns 200/201 but has statusCode 401 inside json
+              if (json.statusCode === 401) throw new Error('Token is expired or invalid inside success block');
+            }
+
+            // Valid or server error / offline -> keep session
+            setToken(savedToken);
+          } catch (e) {
+            // If it's the explicit expiration error, we definitely wipe.
+            if (e.message && e.message.includes('expired')) {
+              throw e; // Break out to the main catch block to wipe data
+            }
+            // Otherwise it's just a network/offline error -> keep token and use app offline
+            console.warn('Network error while validating token, using offline mode.');
+            setToken(savedToken);
+          }
+        }
+
+        if (savedUser && mounted) {
           const parsed = JSON.parse(savedUser);
           setUser(normalizeUserProfile(parsed));
         }
       } catch (e) {
+        // Wipe if token is expired or corrupt Storage
         await AsyncStorage.multiRemove([STORAGE_TOKEN, STORAGE_USER]);
         if (mounted) {
           setToken(null);

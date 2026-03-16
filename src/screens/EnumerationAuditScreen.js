@@ -32,7 +32,7 @@ import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 
 // ---- CONDITIONS (adjust if your project has a different endpoint) ----
 const CONDITIONS_URL = `${API_BASE}/forest-tree-conditions`;
@@ -534,7 +534,7 @@ export default function EnumerationAuditScreen({ navigation, route }) {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Tree (Read Only)</Text>
           <View style={{ position: 'relative' }}>
-            <FormRow label="Takki Number" value={takkiNumber || '—'} editable={false} />
+            <FormRow label="MDR No. (Takki No.)" value={takkiNumber || '—'} editable={false} />
             <Ionicons
               name="lock-closed"
               size={16}

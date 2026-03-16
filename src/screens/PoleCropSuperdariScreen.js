@@ -1,6 +1,6 @@
 // /screens/PoleCropSuperdariScreen.js
 // ✅ NEW SCREEN: Pole Crop Superdari
-// ✅ Uses CURL: POST http://be.lte.gisforestry.com/pole-crop/superdari
+// ✅ Uses CURL: POST https://be.punjabtreeenumeration.com/pole-crop/superdari
 // ✅ Authorization: Bearer from AsyncStorage('AUTH_TOKEN')
 // ✅ Supports location (auto + manual) + pictures upload to AWS bucket
 // ✅ disposalId is optional (null allowed) as per curl
@@ -46,7 +46,7 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
-const API_BASE = 'http://be.lte.gisforestry.com';
+const API_BASE = 'https://be.punjabtreeenumeration.com';
 const AWS_Base = 'https://app.eco.gisforestry.com';
 
 // Superdari API
@@ -66,7 +66,7 @@ const parseLatLng = str => {
   const s = String(str || '').trim();
   if (!s) return { lat: null, lng: null };
   const parts = s
-    .split(/,|\s+/)
+    .split(/[,\s]+/)
     .map(p => p.trim())
     .filter(Boolean);
   if (parts.length < 2) return { lat: null, lng: null };
@@ -110,6 +110,7 @@ export default function PoleCropSuperdariScreen({ navigation, route }) {
   // GPS
   const [autoGps, setAutoGps] = useState('');
   const [manualGps, setManualGps] = useState('');
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
   const [gpsLoading, setGpsLoading] = useState(false);
 
   // Permission modal-like behavior (simple)
@@ -269,9 +270,10 @@ export default function PoleCropSuperdariScreen({ navigation, route }) {
 
     Geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         const nextAuto = formatLatLng(latitude, longitude);
         setAutoGps(nextAuto);
+        setGpsAccuracy(accuracy);
 
         setManualGps(prev => {
           const prevAuto = prevAutoGpsRef.current;
@@ -288,7 +290,7 @@ export default function PoleCropSuperdariScreen({ navigation, route }) {
         setGpsLoading(false);
         Alert.alert('Location Error', err?.message || 'Unable to fetch location.');
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+      { enableHighAccuracy: true, timeout: 60000, maximumAge: 0 },
     );
   }, [ensureLocationPermission, openSettingsSafe]);
 
@@ -367,8 +369,14 @@ export default function PoleCropSuperdariScreen({ navigation, route }) {
       }));
 
       const { lat: autoLat, lng: autoLng } = parseLatLng(autoGps);
-      const finalGps = resolveFinalGps();
-      const { lat: manualLat, lng: manualLng } = parseLatLng(finalGps);
+      const { lat: manualLat, lng: manualLng } = parseLatLng(manualGps);
+
+      if (gpsAccuracy !== null && gpsAccuracy > 10) {
+        return Alert.alert(
+          'Poor GPS Accuracy',
+          `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+        );
+      }
 
       const body = {
         poleCropId: Number(poleCropId),
@@ -500,12 +508,21 @@ export default function PoleCropSuperdariScreen({ navigation, route }) {
                   <Text style={styles.gpsLoadingText}>Fetching location...</Text>
                 </View>
               )}
+              {gpsAccuracy !== null && (
+                <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                  GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
+                </Text>
+              )}
+
             </View>
 
             <Field
               label="Manual GPS (editable)"
               value={manualGps}
-              onChangeText={setManualGps}
+              onChangeText={text => {
+                setManualGps(text);
+                setGpsAccuracy(null);
+              }}
               placeholder={autoGps || '31.3333, 74.4444'}
             />
 

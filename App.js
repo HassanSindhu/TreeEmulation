@@ -4,6 +4,7 @@ import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import RootNavigator from './src/navigation/RootNavigator';
 import colors from './src/theme/colors';
 import { AuthProvider } from './src/context/AuthContext';
+import OfflineSyncModal from './src/components/OfflineSyncModal';
 
 const navTheme = {
   ...DefaultTheme,
@@ -32,6 +33,7 @@ export default function App() {
     <AuthProvider>
       <NavigationContainer theme={navTheme}>
         <RootNavigator />
+        <OfflineSyncModal />
       </NavigationContainer>
     </AuthProvider>
   );

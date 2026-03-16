@@ -26,6 +26,7 @@
     "axios": "^1.13.2",
     "react": "19.1.1",
     "react-native": "0.82.1",
+    "react-native-background-actions": "^4.0.1",
     "react-native-calendars": "^1.1313.0",
     "react-native-image-picker": "^8.2.1",
     "react-native-linear-gradient": "^2.8.3",

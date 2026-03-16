@@ -509,8 +509,8 @@ export default function PoleCropSuperdariScreen({ navigation, route }) {
                 </View>
               )}
               {gpsAccuracy !== null && (
-                <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
-                  GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Retry)'}
+                <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                  GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
                 </Text>
               )}
 

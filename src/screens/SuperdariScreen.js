@@ -740,8 +740,8 @@ export default function SuperdariScreen({ navigation, route }) {
             </TouchableOpacity>
 
             {gpsAccuracy !== null && (
-              <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
-                Accuracy: {Math.round(gpsAccuracy)}m {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Retry)'}
+              <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                Accuracy: {Math.round(gpsAccuracy)}m {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
               </Text>
             )}
 

@@ -1165,7 +1165,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     if (gpsAccuracy !== null && gpsAccuracy > 10) {
       return Alert.alert(
         'Poor GPS Accuracy',
-        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 7 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
+        `Your device's location accuracy is ${Math.round(gpsAccuracy)} meters, which is too low (Max allowed is 10 meters).\n\nPlease shake your mobile to reset its sensors, move to a clearer area away from tall building/trees, or wait a few seconds and try fetching coordinates again.`
       );
     }
 
@@ -1394,7 +1394,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     const tkF = filters.takkiFrom !== '' ? Number(filters.takkiFrom) : null;
     const tkT = filters.takkiTo !== '' ? Number(filters.takkiTo) : null;
 
-    return serverRowsDecorated.filter(r => {
+    const result = serverRowsDecorated.filter(r => {
       if (filters.species) {
         const label = String(r?._speciesLabel || '').toLowerCase();
         if (!label.includes(String(filters.species).toLowerCase())) return false;
@@ -1464,6 +1464,28 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
       return blob.includes(q);
     });
+
+    // Sort by Takki Number (Numeric-aware)
+    result.sort((a, b) => {
+      const valA = a.takkiNumber;
+      const valB = b.takkiNumber;
+
+      if (valA == null && valB == null) return 0;
+      if (valA == null) return 1;
+      if (valB == null) return -1;
+
+      const strA = String(valA).trim();
+      const strB = String(valB).trim();
+
+      if (strA === '' && strB === '') return 0;
+      if (strA === '') return 1;
+      if (strB === '') return -1;
+
+      // LocaleCompare with numeric:true handles both "1, 2, 10" and "A1, A2, A10" correctly
+      return strA.localeCompare(strB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    return result;
   }, [serverRowsDecorated, search, filters]);
 
   // ---------- RENDER ----------
@@ -2348,8 +2370,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                       </TouchableOpacity>
                     </View>
                     {gpsAccuracy !== null && (
-                      <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
-                        GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Please Retry/Shake Phone)'}
+                      <Text style={{ marginTop: 8, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                        GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Please Retry/Shake Phone)'}
                       </Text>
                     )}
                   </View>

@@ -2146,8 +2146,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                     <View style={styles.gpsCardBody}>
                       <Text style={styles.gpsValue}>{autoGps || 'No coordinates fetched'}</Text>
                       {gpsAccuracy !== null && (
-                        <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
-                          GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Retry)'}
+                        <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                          GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
                         </Text>
                       )}
                       {gpsLoading && (

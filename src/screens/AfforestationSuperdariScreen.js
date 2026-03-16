@@ -386,8 +386,8 @@ export default function AfforestationSuperdariScreen({ navigation, route }) {
             <View style={styles.gpsBox}>
               <Text style={styles.gpsText}>{autoGps || '—'}</Text>
               {gpsAccuracy !== null && (
-                <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 7 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
-                  GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 7 ? '(Good)' : '(Poor - Retry)'}
+                <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
+                  GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Retry)'}
                 </Text>
               )}
               {gpsLoading && <ActivityIndicator size="small" color={COLORS.primary} />}

@@ -925,7 +925,7 @@ export default function SignupScreen({navigation}) {
                     placeholder="Personal Email"
                     placeholderTextColor="rgba(17,24,39,0.45)"
                     value={formData.email}
-                    onChangeText={text => setFormData(prev => ({...prev, email: text}))}
+                    onChangeText={text => setFormData(prev => ({...prev, email: text.toLowerCase()}))}
                     keyboardType="email-address"
                     autoCapitalize="none"
                   />

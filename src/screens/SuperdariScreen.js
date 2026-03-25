@@ -53,7 +53,7 @@ const SPECIES_URL = `${API_BASE}/lpe3/species`;
 const CONDITION_URL = `${API_BASE}/forest-tree-conditions`;
 
 export default function SuperdariScreen({ navigation, route }) {
-  // ✅ Now Superdari links to Tree ID (enumerationId) always.
+  // ✅ Now Superdari links to Tree ID (enumerationIzd) always.
   // disposalId is OPTIONAL (only if tree is disposed).
   const { treeId, disposalId: routeDisposalId, enumeration, isFromSite } = route.params || {};
 
@@ -86,6 +86,7 @@ export default function SuperdariScreen({ navigation, route }) {
   const [prevSpeciesId, setPrevSpeciesId] = useState(null);
   const [prevCondition, setPrevCondition] = useState('');
   const [prevConditionId, setPrevConditionId] = useState(null);
+  const [prevRdKm, setPrevRdKm] = useState('');
 
   // Master Data for Previous Data Dropdowns
   const [speciesRows, setSpeciesRows] = useState([]);
@@ -234,7 +235,8 @@ export default function SuperdariScreen({ navigation, route }) {
           s.previous_page_no ||
           s.previous_register_no ||
           s.previous_girth ||
-          s.previous_species_id
+          s.previous_species_id ||
+          s.previous_rd_km
         );
         setUsePreviousData(hasPrevData);
         if (hasPrevData) {
@@ -244,6 +246,7 @@ export default function SuperdariScreen({ navigation, route }) {
           setPrevGirth(s.previous_girth ? String(s.previous_girth) : '');
           setPrevSpeciesId(s.previous_species_id ?? null);
           setPrevConditionId(s.previous_condition_id ?? null);
+          setPrevRdKm(s.previous_rd_km ? String(s.previous_rd_km) : '');
         }
       }
 
@@ -417,6 +420,7 @@ export default function SuperdariScreen({ navigation, route }) {
           previous_girth: prevGirth ? Number(prevGirth) : null,
           previous_species_id: prevSpeciesId ? Number(prevSpeciesId) : null,
           previous_condition_id: prevConditionId ? Number(prevConditionId) : null,
+          previous_rd_km: prevRdKm ? String(prevRdKm).trim() : null,
         }
         : {}),
     };
@@ -629,6 +633,14 @@ export default function SuperdariScreen({ navigation, route }) {
                   onChangeText={setPrevGirth}
                   placeholder="e.g. 10.0"
                   keyboardType="numeric"
+                  style={{ backgroundColor: '#fff' }}
+                />
+
+                <FormRow
+                  label="Previous RD/KM"
+                  value={prevRdKm}
+                  onChangeText={setPrevRdKm}
+                  placeholder="e.g. 15"
                   style={{ backgroundColor: '#fff' }}
                 />
 

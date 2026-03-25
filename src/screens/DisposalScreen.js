@@ -105,6 +105,7 @@ export default function DisposalScreen({ navigation, route }) {
   const [prevSpeciesId, setPrevSpeciesId] = useState(null);
   const [prevCondition, setPrevCondition] = useState('');
   const [prevConditionId, setPrevConditionId] = useState(null);
+  const [prevRdKm, setPrevRdKm] = useState('');
 
   // Master Data for Previous Data Dropdowns
   const [speciesRows, setSpeciesRows] = useState([]);
@@ -225,7 +226,8 @@ export default function DisposalScreen({ navigation, route }) {
         d.previous_page_no ||
         d.previous_register_no ||
         d.previous_girth ||
-        d.previous_species_id
+        d.previous_species_id ||
+        d.previous_rd_km
       );
       setUsePreviousData(hasPrevData);
       if (hasPrevData) {
@@ -235,6 +237,7 @@ export default function DisposalScreen({ navigation, route }) {
         setPrevGirth(d.previous_girth ? String(d.previous_girth) : '');
         setPrevSpeciesId(d.previous_species_id ?? null);
         setPrevConditionId(d.previous_condition_id ?? null);
+        setPrevRdKm(d.previous_rd_km ? String(d.previous_rd_km) : '');
       }
     } catch (e) {
       // ignore
@@ -509,6 +512,7 @@ export default function DisposalScreen({ navigation, route }) {
           previous_girth: prevGirth ? Number(prevGirth) : null,
           previous_species_id: prevSpeciesId ? Number(prevSpeciesId) : null,
           previous_condition_id: prevConditionId ? Number(prevConditionId) : null,
+          previous_rd_km: prevRdKm ? String(prevRdKm).trim() : null,
         }
         : {}),
     };
@@ -712,6 +716,14 @@ export default function DisposalScreen({ navigation, route }) {
                     onChangeText={setPrevGirth}
                     placeholder="e.g. 10.0"
                     keyboardType="numeric"
+                    style={{ backgroundColor: '#fff' }}
+                  />
+
+                  <FormRow
+                    label="Previous RD/KM"
+                    value={prevRdKm}
+                    onChangeText={setPrevRdKm}
+                    placeholder="e.g. 15"
                     style={{ backgroundColor: '#fff' }}
                   />
 

@@ -744,7 +744,21 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
     const assets = res.assets || [];
     const uris = assets.map(a => a?.uri).filter(Boolean);
-    if (uris.length) setPictureUris(uris); // replace behavior
+    if (uris.length) {
+      setPictureUris(prev => {
+        const existingCount = existingPictures ? existingPictures.length : 0;
+        const totalPics = prev.length + existingCount + uris.length;
+        if (totalPics > 4) {
+          Alert.alert('Limit Reached', 'You can only upload a maximum of 4 images per record.');
+          const allowedSpace = Math.max(0, 4 - prev.length - existingCount);
+          if (allowedSpace > 0) {
+            return [...prev, ...uris.slice(0, allowedSpace)];
+          }
+          return prev;
+        }
+        return [...prev, ...uris];
+      });
+    }
   };
 
   const pickFromGallery = () => {

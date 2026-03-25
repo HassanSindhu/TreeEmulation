@@ -113,7 +113,7 @@ export default function LoginScreen({ navigation }) {
                   placeholder="Email address"
                   placeholderTextColor="rgba(17,24,39,0.45)"
                   value={email}
-                  onChangeText={setEmail}
+                  onChangeText={text => setEmail(text.toLowerCase())}
                   autoCapitalize="none"
                   keyboardType="email-address"
                   returnKeyType="next"

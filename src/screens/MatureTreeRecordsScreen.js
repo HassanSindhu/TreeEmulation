@@ -17,8 +17,8 @@ import {
   StatusBar,
   ActivityIndicator,
   PermissionsAndroid,
-  Linking,
   Switch,
+  Image,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -2432,8 +2432,9 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
                       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
                         {pictureAssets.map((a, idx) => (
-                          <View key={`${a?.uri || 'img'}_${idx}`} style={styles.thumbWrap}>
-                            <View style={styles.thumbInner}>
+                          <View key={`${a?.uri || 'img'}_${idx}`} style={[styles.thumbWrap, { overflow: 'hidden' }]}>
+                            <Image source={{ uri: a.uri }} style={{ position: 'absolute', width: '100%', height: '100%' }} resizeMode="cover" />
+                            <View style={[styles.thumbInner, { backgroundColor: 'rgba(255,255,255,0.7)' }]}>
                               <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.text }}>
                                 Img {idx + 1}
                               </Text>
@@ -2451,11 +2452,29 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                   )}
 
                   {!!uploadedImageUrls?.length && !pictureAssets?.length && (
-                    <View style={styles.uploadedPreview}>
-                      <Ionicons name="cloud-done-outline" size={16} color={COLORS.info} />
-                      <Text style={styles.uploadedPreviewText} numberOfLines={2}>
-                        Existing (Server): {uploadedImageUrls.length} file(s)
-                      </Text>
+                    <View style={{ marginTop: 10 }}>
+                      <View style={styles.uploadedPreview}>
+                        <Ionicons name="cloud-done-outline" size={16} color={COLORS.info} />
+                        <Text style={styles.uploadedPreviewText} numberOfLines={2}>
+                          Existing (Server): {uploadedImageUrls.length} file(s)
+                        </Text>
+                      </View>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
+                        {uploadedImageUrls.map((url, idx) => {
+                          const uri = typeof url === 'string' ? url : url?.url || url?.uri;
+                          if (!uri) return null;
+                          return (
+                            <View key={`uploaded_${idx}`} style={[styles.thumbWrap, { overflow: 'hidden' }]}>
+                              <Image source={{ uri }} style={{ position: 'absolute', width: '100%', height: '100%' }} resizeMode="cover" />
+                              <View style={[styles.thumbInner, { backgroundColor: 'rgba(255,255,255,0.7)' }]}>
+                                <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.text }}>
+                                  Img {idx + 1}
+                                </Text>
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </ScrollView>
                     </View>
                   )}
 

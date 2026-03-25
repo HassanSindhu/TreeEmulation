@@ -180,6 +180,7 @@ export default function VerificationScreen({ navigation }) {
 
   // Filter modal (UI like Registers)
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [fullScreenImage, setFullScreenImage] = useState(null);
   const [pendingFilters, setPendingFilters] = useState({
     module: '', // '' means keep current module
     status: '', // '' means keep current status
@@ -1074,9 +1075,9 @@ export default function VerificationScreen({ navigation }) {
                       showsHorizontalScrollIndicator={false}
                       contentContainerStyle={{ gap: 10, paddingVertical: 8 }}
                       renderItem={({ item: url }) => (
-                        <View style={styles.imageWrap}>
+                        <TouchableOpacity style={styles.imageWrap} onPress={() => setFullScreenImage(url)} activeOpacity={0.85}>
                           <Image source={{ uri: url }} style={styles.image} resizeMode="cover" />
-                        </View>
+                        </TouchableOpacity>
                       )}
                     />
                   )}
@@ -1178,6 +1179,20 @@ export default function VerificationScreen({ navigation }) {
               </TouchableOpacity>
             )}
           </View>
+        </View>
+      </Modal>
+
+      {/* Full Screen Image Modal */}
+      <Modal visible={!!fullScreenImage} transparent animationType="fade" onRequestClose={() => setFullScreenImage(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity 
+            style={{ position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 20 }} 
+            onPress={() => setFullScreenImage(null)}>
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+          {!!fullScreenImage && (
+            <Image source={{ uri: fullScreenImage }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
+          )}
         </View>
       </Modal>
     </View>

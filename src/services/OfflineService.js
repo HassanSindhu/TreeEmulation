@@ -223,25 +223,30 @@ class OfflineService {
                         // Reset status since it failed
                         item.status = 'pending';
 
-                        // Retry on 5xx or connection error (caught below).
-                        // For 4xx, differentiate:
-                        if (res.status === 401 || res.status === 403) {
-                            console.warn('Sync failed with Auth error (401/403). Keeping in queue for retry once token is fresh.');
-                            // Do not remove. Wait for next sync which will grab new token.
-                        } else if (res.status >= 400 && res.status < 500) {
-                            // 400, 404, 422 etc -> Permanent failure usually.
-                            console.warn('Sync failed with permanent client error, removing:', res.status);
+                        // Parse error message for better logging
+                        let errorDetail = `Status ${res.status}`;
+                        try {
+                            const errJson = await res.json().catch(() => null);
+                            errorDetail = errJson?.message || errJson?.error || await res.text() || errorDetail;
+                        } catch (e) { }
 
-                            // Parse error message for better logging if possible
-                            try {
-                                const errText = await res.text();
-                                console.warn('Offline Sync Error Body:', errText);
-                            } catch (e) { }
+                        // Retry on 5xx or connection error
+                        if (res.status === 401 || res.status === 403) {
+                            console.warn('Sync failed with Auth error (401/403). Keeping in queue.');
+                            // Do not remove. Wait for next sync.
+                        } else if (res.status >= 400 && res.status < 500) {
+                            // 400, 404, 422 etc -> Permanent failure.
+                            console.warn('Sync failed with permanent client error, removing:', res.status, errorDetail);
+                            
+                            Alert.alert(
+                                'Sync Failed',
+                                `A record could not be uploaded and was removed from the queue.\n\nError: ${errorDetail}`
+                            );
 
                             await this.removeFromQueue(item.id);
                         } else {
                             // 500+ -> Server error. Retry later.
-                            throw new Error(`Server Status ${res.status}`);
+                            throw new Error(`Server Error: ${errorDetail}`);
                         }
                     } else {
                         // Success!
@@ -252,6 +257,7 @@ class OfflineService {
                     console.error(`Sync item ${item.id} failed:`, e);
                     // Reset to pending so it can be picked up again
                     item.status = 'pending';
+                    item.lastError = e.message;
                 }
 
                 // Mathematical percentage fix: Calculate remaining vs initial queue size rather than loop iterations

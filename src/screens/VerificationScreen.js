@@ -1075,8 +1075,17 @@ export default function VerificationScreen({ navigation }) {
                       showsHorizontalScrollIndicator={false}
                       contentContainerStyle={{ gap: 10, paddingVertical: 8 }}
                       renderItem={({ item: url }) => (
-                        <TouchableOpacity style={styles.imageWrap} onPress={() => setFullScreenImage(url)} activeOpacity={0.85}>
-                          <Image source={{ uri: url }} style={styles.image} resizeMode="cover" />
+                        <TouchableOpacity
+                          style={styles.imageWrap}
+                          onPress={() => setFullScreenImage(url)}
+                          activeOpacity={0.85}
+                          collapsable={false}>
+                          <Image
+                            source={{ uri: url }}
+                            style={[styles.image, { borderRadius: 12 }]}
+                            resizeMode="cover"
+                            resizeMethod="resize"
+                          />
                         </TouchableOpacity>
                       )}
                     />
@@ -1191,7 +1200,7 @@ export default function VerificationScreen({ navigation }) {
             <Ionicons name="close" size={28} color="#fff" />
           </TouchableOpacity>
           {!!fullScreenImage && (
-            <Image source={{ uri: fullScreenImage }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
+            <Image source={{ uri: fullScreenImage }} style={{ width: '100%', height: '80%' }} resizeMode="contain" resizeMethod="resize" />
           )}
         </View>
       </Modal>

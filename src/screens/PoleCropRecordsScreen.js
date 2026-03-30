@@ -2228,8 +2228,24 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                           const uri = typeof img === 'string' ? img : img?.uri;
                           if (!uri) return null;
                           return (
-                            <View key={`img_${idx}`} style={{ marginRight: 10, width: 60, height: 60, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#e5e7eb' }}>
-                              <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                            <View
+                              key={`img_${idx}`}
+                              collapsable={false}
+                              style={{
+                                marginRight: 10,
+                                width: 60,
+                                height: 60,
+                                borderRadius: 8,
+                                overflow: 'hidden',
+                                borderWidth: 1,
+                                borderColor: '#e5e7eb',
+                              }}>
+                              <Image
+                                source={{ uri }}
+                                style={{ width: '100%', height: '100%', borderRadius: 8 }}
+                                resizeMode="cover"
+                                resizeMethod="resize"
+                              />
                             </View>
                           );
                         })}
@@ -2258,8 +2274,24 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                           const uri = typeof url === 'string' ? url : url?.url || url?.uri;
                           if (!uri) return null;
                           return (
-                            <View key={`exist_${idx}`} style={{ marginRight: 10, width: 60, height: 60, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#e5e7eb' }}>
-                              <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                            <View
+                              key={`exist_${idx}`}
+                              collapsable={false}
+                              style={{
+                                marginRight: 10,
+                                width: 60,
+                                height: 60,
+                                borderRadius: 8,
+                                overflow: 'hidden',
+                                borderWidth: 1,
+                                borderColor: '#e5e7eb',
+                              }}>
+                              <Image
+                                source={{ uri }}
+                                style={{ width: '100%', height: '100%', borderRadius: 8 }}
+                                resizeMode="cover"
+                                resizeMethod="resize"
+                              />
                             </View>
                           );
                         })}

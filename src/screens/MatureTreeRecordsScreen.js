@@ -17,8 +17,8 @@ import {
   StatusBar,
   ActivityIndicator,
   PermissionsAndroid,
-  Linking,
   Switch,
+  Image,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -522,7 +522,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
   const totalSelectedCount = useMemo(() => {
     const localCount = pictureAssets?.length || 0;
     const urlCount = uploadedImageUrls?.length || 0;
-    return localCount > 0 ? localCount : urlCount;
+    return localCount + urlCount;
   }, [pictureAssets, uploadedImageUrls]);
 
   const showImageSourceMenu = () => {
@@ -571,7 +571,6 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
               const assets = Array.isArray(res?.assets) ? res.assets : [];
               if (!assets.length) return;
 
-              setUploadedImageUrls([]);
               setPictureAssets(prev => {
                 const next = [...(Array.isArray(prev) ? prev : []), ...assets].slice(0, MAX_IMAGES);
                 return next;
@@ -602,11 +601,9 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
               const assets = Array.isArray(res?.assets) ? res.assets : [];
               if (!assets.length) return;
 
-              setUploadedImageUrls([]);
               setPictureAssets(prev => {
                 const base = Array.isArray(prev) ? prev : [];
-                const next = [...base, ...assets].slice(0, MAX_IMAGES);
-                return next;
+                return [...base, ...assets].slice(0, MAX_IMAGES);
               });
             },
           );
@@ -2421,21 +2418,39 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                     )}
                   </TouchableOpacity>
 
-                  {!!pictureAssets?.length && (
-                    <>
+                  {(pictureAssets.length > 0 || uploadedImageUrls.length > 0) && (
+                    <View style={{ marginTop: 10 }}>
                       <View style={styles.imagePreview}>
                         <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
                         <Text style={styles.imagePreviewText} numberOfLines={1}>
-                          Selected (Local): {pictureAssets.length} image(s)
+                          Total Selected: {totalSelectedCount} image(s)
                         </Text>
                       </View>
 
                       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
                         {pictureAssets.map((a, idx) => (
-                          <View key={`${a?.uri || 'img'}_${idx}`} style={styles.thumbWrap}>
-                            <View style={styles.thumbInner}>
+                          <View
+                            key={`local_${idx}`}
+                            collapsable={false}
+                            style={[styles.thumbWrap, { overflow: 'hidden' }]}>
+                            <Image
+                              source={{ uri: a.uri }}
+                              style={{
+                                position: 'absolute',
+                                width: '100%',
+                                height: '100%',
+                                borderRadius: 14,
+                              }}
+                              resizeMode="cover"
+                              resizeMethod="resize"
+                            />
+                            <View
+                              style={[
+                                styles.thumbInner,
+                                { backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 14 },
+                              ]}>
                               <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.text }}>
-                                Img {idx + 1}
+                                New {idx + 1}
                               </Text>
                             </View>
                             <TouchableOpacity
@@ -2446,16 +2461,38 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                             </TouchableOpacity>
                           </View>
                         ))}
+                        {uploadedImageUrls.map((url, idx) => {
+                          const uri = typeof url === 'string' ? url : url?.url || url?.uri;
+                          if (!uri) return null;
+                          return (
+                            <View
+                              key={`uploaded_${idx}`}
+                              collapsable={false}
+                              style={[styles.thumbWrap, { overflow: 'hidden' }]}>
+                              <Image
+                                source={{ uri }}
+                                style={{
+                                  position: 'absolute',
+                                  width: '100%',
+                                  height: '100%',
+                                  borderRadius: 14,
+                                }}
+                                resizeMode="cover"
+                                resizeMethod="resize"
+                              />
+                              <View
+                                style={[
+                                  styles.thumbInner,
+                                  { backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 14 },
+                                ]}>
+                                <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.primary }}>
+                                  Old {idx + 1}
+                                </Text>
+                              </View>
+                            </View>
+                          );
+                        })}
                       </ScrollView>
-                    </>
-                  )}
-
-                  {!!uploadedImageUrls?.length && !pictureAssets?.length && (
-                    <View style={styles.uploadedPreview}>
-                      <Ionicons name="cloud-done-outline" size={16} color={COLORS.info} />
-                      <Text style={styles.uploadedPreviewText} numberOfLines={2}>
-                        Existing (Server): {uploadedImageUrls.length} file(s)
-                      </Text>
                     </View>
                   )}
 

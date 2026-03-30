@@ -18,6 +18,7 @@ import {
   RefreshControl,
   PermissionsAndroid,
   Linking,
+  Image,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -2607,7 +2608,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                     </View>
                   </TouchableOpacity>
 
-                  {pictureUris.length > 0 && (
+                   {pictureUris.length > 0 && (
                     <View style={styles.imagePreview}>
                       <View style={styles.imagePreviewHeader}>
                         <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
@@ -2615,9 +2616,33 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                           {pictureUris.length} image{pictureUris.length !== 1 ? 's' : ''} selected
                         </Text>
                       </View>
-                      <Text style={styles.imagePreviewText} numberOfLines={1}>
-                        Ready for upload
-                      </Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
+                        {pictureUris.map((img, idx) => {
+                          const uri = typeof img === 'string' ? img : img?.uri;
+                          if (!uri) return null;
+                          return (
+                            <View
+                              key={`img_${idx}`}
+                              collapsable={false}
+                              style={{
+                                marginRight: 10,
+                                width: 60,
+                                height: 60,
+                                borderRadius: 8,
+                                overflow: 'hidden',
+                                borderWidth: 1,
+                                borderColor: '#e5e7eb',
+                              }}>
+                              <Image
+                                source={{ uri }}
+                                style={{ width: '100%', height: '100%', borderRadius: 8 }}
+                                resizeMode="cover"
+                                resizeMethod="resize"
+                              />
+                            </View>
+                          );
+                        })}
+                      </ScrollView>
                     </View>
                   )}
 
@@ -2637,9 +2662,33 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                           Keeping existing images ({existingPictures.length})
                         </Text>
                       </View>
-                      <Text style={styles.imagePreviewText} numberOfLines={1}>
-                        Select new images only if you want to replace them
-                      </Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
+                        {existingPictures.map((url, idx) => {
+                          const uri = typeof url === 'string' ? url : url?.url || url?.uri;
+                          if (!uri) return null;
+                          return (
+                            <View
+                              key={`exist_${idx}`}
+                              collapsable={false}
+                              style={{
+                                marginRight: 10,
+                                width: 60,
+                                height: 60,
+                                borderRadius: 8,
+                                overflow: 'hidden',
+                                borderWidth: 1,
+                                borderColor: '#e5e7eb',
+                              }}>
+                              <Image
+                                source={{ uri }}
+                                style={{ width: '100%', height: '100%', borderRadius: 8 }}
+                                resizeMode="cover"
+                                resizeMethod="resize"
+                              />
+                            </View>
+                          );
+                        })}
+                      </ScrollView>
                     </View>
                   )}
                 </View>

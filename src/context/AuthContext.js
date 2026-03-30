@@ -1,5 +1,6 @@
 // /context/AuthContext.js
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, useRef } from 'react';
+import { AppState, DeviceEventEmitter } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiService } from '../services/ApiService';
 
@@ -227,6 +228,54 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
   const [booting, setBooting] = useState(true);
+  const appState = useRef(AppState.currentState);
+
+  const validateCurrentSession = async () => {
+    const savedToken = await AsyncStorage.getItem(STORAGE_TOKEN);
+    if (!savedToken) return;
+    try {
+      const res = await fetch(`${API_BASE}/auth/validate-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: savedToken }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        throw new Error('Token is expired or invalid');
+      }
+      const json = await res.json().catch(() => null);
+      if (res.ok && json && (json.statusCode === 401 || json.data === null)) {
+        if (json.statusCode === 401) throw new Error('Token is expired or invalid inside success block');
+      }
+    } catch (e) {
+      if (e.message && e.message.includes('expired')) {
+        await AsyncStorage.multiRemove([STORAGE_TOKEN, STORAGE_USER]);
+        setToken(null);
+        setUser(null);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const authListener = DeviceEventEmitter.addListener('auth_unauthorized', () => {
+      // API call got a 401 -> force logout
+      AsyncStorage.multiRemove([STORAGE_TOKEN, STORAGE_USER]).then(() => {
+        setToken(null);
+        setUser(null);
+      });
+    });
+
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        validateCurrentSession();
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => {
+      authListener.remove();
+      subscription.remove();
+    };
+  }, []);
 
   // Restore session
   useEffect(() => {

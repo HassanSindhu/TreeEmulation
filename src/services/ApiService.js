@@ -1,6 +1,7 @@
 
 import { offlineService } from './OfflineService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DeviceEventEmitter } from 'react-native';
 
 class ApiService {
     async getToken() {
@@ -27,6 +28,14 @@ class ApiService {
                     const json = await res.json();
                     await offlineService.cacheResponse(url, json);
                     return json;
+                }
+                if (res.status === 401 || res.status === 403) {
+                    const json = await res.json().catch(() => null);
+                    if (json && json.statusCode === 401) {
+                         DeviceEventEmitter.emit('auth_unauthorized');
+                    } else if (!json) {
+                         DeviceEventEmitter.emit('auth_unauthorized');
+                    }
                 }
             } catch (e) {
                 console.warn(`[Api] GET ${url} failed, checking cache. Error:`, e);
@@ -114,6 +123,12 @@ class ApiService {
                         console.warn(`[Api] Server error ${res.status}. Saving to offline queue.`);
                         await offlineService.addToQueue(url, method, body, finalHeaders, options.attachments);
                         return { status: true, offline: true, message: 'Server unavailable. Saved to offline queue.' };
+                    }
+
+                    if (res.status === 401 || res.status === 403) {
+                        if ((json && json.statusCode === 401) || !json) {
+                             DeviceEventEmitter.emit('auth_unauthorized');
+                        }
                     }
 
                     throw new Error(errorMsg);

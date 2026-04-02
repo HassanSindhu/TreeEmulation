@@ -641,6 +641,37 @@ export default function AfforestationDisposalScreen({ navigation, route }) {
                   <Text style={styles.modalBtnSecondaryText}>Choose from Gallery</Text>
                 </TouchableOpacity>
 
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: 'transparent',
+                    borderWidth: 1,
+                    borderColor: COLORS.danger,
+                    borderRadius: 12,
+                    paddingVertical: 13,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    marginTop: 4,
+                  }}
+                  onPress={() => {
+                    Alert.alert(
+                      'App Closing on Camera?',
+                      'If the app closes or restarts when you take a photo, Android is force-killing it to save battery.\n\nPlease tap "Fix Settings", find TreeEnum, and set it to "Unrestricted" or "Don\'t Optimize".',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { 
+                          text: 'Fix Settings', 
+                          onPress: () => Linking.sendIntent('android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS') 
+                        }
+                      ]
+                    );
+                  }}
+                  activeOpacity={0.85}>
+                  <Ionicons name="warning-outline" size={18} color={COLORS.danger} />
+                  <Text style={{ color: COLORS.danger, fontWeight: '800', fontSize: 13 }}>Fix Camera Crash</Text>
+                </TouchableOpacity>
+
                 <TouchableOpacity onPress={() => setImagePickerModal(false)} style={styles.modalCancel} activeOpacity={0.85}>
                   <Text style={styles.modalCancelText}>Cancel</Text>
                 </TouchableOpacity>

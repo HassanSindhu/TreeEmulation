@@ -622,6 +622,23 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
   }, [fetchSpecies]);
 
   // Toggle species and keep counts in sync
+  const speciesLabel = useMemo(() => {
+    if (!speciesIds.length) return 'Select species';
+
+    const idsNum = speciesIds.map(Number).filter(n => Number.isFinite(n));
+    const namesFromMaster = speciesRows
+      .filter(x => idsNum.includes(Number(x.id)))
+      .map(x => x.name)
+      .filter(Boolean);
+
+    if (namesFromMaster.length) {
+      return namesFromMaster.length > 2
+        ? `${namesFromMaster.slice(0, 2).join(', ')} +${namesFromMaster.length - 2} more`
+        : namesFromMaster.join(', ');
+    }
+    return `${speciesIds.length} selected`;
+  }, [speciesIds, speciesRows]);
+
   const toggleSpeciesId = id => {
     const num = Number(id);
     if (!Number.isFinite(num)) return;

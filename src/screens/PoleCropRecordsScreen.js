@@ -89,6 +89,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
   // Keep server pictures when editing (do not overwrite with [])
   const [existingPictures, setExistingPictures] = useState([]);
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerImage, setViewerImage] = useState(null);
 
   // Search + filters (light)
   const [search, setSearch] = useState('');

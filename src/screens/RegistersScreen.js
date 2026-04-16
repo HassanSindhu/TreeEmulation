@@ -1,6 +1,6 @@
 // /screens/RegistersScreen.js
 import { offlineService } from '../services/OfflineService';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, memo, useRef } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,9 @@ import {
   KeyboardAvoidingView,
   TextInput,
   Image,
+  FlatList,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -32,6 +35,10 @@ import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 /**
  * IMPORTANT
@@ -182,6 +189,113 @@ const pickLatestPoleCropSpeciesPerId = arr => {
     }));
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RegisterRow — defined OUTSIDE for performance (memoization).
+// ─────────────────────────────────────────────────────────────────────────────
+const RegisterRow = memo(function RegisterRow({ item, index, tableColumns, onEdit, onAudit, onReject, activeType, styles, COLORS }) {
+  const r = item;
+  const ui = r._ui;
+  const idx = r._idx;
+
+  const disputedColor = r?._isDisputed ? COLORS.danger : COLORS.success;
+  const disputedBg = r?._isDisputed ? 'rgba(239,68,68,0.10)' : 'rgba(22,163,74,0.10)';
+
+  const getCellValue = key => {
+    switch (key) {
+      case 'id': return String(r?.id ?? '—');
+      case 'site': return String(r?.name_of_site_id ?? r?.nameOfSiteId ?? '—');
+      case 'rd': return String(r?.rd_km ?? '—');
+      case 'rds_from': return String(r?.rds_from ?? '—');
+      case 'rds_to': return String(r?.rds_to ?? '—');
+      case 'avg': return String(r?.av_miles_km ?? '—');
+      case 'plants': return String(r?.no_of_plants ?? '—');
+      case 'species': return String(r?._speciesSingleLabel ?? '—');
+      case 'species_multi': return String(r?._speciesMultiLabel ?? '—');
+      case 'condition': return String(r?._conditionSingleLabel ?? '—');
+      case 'takki': return String(r?._takki ?? '—');
+      case 'auto': return String(r?._autoGps ?? '—');
+      case 'manual': return String(r?._manualGps ?? '—');
+      default: return '—';
+    }
+  };
+
+  return (
+    <View style={[
+      styles.tableRow,
+      idx % 2 === 0 ? styles.rowEven : styles.rowOdd,
+      ui.isRejected ? styles.rowRejected : null,
+    ]}>
+      {tableColumns.map(col => {
+        if (col.key === 'status') {
+          return (
+            <View key="status" style={[styles.tdCell, { width: col.width }]}>
+              {ui.isRejected ? (
+                <TouchableOpacity activeOpacity={0.85} onPress={() => onReject(r)}>
+                  <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+                    <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+                    <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
+                      {ui.statusText}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+                  <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+                  <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
+                    {ui.statusText}
+                  </Text>
+                </View>
+              )}
+            </View>
+          );
+        }
+
+        if (col.key === 'actions') {
+          return (
+            <View key="actions" style={[styles.tdCell, styles.actionsCell, { width: col.width }]}>
+              {ui.showEdit && (
+                <TouchableOpacity style={styles.actionButton} onPress={() => onEdit(r)}>
+                  <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
+                  <Text style={styles.actionButtonText}>Edit</Text>
+                </TouchableOpacity>
+              )}
+
+              {ui.isFinalApproved && (
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.auditButton]}
+                  onPress={() => onAudit(activeType, r)}
+                  activeOpacity={0.7}>
+                  <Ionicons name="clipboard-outline" size={16} color={COLORS.primary} />
+                  <Text style={[styles.actionButtonText, { color: COLORS.primary }]}>Update</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        }
+
+        if (col.key === 'disputed') {
+          return (
+            <View key="disputed" style={[styles.tdCell, { width: col.width }]}>
+              <View style={[styles.disputedPill, { backgroundColor: disputedBg, borderColor: `${disputedColor}35` }]}>
+                <View style={[styles.disputedDot, { backgroundColor: disputedColor }]} />
+                <Text style={[styles.disputedText, { color: disputedColor }]}>{r?._disputedLabel ?? 'NO'}</Text>
+              </View>
+            </View>
+          );
+        }
+
+        return (
+          <View key={col.key} style={[styles.tdCell, { width: col.width }]}>
+            <Text style={styles.tdText} numberOfLines={2}>
+              {getCellValue(col.key)}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+});
+
 export default function RegistersScreen({ navigation }) {
   // ---------- TOP TAB ----------
   const [activeType, setActiveType] = useState('aff');
@@ -195,6 +309,24 @@ export default function RegistersScreen({ navigation }) {
   // ---------- SEARCH + FILTER ----------
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(STATUS_FILTERS.ALL);
+
+  // Fullscreen Table Scroll State
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const scrollOffset = useRef(0);
+
+  const handleTableScroll = useCallback((e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const diff = y - scrollOffset.current;
+    
+    if (y > 40 && diff > 10 && headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(false);
+    } else if ((diff < -15 || y <= 0) && !headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(true);
+    }
+    scrollOffset.current = y;
+  }, [headerVisible]);
 
   // ---------- REJECTION REASON MODAL ----------
   const [rejectionModal, setRejectionModal] = useState({
@@ -250,6 +382,9 @@ export default function RegistersScreen({ navigation }) {
   const [uploadingImages, setUploadingImages] = useState(false);
   const [uploadedImageUrls, setUploadedImageUrls] = useState([]);
 
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerImage, setViewerImage] = useState(null);
+  
   // ---------- FORM FIELDS (per type) ----------
   // Enumeration fields
   const [nameOfSiteId, setNameOfSiteId] = useState('');
@@ -805,43 +940,46 @@ export default function RegistersScreen({ navigation }) {
     });
   }, [serverRows, speciesById, conditionById]);
 
-  // ---------- FILTERED ----------
-  const filteredRows = useMemo(() => {
+  // ---------- FILTERED + UI PRE-COMPUTE ----------
+  const filteredRowsWithUi = useMemo(() => {
     const q = search.trim().toLowerCase();
 
-    return decoratedRows.filter(r => {
-      if (statusFilter !== STATUS_FILTERS.ALL) {
-        const tags = getStatusTags(r);
-        if (!tags.includes(statusFilter)) return false;
-      }
+    return decoratedRows
+      .filter(r => {
+        if (statusFilter !== STATUS_FILTERS.ALL) {
+          const tags = getStatusTags(r);
+          if (!tags.includes(statusFilter)) return false;
+        }
 
-      if (!q) return true;
+        if (!q) return true;
 
-      const ui = deriveRowUi(r);
-      const blob = [
-        r?.id,
-        r?.nameOfSiteId,
-        r?.name_of_site_id,
-        r?.rd_km,
-        r?.rds_from,
-        r?.rds_to,
-        r?.av_miles_km,
-        r?.no_of_plants,
-        r?._speciesSingleLabel,
-        r?._conditionSingleLabel,
-        r?._speciesMultiLabel,
-        r?._takki,
-        r?._disputedLabel,
-        r?._autoGps,
-        r?._manualGps,
-        ui?.statusText,
-      ]
-        .filter(v => v !== null && v !== undefined)
-        .join(' ')
-        .toLowerCase();
+        const ui = deriveRowUi(r);
+        const blob = [
+          r?.id,
+          r?.name_of_site_id,
+          r?.rd_km,
+          r?.rds_from,
+          r?.rds_to,
+          r?.av_miles_km,
+          r?.no_of_plants,
+          r?._speciesSingleLabel,
+          r?._conditionSingleLabel,
+          r?._speciesMultiLabel,
+          r?._takki,
+          r?._disputedLabel,
+          ui?.statusText,
+        ]
+          .filter(v => v != null)
+          .join(' ')
+          .toLowerCase();
 
-      return blob.includes(q);
-    });
+        return blob.includes(q);
+      })
+      .map((r, idx) => ({
+        ...r,
+        _idx: idx,
+        _ui: deriveRowUi(r)
+      }));
   }, [decoratedRows, search, statusFilter]);
 
   // ---------- Multi Species UI Helpers ----------
@@ -946,11 +1084,17 @@ export default function RegistersScreen({ navigation }) {
 
     if (activeType === 'enumeration') {
       setRdKm(String(row?.rd_km ?? ''));
-      setSpeciesSingle('');
+      
+      const currentSpecies = (speciesRows || []).find(s => String(s.id) === String(row?.species_id))?.name || '';
+      setSpeciesSingle(currentSpecies);
       setSpeciesSingleId(row?.species_id ?? null);
+      
       setGirth(String(row?.girth ?? ''));
-      setCondition('');
+      
+      const currentCondition = (conditionRows || []).find(c => String(c.id) === String(row?.condition_id))?.name || '';
+      setCondition(currentCondition);
       setConditionId(row?.condition_id ?? null);
+      
       setTakkiNumber(String(row?.takki_number ?? row?.takki_no ?? row?.takki ?? ''));
     }
 
@@ -1323,6 +1467,23 @@ export default function RegistersScreen({ navigation }) {
     ];
   }, [activeType]);
 
+  // Stable Render Item
+  const renderRow = useCallback(({ item, index }) => (
+    <RegisterRow
+      item={item}
+      index={index}
+      tableColumns={tableColumns}
+      onEdit={openEditForm}
+      onAudit={goToAudit}
+      onReject={openRejectionPopup}
+      activeType={activeType}
+      styles={styles}
+      COLORS={COLORS}
+    />
+  ), [tableColumns, openEditForm, goToAudit, openRejectionPopup, activeType, styles]);
+
+  const keyExtractor = useCallback((item) => String(item.id ?? item._idx), []);
+
   // ---------- RENDER ----------
   return (
     <View style={styles.screen}>
@@ -1407,104 +1568,101 @@ export default function RegistersScreen({ navigation }) {
         </View>
       )}
 
-      {/* Main */}
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.contentContainer}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => fetchServer({ refresh: true })}
-            colors={[COLORS.primary]}
-            tintColor={COLORS.primary}
-          />
-        }>
-        {/* Search */}
-        <View style={styles.searchSection}>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search by ID, site, species, takki, status..."
-              placeholderTextColor={COLORS.textLight}
-              style={styles.searchInput}
-            />
-            {!!search && (
-              <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
-                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Status Filters */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterBar} contentContainerStyle={styles.filterBarContent}>
-            {[
-              { key: STATUS_FILTERS.ALL, label: 'All' },
-              { key: STATUS_FILTERS.PENDING, label: 'Pending' },
-              { key: STATUS_FILTERS.VERIFIED, label: 'Verified' },
-              { key: STATUS_FILTERS.DISAPPROVED, label: 'Disapproved' },
-              { key: STATUS_FILTERS.DISPOSED, label: 'Disposed' },
-              { key: STATUS_FILTERS.SUPERDARI, label: 'Superdari' },
-            ].map(item => {
-              const active = statusFilter === item.key;
-              return (
-                <TouchableOpacity
-                  key={item.key}
-                  activeOpacity={0.85}
-                  onPress={() => setStatusFilter(item.key)}
-                  style={[styles.filterChip, active ? styles.filterChipActive : styles.filterChipInactive]}>
-                  <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : styles.filterChipTextInactive]}>
-                    {item.label}
-                  </Text>
+      {/* Full-width vertical-only top section */}
+      {headerVisible && (
+        <View>
+          {/* Search */}
+          <View style={styles.searchSection}>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by ID, site, species, takki, status..."
+                placeholderTextColor={COLORS.textLight}
+                style={styles.searchInput}
+              />
+              {!!search && (
+                <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
+                  <Ionicons name="close-circle" size={20} color={COLORS.danger} />
                 </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* Stats */}
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{filteredRows.length}</Text>
-            <Text style={styles.statLabel}>Filtered</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{serverRows.length}</Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Ionicons name={loading ? 'refresh' : 'checkmark-circle'} size={24} color={loading ? COLORS.warning : COLORS.success} />
-            <Text style={styles.statLabel}>{loading ? 'Loading...' : 'Ready'}</Text>
-          </View>
-        </View>
-
-        {/* Error */}
-        {!!serverError && (
-          <View style={styles.errorCard}>
-            <View style={styles.errorHeader}>
-              <Ionicons name="warning" size={20} color={COLORS.danger} />
-              <Text style={styles.errorTitle}>Server Error</Text>
+              )}
             </View>
-            <Text style={styles.errorMessage}>{serverError}</Text>
-            <TouchableOpacity style={styles.errorButton} onPress={() => fetchServer({ refresh: true })}>
-              <Text style={styles.errorButtonText}>Retry Connection</Text>
-            </TouchableOpacity>
-          </View>
-        )}
 
-        {/* Table */}
+            {/* Status Filters */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterBar} contentContainerStyle={styles.filterBarContent}>
+              {[
+                { key: STATUS_FILTERS.ALL, label: 'All' },
+                { key: STATUS_FILTERS.PENDING, label: 'Pending' },
+                { key: STATUS_FILTERS.VERIFIED, label: 'Verified' },
+                { key: STATUS_FILTERS.DISAPPROVED, label: 'Disapproved' },
+                { key: STATUS_FILTERS.DISPOSED, label: 'Disposed' },
+                { key: STATUS_FILTERS.SUPERDARI, label: 'Superdari' },
+              ].map(item => {
+                const active = statusFilter === item.key;
+                return (
+                  <TouchableOpacity
+                    key={item.key}
+                    activeOpacity={0.85}
+                    onPress={() => setStatusFilter(item.key)}
+                    style={[styles.filterChip, active ? styles.filterChipActive : styles.filterChipInactive]}>
+                    <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : styles.filterChipTextInactive]}>
+                      {item.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Stats */}
+          <View style={styles.statsCard}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{filteredRowsWithUi.length}</Text>
+              <Text style={styles.statLabel}>Filtered</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{serverRows.length}</Text>
+              <Text style={styles.statLabel}>Total</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons name={loading ? 'refresh' : 'checkmark-circle'} size={24} color={loading ? COLORS.warning : COLORS.success} />
+              <Text style={styles.statLabel}>{loading ? 'Loading...' : 'Ready'}</Text>
+            </View>
+          </View>
+
+          {/* Error */}
+          {!!serverError && (
+            <View style={styles.errorCard}>
+              <View style={styles.errorHeader}>
+                <Ionicons name="warning" size={20} color={COLORS.danger} />
+                <Text style={styles.errorTitle}>Server Error</Text>
+              </View>
+              <Text style={styles.errorMessage}>{serverError}</Text>
+              <TouchableOpacity style={styles.errorButton} onPress={() => fetchServer({ refresh: true })}>
+                <Text style={styles.errorButtonText}>Retry Connection</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Table Header Section */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Records</Text>
+              <Text style={styles.sectionSubtitle}>
+                {filteredRowsWithUi.length} of {serverRows.length}
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Main Container — Horizontal ScrollView wrapping vertical FlatList */}
+      <View style={{ flex: 1, paddingHorizontal: 20, paddingBottom: 20 }}>
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Records</Text>
-            <Text style={styles.sectionSubtitle}>
-              {filteredRows.length} of {serverRows.length}
-            </Text>
-          </View>
-
-          {filteredRows.length === 0 ? (
+          {filteredRowsWithUi.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="folder-open-outline" size={64} color={COLORS.border} />
               <Text style={styles.emptyTitle}>No Records Found</Text>
@@ -1522,133 +1680,32 @@ export default function RegistersScreen({ navigation }) {
                   ))}
                 </View>
 
-                {/* Rows */}
-                {filteredRows.map((r, idx) => {
-                  const ui = deriveRowUi(r);
-
-                  const disputedColor = r?._isDisputed ? COLORS.danger : COLORS.success;
-                  const disputedBg = r?._isDisputed ? 'rgba(239,68,68,0.10)' : 'rgba(22,163,74,0.10)';
-
-                  const getCellValue = key => {
-                    switch (key) {
-                      case 'id':
-                        return String(r?.id ?? '—');
-                      case 'site':
-                        return String(r?.name_of_site_id ?? r?.nameOfSiteId ?? '—');
-                      case 'rd':
-                        return String(r?.rd_km ?? '—');
-                      case 'rds_from':
-                        return String(r?.rds_from ?? '—');
-                      case 'rds_to':
-                        return String(r?.rds_to ?? '—');
-                      case 'avg':
-                        return String(r?.av_miles_km ?? '—');
-                      case 'plants':
-                        return String(r?.no_of_plants ?? '—');
-                      case 'species':
-                        return String(r?._speciesSingleLabel ?? '—');
-                      case 'species_multi':
-                        return String(r?._speciesMultiLabel ?? '—');
-                      case 'condition':
-                        return String(r?._conditionSingleLabel ?? '—');
-                      case 'takki':
-                        return String(r?._takki ?? '—');
-                      case 'auto':
-                        return String(r?._autoGps ?? '—');
-                      case 'manual':
-                        return String(r?._manualGps ?? '—');
-                      default:
-                        return '—';
-                    }
-                  };
-
-                  return (
-                    <View
-                      key={String(r?.id ?? idx)}
-                      style={[
-                        styles.tableRow,
-                        idx % 2 === 0 ? styles.rowEven : styles.rowOdd,
-                        ui.isRejected ? styles.rowRejected : null,
-                      ]}>
-                      {tableColumns.map(col => {
-                        if (col.key === 'status') {
-                          return (
-                            <View key="status" style={[styles.tdCell, { width: col.width }]}>
-                              {ui.isRejected ? (
-                                <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
-                                  <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
-                                    <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
-                                    <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
-                                      {ui.statusText}
-                                    </Text>
-                                  </View>
-                                </TouchableOpacity>
-                              ) : (
-                                <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
-                                  <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
-                                  <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
-                                    {ui.statusText}
-                                  </Text>
-                                </View>
-                              )}
-                            </View>
-                          );
-                        }
-
-                        if (col.key === 'actions') {
-                          return (
-                            <View key="actions" style={[styles.tdCell, styles.actionsCell, { width: col.width }]}>
-                              {/* Edit (only if rejected/disapproved as you already do) */}
-                              {ui.showEdit ? (
-                                <TouchableOpacity style={styles.actionButton} onPress={() => openEditForm(r)}>
-                                  <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
-                                  <Text style={styles.actionButtonText}>Edit</Text>
-                                </TouchableOpacity>
-                              ) : (
-                                <View style={{ width: 0, height: 0 }} />
-                              )}
-
-                              {/* Update (only if Final Approved) */}
-                              {ui.isFinalApproved && (
-                                <TouchableOpacity
-                                  style={[styles.actionButton, styles.auditButton]}
-                                  onPress={() => goToAudit(activeType, r)}
-                                  activeOpacity={0.7}>
-                                  <Ionicons name="clipboard-outline" size={16} color={COLORS.primary} />
-                                  <Text style={[styles.actionButtonText, { color: COLORS.primary }]}>Update</Text>
-                                </TouchableOpacity>
-                              )}
-                            </View>
-                          );
-                        }
-
-                        if (col.key === 'disputed') {
-                          return (
-                            <View key="disputed" style={[styles.tdCell, { width: col.width }]}>
-                              <View style={[styles.disputedPill, { backgroundColor: disputedBg, borderColor: `${disputedColor}35` }]}>
-                                <View style={[styles.disputedDot, { backgroundColor: disputedColor }]} />
-                                <Text style={[styles.disputedText, { color: disputedColor }]}>{r?._disputedLabel ?? 'NO'}</Text>
-                              </View>
-                            </View>
-                          );
-                        }
-
-                        return (
-                          <View key={col.key} style={[styles.tdCell, { width: col.width }]}>
-                            <Text style={styles.tdText} numberOfLines={2}>
-                              {getCellValue(col.key)}
-                            </Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  );
-                })}
+                {/* virtualized FlatList — handles thousands of entries smoothly */}
+                <FlatList
+                  data={filteredRowsWithUi}
+                  keyExtractor={keyExtractor}
+                  renderItem={renderRow}
+                  onScroll={handleTableScroll}
+                  scrollEventThrottle={16}
+                  initialNumToRender={10}
+                  maxToRenderPerBatch={15}
+                  windowSize={5}
+                  removeClippedSubviews={true}
+                  refreshControl={
+                    <RefreshControl
+                      refreshing={refreshing}
+                      onRefresh={() => fetchServer({ refresh: true })}
+                      colors={[COLORS.primary]}
+                      tintColor={COLORS.primary}
+                    />
+                  }
+                  getItemLayout={(_, index) => ({ length: 64, offset: 64 * index, index })}
+                />
               </View>
             </ScrollView>
           )}
         </View>
-      </ScrollView>
+      </View>
 
 
 
@@ -1977,113 +2034,137 @@ export default function RegistersScreen({ navigation }) {
                   </View>
                 )}
 
-                {/* GPS + Images blocks restored */}
-                <View style={{ marginTop: 16 }}>
-                  <Text style={styles.sectionLabel}>GPS Coordinates</Text>
-
-                  <View style={styles.gpsRow}>
-                    <View style={styles.gpsBox}>
-                      <Text style={styles.gpsLabel}>Auto</Text>
-                      <Text style={styles.gpsValue} numberOfLines={1}>
-                        {gpsAuto || 'Not fetched'}
-                      </Text>
-                    </View>
-                    <View style={styles.gpsBox}>
-                      <Text style={styles.gpsLabel}>Manual</Text>
-                      <TextInput
-                        style={styles.gpsInput}
-                        value={gpsManual}
-                        onChangeText={text => {
-                          setGpsManual(text);
-                          setGpsAccuracy(null);
-                        }}
-                        placeholder="lat, lng"
-                        placeholderTextColor={COLORS.textLight}
-                      />
-                    </View>
+                {/* GPS SECTION */}
+                <View style={{ marginTop: 10, padding: 18, backgroundColor: 'rgba(5, 150, 105, 0.03)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(5, 150, 105, 0.1)' }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                    <Text style={styles.sectionLabel}>GPS Location</Text>
+                    <TouchableOpacity
+                      style={{
+                        backgroundColor: COLORS.secondary,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingHorizontal: 12,
+                        paddingVertical: 8,
+                        borderRadius: 10,
+                        gap: 6,
+                      }}
+                      onPress={fetchLocationSmart}
+                      disabled={gpsFetching}>
+                      {gpsFetching ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <>
+                          <Ionicons name="navigate" size={16} color="#fff" />
+                          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>Fetch GPS</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
                   </View>
 
-                  <TouchableOpacity
-                    style={styles.gpsBtn}
-                    onPress={() => fetchLocationSmart()}
-                    disabled={gpsFetching}>
-                    {gpsFetching ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <>
-                        <Ionicons name="location" size={18} color="#fff" />
-                        <Text style={styles.gpsBtnText}>Fetch Current Location</Text>
-                      </>
+                  <View style={{ marginBottom: 12 }}>
+                    <View style={styles.gpsRow}>
+                      <View style={styles.gpsBox}>
+                        <Text style={styles.gpsLabel}>System Value</Text>
+                        <Text style={styles.gpsValue} numberOfLines={1}>{gpsAuto || '—'}</Text>
+                      </View>
+                    </View>
+                    {gpsAccuracy !== null && (
+                      <Text style={{ marginTop: 4, fontSize: 12, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '600' }}>
+                        Accuracy: {Math.round(gpsAccuracy)}m {gpsAccuracy <= 10 ? '(Good)' : '(Low)'}
+                      </Text>
                     )}
-                  </TouchableOpacity>
-                  {!!gpsSource && <Text style={styles.gpsSourceText}>Source: {gpsSource}</Text>}
-                  {gpsAccuracy !== null && (
-                    <Text style={{ marginTop: 6, fontSize: 13, color: gpsAccuracy <= 10 ? '#16a34a' : '#dc2626', fontWeight: '500' }}>
-                      GPS Accuracy: {Math.round(gpsAccuracy)} meters {gpsAccuracy <= 10 ? '(Good)' : '(Poor - Please Retry/Shake Phone)'}
+                  </View>
+
+                  <FormRow
+                    label="Manual Override (lat, long)"
+                    value={gpsManual}
+                    onChangeText={t => {
+                      setGpsManual(t);
+                      setGpsAccuracy(null);
+                      setGpsSource(String(t || '').trim() ? 'MANUAL' : (gpsAuto ? 'GPS' : ''));
+                    }}
+                    placeholder="e.g. 31.5203, 74.3587"
+                  />
+
+                  <View style={styles.finalGpsPreview}>
+                    <Text style={styles.finalGpsLabel}>Saving As:</Text>
+                    <Text style={styles.finalGpsValue}>
+                      {(gpsManual || '').trim() || (gpsAuto || '').trim() || 'No coordinates'}
                     </Text>
+                  </View>
+                </View>
+
+                {/* IMAGES SECTION */}
+                <View style={{ marginTop: 20, marginBottom: 20 }}>
+                  <TouchableOpacity
+                    style={styles.addImgBtn}
+                    onPress={pickImage}
+                    disabled={uploadingImages}>
+                    <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 16, fontWeight: '800', color: COLORS.text }}>Add Images</Text>
+                      <Text style={{ fontSize: 12, color: COLORS.textLight }}>
+                        Capture takki, complete tree, etc. ({pictureAssets.length + uploadedImageUrls.length} selected)
+                      </Text>
+                    </View>
+                    {uploadingImages && <ActivityIndicator size="small" color={COLORS.primary} />}
+                  </TouchableOpacity>
+
+                  {(pictureAssets.length > 0 || uploadedImageUrls.length > 0) && (
+                    <View style={{ marginTop: 16 }}>
+                      <View style={styles.imagePreview}>
+                        <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                        <Text style={styles.imagePreviewText}>Total: {pictureAssets.length + uploadedImageUrls.length} images selected</Text>
+                      </View>
+
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
+                        {pictureAssets.map((a, idx) => (
+                          <View key={`new_${idx}`} style={styles.thumbWrap}>
+                            <TouchableOpacity 
+                              activeOpacity={0.9} 
+                              style={{ width: '100%', height: '100%' }}
+                              onPress={() => {
+                                setViewerImage(a.uri);
+                                setViewerVisible(true);
+                              }}>
+                              <Image source={{ uri: a.uri }} style={{ position: 'absolute', width: '100%', height: '100%', borderRadius: 14 }} />
+                            </TouchableOpacity>
+                            <View style={[styles.thumbInner, { backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 14 }]}>
+                              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.text }}>New {idx + 1}</Text>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.thumbClose}
+                              onPress={() => setPictureAssets(prev => prev.filter((_, i) => i !== idx))}>
+                              <Ionicons name="close-circle" size={18} color={COLORS.danger} />
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                        {uploadedImageUrls.map((url, idx) => (
+                          <View key={`old_${idx}`} style={styles.thumbWrap}>
+                            <TouchableOpacity 
+                              activeOpacity={0.9} 
+                              style={{ width: '100%', height: '100%' }}
+                              onPress={() => {
+                                setViewerImage(url);
+                                setViewerVisible(true);
+                              }}>
+                              <Image source={{ uri: url }} style={{ position: 'absolute', width: '100%', height: '100%', borderRadius: 14 }} />
+                            </TouchableOpacity>
+                            <View style={[styles.thumbInner, { backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 14 }]}>
+                              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.primary }}>Old {idx + 1}</Text>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.thumbClose}
+                              onPress={() => setUploadedImageUrls(prev => prev.filter((_, i) => i !== idx))}>
+                              <Ionicons name="close-circle" size={18} color={COLORS.danger} />
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </ScrollView>
+                    </View>
                   )}
                 </View>
 
-                {/* Images Section */}
-                <View style={{ marginTop: 20, marginBottom: 20 }}>
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}>
-                    <View>
-                      <Text style={styles.sectionLabel}>Pictures</Text>
-                      <Text style={{ fontSize: 11, color: COLORS.danger, fontWeight: '700', marginBottom: 2 }}>
-                        * Min 3 images: 1 Takki (MDR No.), 1 Complete Tree
-                      </Text>
-                    </View>
-                    <Text style={{ fontSize: 12, color: COLORS.textLight }}>
-                      {pictureAssets.length + uploadedImageUrls.length} selected
-                    </Text>
-                  </View>
-
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    style={styles.imgScroll}>
-                    {/* Uploaded Urls (Edit Mode) */}
-                    {uploadedImageUrls.map((url, i) => (
-                      <View key={`exist_${i}`} style={styles.imgThumb}>
-                        <Image source={{ uri: url }} style={styles.imgThumbImg} />
-                        <View style={styles.imgBadge}>
-                          <Text style={styles.imgBadgeText}>Saved</Text>
-                        </View>
-                        <TouchableOpacity
-                          style={styles.imgRemove}
-                          onPress={() => {
-                            setUploadedImageUrls(prev => prev.filter((_, idx) => idx !== i));
-                          }}>
-                          <Ionicons name="close" size={12} color="#fff" />
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-
-                    {/* New Assets */}
-                    {pictureAssets.map((asset, i) => (
-                      <View key={`new_${i}`} style={styles.imgThumb}>
-                        <Image source={{ uri: asset.uri }} style={styles.imgThumbImg} />
-                        <TouchableOpacity
-                          style={styles.imgRemove}
-                          onPress={() => {
-                            setPictureAssets(prev => prev.filter((_, idx) => idx !== i));
-                          }}>
-                          <Ionicons name="close" size={12} color="#fff" />
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </ScrollView>
-
-                  <TouchableOpacity style={styles.addImgBtn} onPress={pickImage}>
-                    <Ionicons name="camera" size={20} color={COLORS.primary} />
-                    <Text style={styles.addImgText}>Add / Pick Images</Text>
-                  </TouchableOpacity>
-                </View>
               </ScrollView>
 
               <View style={styles.editModalFooter}>
@@ -2113,6 +2194,18 @@ export default function RegistersScreen({ navigation }) {
       </Modal>
 
       <FullScreenLoader visible={offlineStatus.syncing} />
+
+      {/* Full-Screen Image Viewer */}
+      <Modal visible={viewerVisible} transparent animationType="fade" onRequestClose={() => setViewerVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity style={{ position: 'absolute', top: 50, right: 30, zIndex: 999 }} onPress={() => setViewerVisible(false)}>
+            <Ionicons name="close-circle" size={40} color="#fff" />
+          </TouchableOpacity>
+          {viewerImage && (
+            <Image source={{ uri: viewerImage }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2456,34 +2549,72 @@ const styles = StyleSheet.create({
   gpsBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
   gpsSourceText: { textAlign: 'center', marginTop: 8, fontSize: 12, color: COLORS.success, fontWeight: '700' },
 
-  // Images Style
-  imgScroll: { flexDirection: 'row', marginVertical: 12 },
-  imgThumb: { width: 100, height: 100, borderRadius: 12, marginRight: 10, overflow: 'hidden', position: 'relative' },
-  imgThumbImg: { width: '100%', height: '100%', resizeMode: 'cover' },
-  imgBadge: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.6)', padding: 4, alignItems: 'center' },
-  imgBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
-  imgRemove: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    backgroundColor: 'rgba(239,68,68,0.9)',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
+  // GPS Override Styles
+  finalGpsPreview: {
+    marginTop: 14,
+    padding: 12,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: COLORS.primary,
   },
+  finalGpsLabel: { fontSize: 11, fontWeight: '800', color: COLORS.primary, textTransform: 'uppercase', marginBottom: 2 },
+  finalGpsValue: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+
+  // Images Style Upgrade
+  imagePreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(22, 163, 74, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(22, 163, 74, 0.2)',
+    borderRadius: 12,
+    padding: 10,
+    gap: 8,
+  },
+  imagePreviewText: { flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.success },
+  
   addImgBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#fff',
     borderWidth: 2,
     borderColor: COLORS.primary,
     borderStyle: 'dashed',
-    borderRadius: 14,
-    paddingVertical: 16,
-    gap: 8,
-    backgroundColor: 'rgba(5, 150, 105, 0.04)',
+    borderRadius: 18,
+    padding: 16,
+    gap: 12,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
-  addImgText: { fontSize: 14, fontWeight: '800', color: COLORS.primary },
+  thumbWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: 14,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  thumbInner: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    paddingVertical: 2,
+    alignItems: 'center',
+  },
+  thumbClose: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    zIndex: 10,
+  },
 });

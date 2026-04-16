@@ -18,6 +18,8 @@ import {
   Image,
   Linking,
   PermissionsAndroid,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -33,6 +35,10 @@ import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
@@ -89,6 +95,26 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
   // Keep server pictures when editing (do not overwrite with [])
   const [existingPictures, setExistingPictures] = useState([]);
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerImage, setViewerImage] = useState(null);
+
+  // Fullscreen Table Scroll State
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const scrollOffset = useRef(0);
+
+  const handleTableScroll = useCallback((e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const diff = y - scrollOffset.current;
+    
+    if (y > 40 && diff > 10 && headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(false);
+    } else if ((diff < -15 || y <= 0) && !headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(true);
+    }
+    scrollOffset.current = y;
+  }, [headerVisible]);
 
   // Search + filters (light)
   const [search, setSearch] = useState('');
@@ -730,10 +756,15 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
 
   // ---------- IMAGE PICKER ----------
   const onImagePickerResult = res => {
+    console.log('[CAMERA_LAUNCH] Returned from camera.', res ? JSON.stringify(res).substring(0, 100) : 'null');
     if (!res) return;
-    if (res.didCancel) return;
+    if (res.didCancel) {
+      console.log('[CAMERA_LAUNCH] User cancelled camera.');
+      return;
+    }
 
     if (res.errorCode) {
+      console.error('[CAMERA_LAUNCH] Image picker error code:', res.errorCode, res.errorMessage);
       if (res.errorCode === 'permission' || res.errorCode === 'camera_unavailable') {
         openAppSettings();
         return;
@@ -742,31 +773,41 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       return;
     }
 
-    const assets = res.assets || [];
-    const uris = assets.map(a => a?.uri).filter(Boolean);
-    if (uris.length) {
-      setPictureUris(prev => {
-        const existingCount = existingPictures ? existingPictures.length : 0;
-        const totalPics = prev.length + existingCount + uris.length;
-        if (totalPics > 4) {
-          Alert.alert('Limit Reached', 'You can only upload a maximum of 4 images per record.');
-          const allowedSpace = Math.max(0, 4 - prev.length - existingCount);
-          if (allowedSpace > 0) {
-            return [...prev, ...uris.slice(0, allowedSpace)];
+    try {
+      const assets = res.assets || [];
+      console.log('[CAMERA_LAUNCH] Total assets returned:', assets.length);
+      const uris = assets.map(a => a?.uri).filter(Boolean);
+      if (uris.length) {
+        setPictureUris(prev => {
+          const existingCount = existingPictures ? existingPictures.length : 0;
+          const totalPics = prev.length + existingCount + uris.length;
+          console.log(`[CAMERA_LAUNCH] Adding to state. Previous length: ${prev.length}, Total will be: ${totalPics}`);
+          if (totalPics > 4) {
+            Alert.alert('Limit Reached', 'You can only upload a maximum of 4 images per record.');
+            const allowedSpace = Math.max(0, 4 - prev.length - existingCount);
+            if (allowedSpace > 0) {
+              return [...prev, ...uris.slice(0, allowedSpace)];
+            }
+            return prev;
           }
-          return prev;
-        }
-        return [...prev, ...uris];
-      });
+          return [...prev, ...uris];
+        });
+        console.log('[CAMERA_LAUNCH] Successfully updated state with new photo.');
+      }
+    } catch (stateErr) {
+      console.error('[CAMERA_LAUNCH] State update crashed:', stateErr);
+      Alert.alert('Error', 'Failed to process newly captured photo.');
     }
   };
 
   const pickFromGallery = () => {
     setImagePickerModal(false);
-    launchImageLibrary(
-      { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 0 },
-      onImagePickerResult,
-    );
+    setTimeout(() => {
+      launchImageLibrary(
+        { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, selectionLimit: 0 },
+        onImagePickerResult,
+      );
+    }, 500);
   };
 
   const takePhotoFromCamera = async () => {
@@ -776,10 +817,12 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       openAppSettings();
       return;
     }
-    launchCamera(
-      { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, saveToPhotos: true, cameraType: 'back' },
-      onImagePickerResult,
-    );
+    setTimeout(() => {
+      launchCamera(
+        { mediaType: 'photo', quality: 0.6, maxWidth: 1024, maxHeight: 1024, saveToPhotos: false, cameraType: 'back' },
+        onImagePickerResult,
+      );
+    }, 500);
   };
 
   const pickImage = () => setImagePickerModal(true);
@@ -1237,6 +1280,22 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     });
   };
 
+  const removeImageAt = idx => {
+    setPictureUris(prev => {
+      const arr = [...prev];
+      arr.splice(idx, 1);
+      return arr;
+    });
+  };
+
+  const removeOldImageAt = idx => {
+    setExistingPictures(prev => {
+      const arr = [...prev];
+      arr.splice(idx, 1);
+      return arr;
+    });
+  };
+
   // ---------- SUBMIT / EDIT ----------
   const submitPoleCropToApi = async (body, { isEditMode = false, editId = null } = {}) => {
     const token = await getAuthToken();
@@ -1324,26 +1383,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       targetFieldInBody: 'pictures'
     }));
 
-    // If Editing and no new pics, keep existing. If new pics, ApiService appends them.
-    // However, existingPictures are strings (URLs). apiService attachments result in strings.
-    // We need to pass existing URLs in the body too if we want to keep them?
-    // Logic: 
-    // If we have new pictureUris, user intends to ADD/REPLACE? 
-    // The UI says: "Select new images only if you want to replace them" (line 2069 of original)
-    // Actually lines 1252-1257 logic says: 
-    // const finalPictures = isEdit && (!pictureUris || pictureUris.length === 0) ? existingPictures : uploadedUrls;
-    // So if new pics selected, we REPLACE completely.
-
-    // In ApiService, it appends uploaded URLs to `body[field]`.
-    // So we should initialize `pictures` in body as empty array if we are replacing.
-    // If not replacing (isEdit && empty new), we put existingPictures.
-
-    let initialPictures = [];
-    if (isEdit && (!pictureUris || pictureUris.length === 0)) {
-      initialPictures = Array.isArray(existingPictures) ? existingPictures : [];
-    }
-    // If we have new pictureUris, initialPictures is [], and apiService appends new ones.
-    // If we do NOT have new pictureUris, attachments is [], initialPictures has existing.
+    // Merge old images (after user deletions) with new uploads
+    let initialPictures = isEdit ? (Array.isArray(existingPictures) ? [...existingPictures] : []) : [];
 
     const speciesPayload = speciesIds.map(sid => ({
       species_id: Number(sid),
@@ -1462,68 +1503,73 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     <View style={styles.screen}>
       <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
 
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerContainer}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-            activeOpacity={0.7}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
+      {/* Header and Sync Section - Collapsible */}
+      {headerVisible && (
+        <View>
+          {/* Header */}
+          <View style={styles.header}>
+            <View style={styles.headerContainer}>
+              <TouchableOpacity
+                style={styles.backButton}
+                onPress={() => navigation.goBack()}
+                activeOpacity={0.7}>
+                <Ionicons name="arrow-back" size={24} color="#fff" />
+              </TouchableOpacity>
 
-          <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>Pole Crop</Text>
-            {nameOfSiteId ? <Text style={styles.siteId}>Site ID: {nameOfSiteId}</Text> : null}
+              <View style={styles.headerContent}>
+                <Text style={styles.headerTitle}>Pole Crop</Text>
+                {nameOfSiteId ? <Text style={styles.siteId}>Site ID: {nameOfSiteId}</Text> : null}
+              </View>
+
+              <TouchableOpacity
+                style={styles.headerAction}
+                onPress={() => fetchPoleCropList({ refresh: true })}
+                activeOpacity={0.7}>
+                <Ionicons name="refresh" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
           </View>
 
-          <TouchableOpacity
-            style={styles.headerAction}
-            onPress={() => fetchPoleCropList({ refresh: true })}
-            activeOpacity={0.7}>
-            <Ionicons name="refresh" size={22} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* --- Offline Sync Bar --- */}
-      {offlineStatus.count > 0 && (
-        <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
-          <TouchableOpacity
-            style={{
-              backgroundColor: COLORS.warning,
-              paddingVertical: 12,
-              paddingHorizontal: 16,
-              borderRadius: 12,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.1,
-              shadowRadius: 4,
-              elevation: 3,
-            }}
-            onPress={() => offlineService.openSyncModal()}
-            disabled={offlineStatus.syncing}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {offlineStatus.syncing ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons name="cloud-offline" size={20} color="#fff" />
-              )}
-              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
-                {offlineStatus.syncing
-                  ? 'Syncing records...'
-                  : `${offlineStatus.count} Offline Records Pending`}
-              </Text>
+          {/* --- Offline Sync Bar --- */}
+          {offlineStatus.count > 0 && (
+            <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: COLORS.warning,
+                  paddingVertical: 12,
+                  paddingHorizontal: 16,
+                  borderRadius: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }}
+                onPress={() => offlineService.openSyncModal()}
+                disabled={offlineStatus.syncing}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  {offlineStatus.syncing ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="cloud-offline" size={20} color="#fff" />
+                  )}
+                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                    {offlineStatus.syncing
+                      ? 'Syncing records...'
+                      : `${offlineStatus.count} Offline Records Pending`}
+                  </Text>
+                </View>
+                {!offlineStatus.syncing && (
+                  <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                    <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
             </View>
-            {!offlineStatus.syncing && (
-              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
-                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -1531,6 +1577,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         style={styles.container}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
+        onScroll={handleTableScroll}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={serverRefreshing}
@@ -1539,24 +1587,27 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
             tintColor={COLORS.primary}
           />
         }>
-        {/* Search */}
-        <View style={styles.searchSection}>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search by ID, species, status..."
-              placeholderTextColor={COLORS.textLight}
-              style={styles.searchInput}
-            />
-            {!!search && (
-              <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
-                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
-              </TouchableOpacity>
-            )}
+
+        {/* Collapsible Search */}
+        {headerVisible && (
+          <View style={styles.searchSection}>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by ID, species, status..."
+                placeholderTextColor={COLORS.textLight}
+                style={styles.searchInput}
+              />
+              {!!search && (
+                <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
+                  <Ionicons name="close-circle" size={20} color={COLORS.danger} />
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Table */}
         <View style={styles.section}>
@@ -1839,6 +1890,39 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                   <Ionicons name="images-outline" size={20} color={COLORS.primary} />
                   <Text style={{ color: COLORS.primary, fontWeight: '800', fontSize: 15 }}>
                     Choose from Gallery
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: 'transparent',
+                    borderWidth: 1,
+                    borderColor: COLORS.danger,
+                    paddingVertical: 12,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                    flexDirection: 'row',
+                    justifyContent: 'center',
+                    gap: 10,
+                    marginTop: 8,
+                  }}
+                  onPress={() => {
+                    Alert.alert(
+                      'App Closing on Camera?',
+                      'If the app closes or restarts when you take a photo, Android is force-killing it to save battery.\n\nPlease tap "Fix Settings", find TreeEnum, and set it to "Unrestricted" or "Don\'t Optimize".',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { 
+                          text: 'Fix Settings', 
+                          onPress: () => Linking.sendIntent('android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS') 
+                        }
+                      ]
+                    );
+                  }}
+                  activeOpacity={0.8}>
+                  <Ionicons name="warning-outline" size={18} color={COLORS.danger} />
+                  <Text style={{ color: COLORS.danger, fontWeight: '700', fontSize: 13 }}>
+                    Fix Camera Crash
                   </Text>
                 </TouchableOpacity>
 
@@ -2233,19 +2317,44 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                               collapsable={false}
                               style={{
                                 marginRight: 10,
-                                width: 60,
-                                height: 60,
-                                borderRadius: 8,
+                                width: 80,
+                                height: 80,
+                                borderRadius: 12,
                                 overflow: 'hidden',
                                 borderWidth: 1,
                                 borderColor: '#e5e7eb',
                               }}>
-                              <Image
-                                source={{ uri }}
-                                style={{ width: '100%', height: '100%', borderRadius: 8 }}
-                                resizeMode="cover"
-                                resizeMethod="resize"
-                              />
+                              <TouchableOpacity 
+                                activeOpacity={0.9} 
+                                style={{ width: '100%', height: '100%' }}
+                                onPress={() => {
+                                  setViewerImage(uri);
+                                  setViewerVisible(true);
+                                }}>
+                                <Image
+                                  source={{ uri }}
+                                  style={{ width: '100%', height: '100%', borderRadius: 12 }}
+                                  resizeMode="cover"
+                                  resizeMethod="resize"
+                                />
+                                <View style={{
+                                  position: 'absolute',
+                                  bottom: 0,
+                                  left: 0,
+                                  right: 0,
+                                  backgroundColor: 'rgba(255,255,255,0.7)',
+                                  paddingVertical: 2,
+                                  alignItems: 'center'
+                                }}>
+                                  <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.text }}>New {idx + 1}</Text>
+                                </View>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={{ position: 'absolute', top: 4, right: 4, backgroundColor: '#fff', borderRadius: 10 }}
+                                onPress={() => removeImageAt(idx)}
+                                activeOpacity={0.8}>
+                                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
+                              </TouchableOpacity>
                             </View>
                           );
                         })}
@@ -2253,7 +2362,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                     </View>
                   )}
 
-                  {isEdit && pictureUris.length === 0 && existingPictures.length > 0 && (
+                  {isEdit && existingPictures.length > 0 && (
                     <View
                       style={[
                         styles.imagePreview,
@@ -2266,7 +2375,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                       <View style={styles.imagePreviewHeader}>
                         <Ionicons name="images-outline" size={16} color={COLORS.secondary} />
                         <Text style={[styles.imagePreviewTitle, { color: COLORS.secondary }]}>
-                          Keeping existing images ({existingPictures.length})
+                          Existing images ({existingPictures.length})
                         </Text>
                       </View>
                       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
@@ -2279,19 +2388,44 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
                               collapsable={false}
                               style={{
                                 marginRight: 10,
-                                width: 60,
-                                height: 60,
-                                borderRadius: 8,
+                                width: 80,
+                                height: 80,
+                                borderRadius: 12,
                                 overflow: 'hidden',
                                 borderWidth: 1,
                                 borderColor: '#e5e7eb',
                               }}>
-                              <Image
-                                source={{ uri }}
-                                style={{ width: '100%', height: '100%', borderRadius: 8 }}
-                                resizeMode="cover"
-                                resizeMethod="resize"
-                              />
+                              <TouchableOpacity 
+                                activeOpacity={0.9} 
+                                style={{ width: '100%', height: '100%' }}
+                                onPress={() => {
+                                  setViewerImage(uri);
+                                  setViewerVisible(true);
+                                }}>
+                                <Image
+                                  source={{ uri }}
+                                  style={{ width: '100%', height: '100%', borderRadius: 12 }}
+                                  resizeMode="cover"
+                                  resizeMethod="resize"
+                                />
+                                <View style={{
+                                  position: 'absolute',
+                                  bottom: 0,
+                                  left: 0,
+                                  right: 0,
+                                  backgroundColor: 'rgba(255,255,255,0.7)',
+                                  paddingVertical: 2,
+                                  alignItems: 'center'
+                                }}>
+                                  <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.primary }}>Old {idx + 1}</Text>
+                                </View>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={{ position: 'absolute', top: 4, right: 4, backgroundColor: '#fff', borderRadius: 10 }}
+                                onPress={() => removeOldImageAt(idx)}
+                                activeOpacity={0.8}>
+                                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
+                              </TouchableOpacity>
                             </View>
                           );
                         })}
@@ -2336,6 +2470,28 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
       </Modal>
 
       <FullScreenLoader visible={offlineStatus.syncing} />
+
+      {/* Image Viewer Modal */}
+      <Modal
+        visible={viewerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewerVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity 
+            style={{ position: 'absolute', top: 50, right: 30, zIndex: 999 }}
+            onPress={() => setViewerVisible(false)}>
+            <Ionicons name="close-circle" size={40} color="#fff" />
+          </TouchableOpacity>
+          {viewerImage && (
+            <Image 
+              source={{ uri: viewerImage }} 
+              style={{ width: '100%', height: '80%' }} 
+              resizeMode="contain" 
+            />
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }

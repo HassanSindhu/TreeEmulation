@@ -921,6 +921,18 @@ export default function VerificationScreen({ navigation }) {
                         {detailsItem?.condition?.name || detailsItem?.condition_name || '-'}
                       </Text>
                     </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Page No.</Text>
+                      <Text style={styles.kvVal}>
+                        {String(detailsItem?.page_no ?? detailsItem?.pageNo ?? '-')}
+                      </Text>
+                    </View>
+                    <View style={styles.kvRow}>
+                      <Text style={styles.kvKey}>Register No.</Text>
+                      <Text style={styles.kvVal}>
+                        {String(detailsItem?.register_no ?? detailsItem?.registerNo ?? '-')}
+                      </Text>
+                    </View>
                   </>
                 )}
 

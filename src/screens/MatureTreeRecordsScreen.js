@@ -1,5 +1,5 @@
 // /screens/MatureTreeRecordsScreen.js
-import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useState, useEffect, useRef, memo } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,10 @@ import {
   PermissionsAndroid,
   Switch,
   Image,
+  Linking,
+  FlatList,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -85,6 +89,102 @@ const COLORS = {
   overlay: 'rgba(15, 23, 42, 0.7)',
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TableRow — defined OUTSIDE the screen component so React.memo is effective.
+// When defined inside, the component gets a new reference on every parent render
+// and memo is completely bypassed, forcing FlatList to re-render every row.
+// ─────────────────────────────────────────────────────────────────────────────
+const TableRow = memo(function TableRow({ item, onEdit, onReject, onNavigate, enumeration, styles, COLORS }) {
+  const r = item;
+  const ui = r._ui;
+  const idx = r._idx;
+  const rowStyle = [
+    styles.tableRow,
+    idx % 2 === 0 ? styles.rowEven : styles.rowOdd,
+    ui.rowAccent === 'rejected' ? styles.rowRejected : null,
+  ];
+  return (
+    <View style={rowStyle}>
+      <View style={[styles.tdCell, { width: 80 }]}>
+        <Text style={styles.tdText} numberOfLines={1}>{String(r.id ?? '—')}</Text>
+      </View>
+      <View style={[styles.tdCell, { width: 90 }]}>
+        <Text style={styles.tdText} numberOfLines={1}>{String(r.rd_km ?? '—')}</Text>
+      </View>
+      <View style={[styles.tdCell, { width: 100 }]}>
+        <Text style={styles.tdText} numberOfLines={1}>
+          {r?.takkiNumber != null && String(r.takkiNumber).trim() !== '' ? String(r.takkiNumber) : '—'}
+        </Text>
+      </View>
+      <View style={[styles.tdCell, { width: 140 }]}>
+        <Text style={styles.tdText} numberOfLines={1}>{String(r._speciesLabel ?? '—')}</Text>
+      </View>
+      <View style={[styles.tdCell, { width: 140 }]}>
+        <Text style={styles.tdText} numberOfLines={1}>{String(r._conditionLabel ?? '—')}</Text>
+      </View>
+      <View style={[styles.tdCell, { width: 100 }]}>
+        <Text style={styles.tdText} numberOfLines={1}>{String(r.girth ?? '—')}</Text>
+      </View>
+      <View style={[styles.tdCell, { width: 180 }]}>
+        <Text style={styles.tdText} numberOfLines={1}>{String(r._autoGps ?? '—')}</Text>
+      </View>
+      <View style={[styles.tdCell, { width: 180 }]}>
+        <Text style={styles.tdText} numberOfLines={1}>{String(r._manualGps ?? '—')}</Text>
+      </View>
+      <View style={[styles.tdCell, { width: 220 }]}>
+        {ui.isRejected ? (
+          <TouchableOpacity activeOpacity={0.85} onPress={() => onReject(r)}>
+            <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+              <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+              <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>{ui.statusText}</Text>
+            </View>
+          </TouchableOpacity>
+        ) : (
+          <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
+            <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
+            <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>{ui.statusText}</Text>
+          </View>
+        )}
+      </View>
+      <View style={[styles.tdCell, styles.actionsCell, { width: 320 }]}>
+        {ui.showEdit && (
+          <TouchableOpacity style={styles.actionButton} onPress={() => onEdit(r)}>
+            <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
+            <Text style={styles.actionButtonText}>Edit</Text>
+          </TouchableOpacity>
+        )}
+        {ui.canDispose && (
+          <TouchableOpacity
+            style={[styles.actionPill, { backgroundColor: COLORS.primaryDark }]}
+            onPress={() => onNavigate('Disposal', { treeId: r.id, enumeration })}>
+            <Text style={styles.actionPillText}>Dispose</Text>
+          </TouchableOpacity>
+        )}
+        {ui.canSuperdari && (
+          <TouchableOpacity
+            style={[styles.actionPill, { backgroundColor: COLORS.info }]}
+            onPress={() => onNavigate('Superdari', { treeId: r.id, enumeration })}>
+            <Text style={styles.actionPillText}>Superdari</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      <View style={[styles.tdCell, styles.actionsCell, { width: 140 }]}>
+        {ui.isFinalApproved ? (
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: 'rgba(124, 58, 237, 0.10)' }]}
+            onPress={() => onNavigate('EnumerationAudit', { enumerationId: r.id, enumeration: r })}
+            activeOpacity={0.7}>
+            <Ionicons name="clipboard-outline" size={16} color={COLORS.info} />
+            <Text style={[styles.actionButtonText, { color: COLORS.info }]}>Update</Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={styles.tdText}>—</Text>
+        )}
+      </View>
+    </View>
+  );
+});
+
 export default function MatureTreeRecordsScreen({ navigation, route }) {
   const enumeration = route?.params?.enumeration;
 
@@ -96,6 +196,9 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
   const [modalVisible, setModalVisible] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
+  const [existingPictures, setExistingPictures] = useState([]);
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerImage, setViewerImage] = useState(null);
   const [editingServerId, setEditingServerId] = useState(null);
 
   const [offlineStatus, setOfflineStatus] = useState({ count: 0, syncing: false });
@@ -114,6 +217,25 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
   const [search, setSearch] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+
+  // Fullscreen Table Scroll State
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const scrollOffset = useRef(0);
+
+  const handleTableScroll = useCallback((e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const diff = y - scrollOffset.current;
+    
+    if (y > 40 && diff > 10 && headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(false);
+    } else if ((diff < -15 || y <= 0) && !headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(true);
+    }
+    scrollOffset.current = y;
+  }, [headerVisible]);
+
   const [filters, setFilters] = useState({
     species: '',
     condition: '',
@@ -539,85 +661,113 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
           const ok = await ensureCameraPermission();
           if (!ok) return;
 
-          launchCamera(
-            {
-              mediaType: 'photo',
-              quality: 0.6,
-              maxWidth: 1024,
-              maxHeight: 1024,
-              cameraType: 'back',
-              saveToPhotos: false,
-            },
-            res => {
-              if (res?.didCancel) return;
+          setTimeout(() => {
+            console.log('[CAMERA_LAUNCH] Attempting to start camera...');
+            try {
+              launchCamera(
+                {
+                  mediaType: 'photo',
+                  quality: 0.6,
+                  maxWidth: 1024,
+                  maxHeight: 1024,
+                  cameraType: 'back',
+                  saveToPhotos: false,
+                },
+                res => {
+                  console.log('[CAMERA_LAUNCH] Returned from camera.', res ? JSON.stringify(res).substring(0, 100) : 'null');
+                  if (res?.didCancel) {
+                    console.log('[CAMERA_LAUNCH] User cancelled camera.');
+                    return;
+                  }
 
-              if (res?.errorCode) {
-                const code = String(res.errorCode || '');
-                if (code.includes('permission')) {
-                  Alert.alert(
-                    'Camera Permission Required',
-                    'Camera permission is not allowed. Please enable it from Settings.',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Open Settings', onPress: openAppSettings },
-                    ],
-                  );
-                  return;
-                }
-                Alert.alert('Camera Error', res?.errorMessage || res.errorCode);
-                return;
-              }
+                  if (res?.errorCode) {
+                    console.error('[CAMERA_LAUNCH] Image picker error code:', res.errorCode, res.errorMessage);
+                    const code = String(res.errorCode || '');
+                    if (code.includes('permission')) {
+                      Alert.alert(
+                        'Camera Permission Required',
+                        'Camera permission is not allowed. Please enable it from Settings.',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: 'Open Settings', onPress: openAppSettings },
+                        ],
+                      );
+                      return;
+                    }
+                    Alert.alert('Camera Error', res?.errorMessage || res.errorCode);
+                    return;
+                  }
 
-              const assets = Array.isArray(res?.assets) ? res.assets : [];
-              if (!assets.length) return;
+                  try {
+                    const assets = Array.isArray(res?.assets) ? res.assets : [];
+                    console.log('[CAMERA_LAUNCH] Total assets returned:', assets.length);
+                    if (!assets.length) return;
 
-              setPictureAssets(prev => {
-                const next = [...(Array.isArray(prev) ? prev : []), ...assets].slice(0, MAX_IMAGES);
-                return next;
-              });
-            },
-          );
+                    setPictureAssets(prev => {
+                      const prevArr = Array.isArray(prev) ? prev : [];
+                      console.log(`[CAMERA_LAUNCH] Adding to state. Previous length: ${prevArr.length}`);
+                      const next = [...prevArr, ...assets].slice(0, MAX_IMAGES);
+                      return next;
+                    });
+                    console.log('[CAMERA_LAUNCH] Successfully updated state with new photo.');
+                  } catch (stateErr) {
+                    console.error('[CAMERA_LAUNCH] State update crashed:', stateErr);
+                    Alert.alert('Error', 'Failed to process newly captured photo.');
+                  }
+                },
+              );
+            } catch (cameraErr) {
+              console.error('[CAMERA_LAUNCH] Native camera launch crashed:', cameraErr);
+              Alert.alert('Camera Failed', 'Your device could not launch the camera properly. Error: ' + cameraErr.message);
+            }
+          }, 500);
         },
       },
       {
         text: 'Choose From Gallery',
         onPress: () => {
-          launchImageLibrary(
-            {
-              mediaType: 'photo',
-              quality: 0.6,
-              maxWidth: 1024,
-              maxHeight: 1024,
-              selectionLimit: Math.min(remaining, MAX_IMAGES),
-            },
-            res => {
-              if (res?.didCancel) return;
+          setTimeout(() => {
+            launchImageLibrary(
+              {
+                mediaType: 'photo',
+                quality: 0.6,
+                maxWidth: 1024,
+                maxHeight: 1024,
+                selectionLimit: Math.min(remaining, MAX_IMAGES),
+              },
+              res => {
+                if (res?.didCancel) return;
 
-              if (res?.errorCode) {
-                Alert.alert('Image Error', res?.errorMessage || res.errorCode);
-                return;
-              }
+                if (res?.errorCode) {
+                  Alert.alert('Image Error', res?.errorMessage || res.errorCode);
+                  return;
+                }
 
               const assets = Array.isArray(res?.assets) ? res.assets : [];
-              if (!assets.length) return;
+                if (!assets.length) return;
 
-              setPictureAssets(prev => {
-                const base = Array.isArray(prev) ? prev : [];
-                return [...base, ...assets].slice(0, MAX_IMAGES);
-              });
-            },
-          );
+                setPictureAssets(prev => {
+                  const base = Array.isArray(prev) ? prev : [];
+                  return [...base, ...assets].slice(0, MAX_IMAGES);
+                });
+              },
+            );
+          }, 500);
         },
       },
     ]);
   };
 
-  const removeLocalImageAt = idx => {
-    setPictureAssets(prev => {
-      const arr = Array.isArray(prev) ? [...prev] : [];
-      arr.splice(idx, 1);
-      return arr;
-    });
+  const removeLocalImageAt = index => {
+    const copy = [...pictureAssets];
+    copy.splice(index, 1);
+    setPictureAssets(copy);
+  };
+
+  const removeOldImageAt = index => {
+    const copy = [...uploadedImageUrls];
+    copy.splice(index, 1);
+    setUploadedImageUrls(copy);
   };
 
   // ---------- API CALLS ----------
@@ -696,16 +846,22 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         refresh ? setServerRefreshing(false) : setServerLoading(false);
       }
     },
-    [enumeration],
+    [enumeration?.id, enumeration?.name_of_site_id, enumeration?.nameOfSiteId],
   );
 
-  // Subscribe to offline sync to refresh list
+  // Subscribe to offline sync events — debounced to avoid hammering API on every queue change
+  const _offlineRefreshTimer = React.useRef(null);
   useEffect(() => {
     const unsub = offlineService.subscribe(() => {
-      // When sync happens (or queue changes), refresh the list
-      fetchServerEnumerations({ refresh: false });
+      clearTimeout(_offlineRefreshTimer.current);
+      _offlineRefreshTimer.current = setTimeout(() => {
+        fetchServerEnumerations({ refresh: false });
+      }, 1500); // wait 1.5s before refreshing
     });
-    return unsub;
+    return () => {
+      unsub();
+      clearTimeout(_offlineRefreshTimer.current);
+    };
   }, [fetchServerEnumerations]);
 
   const fetchSpecies = useCallback(async () => {
@@ -893,11 +1049,11 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
 
   // ---------- EFFECTS ----------
+  // NOTE: Species and Conditions fetch only once. Enumeration list is managed by useFocusEffect below.
   useEffect(() => {
-    fetchServerEnumerations();
     fetchSpecies();
     fetchConditions();
-  }, [fetchServerEnumerations, fetchSpecies, fetchConditions]);
+  }, [fetchSpecies, fetchConditions]);
 
   useFocusEffect(
     useCallback(() => {
@@ -995,11 +1151,15 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
     setRdKm(row?.rd_km != null ? String(row.rd_km) : rdKmOptions?.[0] ?? '');
 
-    setSpecies('');
+    const currentSpecies = (speciesRows || []).find(s => String(s.id) === String(row?.species_id))?.name || '';
+    setSpecies(currentSpecies);
     setCustomSpeciesName('');
     setSpeciesId(row?.species_id ?? null);
+    
     setGirth(String(row?.girth ?? ''));
-    setCondition('');
+    
+    const currentCondition = (conditionRows || []).find(c => String(c.id) === String(row?.condition_id))?.name || '';
+    setCondition(currentCondition);
     setConditionId(row?.condition_id ?? null);
 
     // takki_number normalize
@@ -1042,25 +1202,34 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     const pics = Array.isArray(row?.pictures) ? row.pictures : [];
     setUploadedImageUrls(pics.slice(0, MAX_IMAGES));
 
-    // Previous Data Population
+    // Previous Data Population (Updated for Nested, Flat Snake/Camel variations)
+    const prev = row?.previousEnumeration || row?.previous_enumeration || null;
     const hasPrevData = !!(
-      row?.previous_takki_number ||
-      row?.previous_page_no ||
-      row?.previous_register_no ||
-      row?.previous_girth ||
-      row?.previous_species_id
+      row?.previous_takki_number || row?.previousTakkiNumber ||
+      row?.previous_page_no || row?.previousPageNo ||
+      row?.previous_register_no || row?.previousRegisterNo ||
+      row?.previous_girth || row?.previousGirth ||
+      row?.previous_species_id || row?.previousSpeciesId ||
+      prev
     );
     setUsePreviousData(hasPrevData);
+
     if (hasPrevData) {
-      setPrevTakki(row?.previous_takki_number ? String(row.previous_takki_number) : '');
-      setPrevPage(row?.previous_page_no || '');
-      setPrevReg(row?.previous_register_no || '');
-      setPrevGirth(row?.previous_girth ? String(row.previous_girth) : '');
-      setPrevSpeciesId(row?.previous_species_id ?? null);
-      setPrevConditionId(row?.previous_condition_id ?? null);
-      // Names will trigger from useEffect logic
-      setPrevSpecies('');
-      setPrevCondition('');
+      // Prioritize primary record fields (snake then camel), fallback to nested object, fallback to empty
+      setPrevTakki(String(row?.previous_takki_number ?? row?.previousTakkiNumber ?? prev?.takki_number ?? prev?.takkiNumber ?? ''));
+      setPrevPage(String(row?.previous_page_no ?? row?.previousPageNo ?? prev?.page_no ?? prev?.pageNo ?? ''));
+      setPrevReg(String(row?.previous_register_no ?? row?.previousRegisterNo ?? prev?.register_no ?? prev?.registerNo ?? ''));
+      setPrevGirth(String(row?.previous_girth ?? row?.previousGirth ?? prev?.girth ?? ''));
+      
+      const psid = row?.previous_species_id ?? row?.previousSpeciesId ?? prev?.species_id ?? prev?.speciesId ?? null;
+      setPrevSpeciesId(psid);
+      const psName = psid ? ((speciesRows || []).find(s => String(s.id) === String(psid))?.name || '') : '';
+      setPrevSpecies(psName);
+
+      const pcid = row?.previous_condition_id ?? row?.previousConditionId ?? prev?.condition_id ?? prev?.conditionId ?? null;
+      setPrevConditionId(pcid);
+      const pcName = pcid ? ((conditionRows || []).find(c => String(c.id) === String(pcid))?.name || '') : '';
+      setPrevCondition(pcName);
     } else {
       setPrevTakki('');
       setPrevPage('');
@@ -1213,20 +1382,14 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       return Alert.alert('Too Many Images', `You can add maximum ${MAX_IMAGES} images.`);
     }
 
-    // 1) Upload images (handled by ApiService via attachments)
-    // We only need to prepare the "existing" pictures (if any)
-    let initialPictures = [];
-    if (!pictureAssets || pictureAssets.length === 0) {
-      if (Array.isArray(uploadedImageUrls) && uploadedImageUrls.length) {
-        initialPictures = uploadedImageUrls.slice(0, MAX_IMAGES);
-      }
-    }
+    // Merge old images (after user deletions) with new uploads
+    let initialPictures = Array.isArray(uploadedImageUrls) ? [...uploadedImageUrls] : [];
 
-    // We can skip the manual upload check since ApiService will handle it.
-    // However, if we demand min images:
-    if (chosenCount < MIN_IMAGES) { // Re-check logic
-      // logic above already checked chosenCount.
-      // If chosenCount >= 1, we are good.
+    if (initialPictures.length + (pictureAssets?.length || 0) < requiredMinImages) {
+      return Alert.alert(
+        'Images Required',
+        `Minimum ${requiredMinImages} images required (including previously uploaded).`
+      );
     }
 
     // Build body aligned to latest API style (snake_case)
@@ -1485,12 +1648,53 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
     return result;
   }, [serverRowsDecorated, search, filters]);
 
+  // Pre-compute UI state for every filtered row — avoids calling deriveRowUi inside the
+  // FlatList renderItem (which runs 1000+ times on large lists)
+  const filteredServerWithUi = useMemo(
+    () => filteredServer.map((r, idx) => ({ ...r, _idx: idx, _ui: deriveRowUi(r) })),
+    [filteredServer],
+  );
+
+  // renderRow is stable — TableRow is defined outside so memo works correctly
+  const renderRow = useCallback(
+    ({ item }) => (
+      <TableRow
+        item={item}
+        onEdit={openEditFormServer}
+        onReject={openRejectionPopup}
+        onNavigate={navigateSafe}
+        enumeration={enumeration}
+        styles={styles}
+        COLORS={COLORS}
+      />
+    ),
+    [openEditFormServer, openRejectionPopup, navigateSafe, enumeration],
+  );
+
+  const keyExtractor = useCallback(
+    (item) => String(item.id ?? item._idx),
+    [],
+  );
+
+  const TABLE_COLS = [
+    { label: 'ID', width: 80 },
+    { label: 'RD/KM', width: 90 },
+    { label: 'Takki #', width: 100 },
+    { label: 'Species', width: 140 },
+    { label: 'Condition', width: 140 },
+    { label: 'Girth', width: 100 },
+    { label: 'Auto GPS', width: 180 },
+    { label: 'Manual GPS', width: 180 },
+    { label: 'Status', width: 220 },
+    { label: 'Actions', width: 460 },
+  ];
+
   // ---------- RENDER ----------
   return (
     <View style={styles.screen}>
       <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
 
-      {/* Header */}
+      {/* Header — fixed above the list */}
       <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.headerGradient}>
         <View style={styles.header}>
           <TouchableOpacity
@@ -1499,7 +1703,6 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
             activeOpacity={0.7}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-
           <View style={styles.headerContent}>
             <Text style={styles.headerTitle}>Enumeration Records</Text>
             <View style={styles.headerInfo}>
@@ -1518,7 +1721,6 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
             </View>
             <Text style={styles.siteId}>Site ID: {String(getNameOfSiteId() ?? '—')}</Text>
           </View>
-
           <TouchableOpacity style={styles.headerAction} onPress={() => setFilterModalVisible(true)}>
             <Ionicons name="filter" size={22} color="#fff" />
             {activeFilterCount > 0 && (
@@ -1530,7 +1732,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         </View>
       </LinearGradient>
 
-      {/* --- Offline Sync Bar --- */}
+      {/* Offline Sync Bar */}
       {offlineStatus.count > 0 && (
         <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
           <TouchableOpacity
@@ -1542,10 +1744,6 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
               flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'space-between',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.1,
-              shadowRadius: 4,
               elevation: 3,
             }}
             onPress={() => offlineService.openSyncModal()}
@@ -1557,9 +1755,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 <Ionicons name="cloud-offline" size={20} color="#fff" />
               )}
               <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
-                {offlineStatus.syncing
-                  ? 'Syncing records...'
-                  : `${offlineStatus.count} Offline Records Pending`}
+                {offlineStatus.syncing ? 'Syncing records...' : `${offlineStatus.count} Offline Records Pending`}
               </Text>
             </View>
             {!offlineStatus.syncing && (
@@ -1571,262 +1767,150 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
         </View>
       )}
 
-      {/* Main */}
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.contentContainer}
-        refreshControl={
-          <RefreshControl
-            refreshing={serverRefreshing}
-            onRefresh={() => fetchServerEnumerations({ refresh: true })}
-            colors={[COLORS.primary]}
-            tintColor={COLORS.primary}
-          />
-        }>
-        {/* Search Bar */}
-        <View style={styles.searchSection}>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search by ID, species, condition, GPS, status..."
-              placeholderTextColor={COLORS.textLight}
-              style={styles.searchInput}
-            />
-            {!!search && (
-              <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
-                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
+      {/* ======================================================
+          MAIN LIST — FlatList handles vertical virtualization
+          (only ~15 rows in memory at a time).
+          The table area is wrapped in a horizontal ScrollView
+          so columns scroll left-right just like before.
+         ====================================================== */}
 
-        {/* Stats Card */}
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{filteredServer.length}</Text>
-            <Text style={styles.statLabel}>Filtered</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{serverRecords.length}</Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Ionicons
-              name={serverLoading ? 'refresh' : 'checkmark-circle'}
-              size={24}
-              color={serverLoading ? COLORS.warning : COLORS.success}
-            />
-            <Text style={styles.statLabel}>{serverLoading ? 'Loading...' : 'Ready'}</Text>
-          </View>
-        </View>
-
-        {/* Error Banner */}
-        {!!serverError && (
-          <View style={styles.errorCard}>
-            <View style={styles.errorHeader}>
-              <Ionicons name="warning" size={20} color={COLORS.danger} />
-              <Text style={styles.errorTitle}>Server Error</Text>
-            </View>
-            <Text style={styles.errorMessage}>{serverError}</Text>
-            <TouchableOpacity
-              style={styles.errorButton}
-              onPress={() => fetchServerEnumerations({ refresh: true })}>
-              <Text style={styles.errorButtonText}>Retry Connection</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Records Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Tree Records</Text>
-            <Text style={styles.sectionSubtitle}>
-              {filteredServer.length} of {serverRecords.length} records
-            </Text>
-          </View>
-
-          {filteredServer.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="leaf-outline" size={64} color={COLORS.border} />
-              <Text style={styles.emptyTitle}>No Records Found</Text>
-              <Text style={styles.emptyText}>
-                {serverRecords.length === 0
-                  ? 'No tree records for this site yet.'
-                  : 'No records match your search criteria.'}
-              </Text>
-              {activeFilterCount > 0 && (
-                <TouchableOpacity style={styles.emptyAction} onPress={clearAll}>
-                  <Text style={styles.emptyActionText}>Clear Filters</Text>
+      {/* Full-width vertical-only top section */}
+      {headerVisible && (
+        <View>
+          {/* Search Bar */}
+          <View style={styles.searchSection}>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by ID, species, condition, GPS, status..."
+                placeholderTextColor={COLORS.textLight}
+                style={styles.searchInput}
+              />
+              {!!search && (
+                <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
+                  <Ionicons name="close-circle" size={20} color={COLORS.danger} />
                 </TouchableOpacity>
               )}
             </View>
-          ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator style={styles.tableContainer}>
-              <View style={styles.table}>
-                {/* Table Header */}
-                <View style={styles.tableHeader}>
-                  {[
-                    { label: 'ID', width: 80 },
-                    { label: 'RD/KM', width: 90 },
-                    { label: 'Takki #', width: 100 },
-                    { label: 'Species', width: 140 },
-                    { label: 'Condition', width: 140 },
-                    { label: 'Girth', width: 100 },
-                    { label: 'Auto GPS', width: 180 },
-                    { label: 'Manual GPS', width: 180 },
-                    { label: 'Status', width: 220 },
-                    { label: 'Actions', width: 460 },
-                  ].map((col, idx) => (
-                    <View key={idx} style={[styles.thCell, { width: col.width }]}>
-                      <Text style={styles.thText}>{col.label}</Text>
-                    </View>
-                  ))}
-                </View>
+          </View>
 
-                {/* Table Rows */}
-                {filteredServer.map((r, idx) => {
-                  const ui = deriveRowUi(r);
+          {/* Stats Card */}
+          <View style={styles.statsCard}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{filteredServerWithUi.length}</Text>
+              <Text style={styles.statLabel}>Filtered</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{serverRecords.length}</Text>
+              <Text style={styles.statLabel}>Total</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons
+                name={serverLoading ? 'refresh' : 'checkmark-circle'}
+                size={24}
+                color={serverLoading ? COLORS.warning : COLORS.success}
+              />
+              <Text style={styles.statLabel}>{serverLoading ? 'Loading...' : 'Ready'}</Text>
+            </View>
+          </View>
 
-                  const rowStyle = [
-                    styles.tableRow,
-                    idx % 2 === 0 ? styles.rowEven : styles.rowOdd,
-                    ui.rowAccent === 'rejected' ? styles.rowRejected : null,
-                  ];
-
-                  return (
-                    <View key={String(r.id ?? idx)} style={rowStyle}>
-                      <View style={[styles.tdCell, { width: 80 }]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r.id ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, { width: 90 }]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r.rd_km ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, { width: 100 }]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {r?.takkiNumber != null && String(r.takkiNumber).trim() !== ''
-                            ? String(r.takkiNumber)
-                            : '—'}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, { width: 140 }]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r._speciesLabel ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, { width: 140 }]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r._conditionLabel ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, { width: 100 }]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r.girth ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, { width: 180 }]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r._autoGps ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, { width: 180 }]}>
-                        <Text style={styles.tdText} numberOfLines={1}>
-                          {String(r._manualGps ?? '—')}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.tdCell, { width: 220 }]}>
-                        {ui.isRejected ? (
-                          <TouchableOpacity activeOpacity={0.85} onPress={() => openRejectionPopup(r)}>
-                            <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
-                              <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
-                              <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
-                                {ui.statusText}
-                              </Text>
-                            </View>
-                          </TouchableOpacity>
-                        ) : (
-                          <View style={[styles.statusBadge, { backgroundColor: `${ui.statusColor}15` }]}>
-                            <View style={[styles.statusDot, { backgroundColor: ui.statusColor }]} />
-                            <Text style={[styles.statusText, { color: ui.statusColor }]} numberOfLines={2}>
-                              {ui.statusText}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-
-                      <View style={[styles.tdCell, styles.actionsCell, { width: 320 }]}>
-                        {ui.showEdit && (
-                          <TouchableOpacity style={styles.actionButton} onPress={() => openEditFormServer(r)}>
-                            <Ionicons name="create-outline" size={16} color={COLORS.secondary} />
-                            <Text style={styles.actionButtonText}>Edit</Text>
-                          </TouchableOpacity>
-                        )}
-
-                        {/* ✅ NEW: Audit */}
-
-
-                        {ui.canDispose && (
-                          <TouchableOpacity
-                            style={[styles.actionPill, { backgroundColor: COLORS.primaryDark }]}
-                            onPress={() => navigateSafe(DISPOSAL_ROUTE, { treeId: r.id, enumeration })}>
-                            <Text style={styles.actionPillText}>Dispose</Text>
-                          </TouchableOpacity>
-                        )}
-
-                        {ui.canSuperdari && (
-                          <TouchableOpacity
-                            style={[styles.actionPill, { backgroundColor: COLORS.info }]}
-                            onPress={() => navigateSafe(SUPERDARI_ROUTE, { treeId: r.id, enumeration })}>
-                            <Text style={styles.actionPillText}>Superdari</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-
-                      {/* Audit / Update - Only if Final Approved */}
-                      <View style={[styles.tdCell, styles.actionsCell, { width: 140 }]}>
-                        {ui.isFinalApproved ? (
-                          <TouchableOpacity
-                            style={[
-                              styles.actionButton,
-                              { backgroundColor: 'rgba(124, 58, 237, 0.10)' },
-                            ]}
-                            onPress={() =>
-                              navigateSafe(AUDIT_ROUTE, {
-                                enumerationId: r.id,
-                                enumeration: r,
-                              })
-                            }
-                            activeOpacity={0.7}>
-                            <Ionicons name="clipboard-outline" size={16} color={COLORS.info} />
-                            <Text style={[styles.actionButtonText, { color: COLORS.info }]}>
-                              Update
-                            </Text>
-                          </TouchableOpacity>
-                        ) : (
-                          <Text style={styles.tdText}>—</Text>
-                        )}
-                      </View>
-                    </View>
-                  );
-                })}
+          {/* Error Banner */}
+          {!!serverError && (
+            <View style={styles.errorCard}>
+              <View style={styles.errorHeader}>
+                <Ionicons name="warning" size={20} color={COLORS.danger} />
+                <Text style={styles.errorTitle}>Server Error</Text>
               </View>
-            </ScrollView>
+              <Text style={styles.errorMessage}>{serverError}</Text>
+              <TouchableOpacity
+                style={styles.errorButton}
+                onPress={() => fetchServerEnumerations({ refresh: true })}>
+                <Text style={styles.errorButtonText}>Retry Connection</Text>
+              </TouchableOpacity>
+            </View>
           )}
+
+          {/* Section title */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Tree Records</Text>
+              <Text style={styles.sectionSubtitle}>
+                {filteredServerWithUi.length} of {serverRecords.length} records
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Horizontal ScrollView wraps BOTH the table header and the FlatList rows
+          so they scroll left-right together */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator
+        style={styles.container}
+        contentContainerStyle={{ flexGrow: 1 }}
+        bounces={false}>
+        <View style={{ flex: 1 }}>
+          {/* Sticky column header */}
+          {filteredServerWithUi.length > 0 && (
+            <View style={styles.tableHeader}>
+              {TABLE_COLS.map((col, idx) => (
+                <View key={idx} style={[styles.thCell, { width: col.width }]}>
+                  <Text style={styles.thText}>{col.label}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* FlatList — vertical virtualization only */}
+          <FlatList
+            data={filteredServerWithUi}
+            keyExtractor={keyExtractor}
+            renderItem={renderRow}
+            onScroll={handleTableScroll}
+            scrollEventThrottle={16}
+            refreshControl={
+              <RefreshControl
+                refreshing={serverRefreshing}
+                onRefresh={() => fetchServerEnumerations({ refresh: true })}
+                colors={[COLORS.primary]}
+                tintColor={COLORS.primary}
+              />
+            }
+            ListEmptyComponent={
+              serverLoading ? (
+                <View style={[styles.emptyState, { width: 600 }]}>
+                  <ActivityIndicator size="large" color={COLORS.primary} />
+                  <Text style={[styles.emptyText, { marginTop: 16 }]}>Loading records...</Text>
+                </View>
+              ) : (
+                <View style={[styles.emptyState, { width: 600 }]}>
+                  <Ionicons name="leaf-outline" size={64} color={COLORS.border} />
+                  <Text style={styles.emptyTitle}>No Records Found</Text>
+                  <Text style={styles.emptyText}>
+                    {serverRecords.length === 0
+                      ? 'No tree records for this site yet.'
+                      : 'No records match your search criteria.'}
+                  </Text>
+                  {activeFilterCount > 0 && (
+                    <TouchableOpacity style={styles.emptyAction} onPress={clearAll}>
+                      <Text style={styles.emptyActionText}>Clear Filters</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )
+            }
+            // Performance tuning for large lists
+            initialNumToRender={15}
+            maxToRenderPerBatch={20}
+            windowSize={7}
+            removeClippedSubviews={true}
+            getItemLayout={(_, index) => ({ length: 56, offset: 56 * index, index })}
+          />
         </View>
       </ScrollView>
 
@@ -2418,6 +2502,29 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                     )}
                   </TouchableOpacity>
 
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', marginTop: -6, marginBottom: 8, marginLeft: 6, gap: 6 }}
+                    onPress={() => {
+                        Alert.alert(
+                          'App Closing on Camera?',
+                          'If the app closes or restarts when you take a photo, Android is force-killing it to save battery.\n\nPlease tap "Fix Settings", find TreeEnum, and set it to "Unrestricted" or "Don\'t Optimize".',
+                          [
+                            { text: 'Cancel', style: 'cancel' },
+                            { 
+                              text: 'Fix Settings', 
+                              onPress: () => Linking.sendIntent('android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS') 
+                            }
+                          ]
+                        );
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="information-circle-outline" size={14} color={COLORS.danger} />
+                    <Text style={{ fontSize: 12, color: COLORS.danger, fontWeight: '700', textDecorationLine: 'underline' }}>
+                      Does the app crash when taking photos? Fix here.
+                    </Text>
+                  </TouchableOpacity>
+
                   {(pictureAssets.length > 0 || uploadedImageUrls.length > 0) && (
                     <View style={{ marginTop: 10 }}>
                       <View style={styles.imagePreview}>
@@ -2433,17 +2540,25 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                             key={`local_${idx}`}
                             collapsable={false}
                             style={[styles.thumbWrap, { overflow: 'hidden' }]}>
-                            <Image
-                              source={{ uri: a.uri }}
-                              style={{
-                                position: 'absolute',
-                                width: '100%',
-                                height: '100%',
-                                borderRadius: 14,
-                              }}
-                              resizeMode="cover"
-                              resizeMethod="resize"
-                            />
+                            <TouchableOpacity 
+                              activeOpacity={0.9} 
+                              style={{ width: '100%', height: '100%' }}
+                              onPress={() => {
+                                setViewerImage(a.uri);
+                                setViewerVisible(true);
+                              }}>
+                              <Image
+                                source={{ uri: a.uri }}
+                                style={{
+                                  position: 'absolute',
+                                  width: '100%',
+                                  height: '100%',
+                                  borderRadius: 14,
+                                }}
+                                resizeMode="cover"
+                                resizeMethod="resize"
+                              />
+                            </TouchableOpacity>
                             <View
                               style={[
                                 styles.thumbInner,
@@ -2469,17 +2584,25 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                               key={`uploaded_${idx}`}
                               collapsable={false}
                               style={[styles.thumbWrap, { overflow: 'hidden' }]}>
-                              <Image
-                                source={{ uri }}
-                                style={{
-                                  position: 'absolute',
-                                  width: '100%',
-                                  height: '100%',
-                                  borderRadius: 14,
-                                }}
-                                resizeMode="cover"
-                                resizeMethod="resize"
-                              />
+                              <TouchableOpacity 
+                                activeOpacity={0.9} 
+                                style={{ width: '100%', height: '100%' }}
+                                onPress={() => {
+                                  setViewerImage(uri);
+                                  setViewerVisible(true);
+                                }}>
+                                <Image
+                                  source={{ uri }}
+                                  style={{
+                                    position: 'absolute',
+                                    width: '100%',
+                                    height: '100%',
+                                    borderRadius: 14,
+                                  }}
+                                  resizeMode="cover"
+                                  resizeMethod="resize"
+                                />
+                              </TouchableOpacity>
                               <View
                                 style={[
                                   styles.thumbInner,
@@ -2489,6 +2612,12 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                                   Old {idx + 1}
                                 </Text>
                               </View>
+                              <TouchableOpacity
+                                style={styles.thumbClose}
+                                onPress={() => removeOldImageAt(idx)}
+                                activeOpacity={0.8}>
+                                <Ionicons name="close-circle" size={18} color={COLORS.danger} />
+                              </TouchableOpacity>
                             </View>
                           );
                         })}
@@ -2562,6 +2691,28 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       </Modal>
 
       <FullScreenLoader visible={offlineStatus.syncing} />
+
+      {/* Image Viewer Modal */}
+      <Modal
+        visible={viewerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewerVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity 
+            style={{ position: 'absolute', top: 50, right: 30, zIndex: 999 }}
+            onPress={() => setViewerVisible(false)}>
+            <Ionicons name="close-circle" size={40} color="#fff" />
+          </TouchableOpacity>
+          {viewerImage && (
+            <Image 
+              source={{ uri: viewerImage }} 
+              style={{ width: '100%', height: '80%' }} 
+              resizeMode="contain" 
+            />
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }

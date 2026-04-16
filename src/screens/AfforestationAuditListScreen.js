@@ -670,6 +670,37 @@ export default function AfforestationAuditScreen({ navigation, route }) {
                 </TouchableOpacity>
 
                 <TouchableOpacity
+                  style={{
+                    backgroundColor: 'transparent',
+                    borderWidth: 1,
+                    borderColor: COLORS.danger,
+                    borderRadius: 12,
+                    paddingVertical: 13,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    marginTop: 4,
+                  }}
+                  onPress={() => {
+                    Alert.alert(
+                      'App Closing on Camera?',
+                      'If the app closes or restarts when you take a photo, Android is force-killing it to save battery.\n\nPlease tap "Fix Settings", find TreeEnum, and set it to "Unrestricted" or "Don\'t Optimize".',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { 
+                          text: 'Fix Settings', 
+                          onPress: () => Linking.sendIntent('android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS') 
+                        }
+                      ]
+                    );
+                  }}
+                  activeOpacity={0.85}>
+                  <Ionicons name="warning-outline" size={18} color={COLORS.danger} />
+                  <Text style={{ color: COLORS.danger, fontWeight: '800', fontSize: 13 }}>Fix Camera Crash</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
                   style={{ paddingVertical: 10, borderRadius: 14, alignItems: 'center' }}
                   onPress={() => setImagePickerModal(false)}
                   activeOpacity={0.8}>

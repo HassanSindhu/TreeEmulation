@@ -20,6 +20,8 @@ import {
   Linking,
   Image,
   FlatList,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -35,6 +37,10 @@ import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
@@ -335,6 +341,24 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
     rejectedBy: '',
     remarks: '',
   });
+
+  // Fullscreen Table Scroll State
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const scrollOffset = useRef(0);
+
+  const handleTableScroll = useCallback((e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const diff = y - scrollOffset.current;
+    
+    if (y > 40 && diff > 10 && headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(false);
+    } else if ((diff < -15 || y <= 0) && !headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(true);
+    }
+    scrollOffset.current = y;
+  }, [headerVisible]);
 
   const [search, setSearch] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
@@ -1220,9 +1244,20 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       const assets = res.assets || [];
       const uris = assets.map(a => a?.uri).filter(Boolean);
 
-      // Replace behavior
       if (uris.length) {
-        setPictureUris(uris);
+        setPictureUris(prev => {
+          const currentCount = (prev || []).length;
+          const existingCount = (existingPictures || []).length;
+          const totalNewPossible = 4 - existingCount;
+
+          if (currentCount >= totalNewPossible) {
+            Alert.alert('Limit Reached', 'You can have maximum 4 images total (including existing ones).');
+            return prev;
+          }
+
+          const next = [...(prev || []), ...uris].slice(0, totalNewPossible);
+          return next;
+        });
       }
     } catch (stateErr) {
       Alert.alert('Error', 'Failed to process newly captured photo.');
@@ -1642,59 +1677,66 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         </View>
       )}
 
-      {/* Main Content — no vertical ScrollView here! */}
+      {/* Main Content — Vertical collapsible section */}
       <View style={{ flex: 1 }}>
-        {/* Search Section */}
-        <View style={styles.searchSection}>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search by ID, year, scheme, status..."
-              placeholderTextColor={COLORS.textLight}
-              style={styles.searchInput}
-            />
-            {!!search && (
-              <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
-                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
-              </TouchableOpacity>
-            )}
+      {headerVisible && (
+        <View>
+          {/* Search Section */}
+          <View style={styles.searchSection}>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by ID, year, scheme, status..."
+                placeholderTextColor={COLORS.textLight}
+                style={styles.searchInput}
+              />
+              {!!search && (
+                <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
+                  <Ionicons name="close-circle" size={20} color={COLORS.danger} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          {/* Stats Card */}
+          <View style={styles.statsCard}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{filteredRecordsWithUi.length}</Text>
+              <Text style={styles.statLabel}>Filtered</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{records.length}</Text>
+              <Text style={styles.statLabel}>Total</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons
+                name={listLoading ? 'refresh' : 'server'}
+                size={24}
+                color={listLoading ? COLORS.warning : COLORS.success}
+              />
+              <Text style={styles.statLabel}>{listLoading ? 'Loading...' : 'Online'}</Text>
+            </View>
+          </View>
+
+          {/* Section Header */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Afforestation Records</Text>
+              <Text style={styles.sectionSubtitle}>
+                Showing {filteredRecordsWithUi.length} of {records.length} records
+              </Text>
+            </View>
           </View>
         </View>
+      )}
 
-        {/* Stats Card */}
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{filteredRecordsWithUi.length}</Text>
-            <Text style={styles.statLabel}>Filtered</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{records.length}</Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Ionicons
-              name={listLoading ? 'refresh' : 'server'}
-              size={24}
-              color={listLoading ? COLORS.warning : COLORS.success}
-            />
-            <Text style={styles.statLabel}>{listLoading ? 'Loading...' : 'Online'}</Text>
-          </View>
-        </View>
-
-        {/* Records Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Afforestation Records</Text>
-            <Text style={styles.sectionSubtitle}>
-              Showing {filteredRecordsWithUi.length} of {records.length} records
-            </Text>
-          </View>
-
-          {listLoading ? (
+      {/* Records Section Table */}
+      <View style={[styles.section, { flex: 1, paddingTop: headerVisible ? 0 : 20, paddingBottom: 20 }]}>
+        {listLoading ? (
             <View style={styles.loadingState}>
               <ActivityIndicator size="large" color={COLORS.primary} />
               <Text style={styles.loadingText}>Loading records from server...</Text>
@@ -1747,6 +1789,8 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
                   data={filteredRecordsWithUi}
                   keyExtractor={keyExtractor}
                   renderItem={renderRow}
+                  onScroll={handleTableScroll}
+                  scrollEventThrottle={16}
                   initialNumToRender={10}
                   maxToRenderPerBatch={15}
                   windowSize={5}

@@ -1,6 +1,6 @@
 // /screens/RegistersScreen.js
 import { offlineService } from '../services/OfflineService';
-import React, { useCallback, useEffect, useMemo, useState, memo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, memo, useRef } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,8 @@ import {
   TextInput,
   Image,
   FlatList,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -33,6 +35,10 @@ import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 /**
  * IMPORTANT
@@ -303,6 +309,24 @@ export default function RegistersScreen({ navigation }) {
   // ---------- SEARCH + FILTER ----------
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(STATUS_FILTERS.ALL);
+
+  // Fullscreen Table Scroll State
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const scrollOffset = useRef(0);
+
+  const handleTableScroll = useCallback((e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const diff = y - scrollOffset.current;
+    
+    if (y > 40 && diff > 10 && headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(false);
+    } else if ((diff < -15 || y <= 0) && !headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(true);
+    }
+    scrollOffset.current = y;
+  }, [headerVisible]);
 
   // ---------- REJECTION REASON MODAL ----------
   const [rejectionModal, setRejectionModal] = useState({
@@ -1544,93 +1568,100 @@ export default function RegistersScreen({ navigation }) {
         </View>
       )}
 
-      {/* Main Container — no vertical ScrollView here! */}
-      <View style={{ flex: 1 }}>
-        {/* Search */}
-        <View style={styles.searchSection}>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search by ID, site, species, takki, status..."
-              placeholderTextColor={COLORS.textLight}
-              style={styles.searchInput}
-            />
-            {!!search && (
-              <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
-                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Status Filters */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterBar} contentContainerStyle={styles.filterBarContent}>
-            {[
-              { key: STATUS_FILTERS.ALL, label: 'All' },
-              { key: STATUS_FILTERS.PENDING, label: 'Pending' },
-              { key: STATUS_FILTERS.VERIFIED, label: 'Verified' },
-              { key: STATUS_FILTERS.DISAPPROVED, label: 'Disapproved' },
-              { key: STATUS_FILTERS.DISPOSED, label: 'Disposed' },
-              { key: STATUS_FILTERS.SUPERDARI, label: 'Superdari' },
-            ].map(item => {
-              const active = statusFilter === item.key;
-              return (
-                <TouchableOpacity
-                  key={item.key}
-                  activeOpacity={0.85}
-                  onPress={() => setStatusFilter(item.key)}
-                  style={[styles.filterChip, active ? styles.filterChipActive : styles.filterChipInactive]}>
-                  <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : styles.filterChipTextInactive]}>
-                    {item.label}
-                  </Text>
+      {/* Full-width vertical-only top section */}
+      {headerVisible && (
+        <View>
+          {/* Search */}
+          <View style={styles.searchSection}>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by ID, site, species, takki, status..."
+                placeholderTextColor={COLORS.textLight}
+                style={styles.searchInput}
+              />
+              {!!search && (
+                <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
+                  <Ionicons name="close-circle" size={20} color={COLORS.danger} />
                 </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* Stats */}
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{filteredRowsWithUi.length}</Text>
-            <Text style={styles.statLabel}>Filtered</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{serverRows.length}</Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Ionicons name={loading ? 'refresh' : 'checkmark-circle'} size={24} color={loading ? COLORS.warning : COLORS.success} />
-            <Text style={styles.statLabel}>{loading ? 'Loading...' : 'Ready'}</Text>
-          </View>
-        </View>
-
-        {/* Error */}
-        {!!serverError && (
-          <View style={styles.errorCard}>
-            <View style={styles.errorHeader}>
-              <Ionicons name="warning" size={20} color={COLORS.danger} />
-              <Text style={styles.errorTitle}>Server Error</Text>
+              )}
             </View>
-            <Text style={styles.errorMessage}>{serverError}</Text>
-            <TouchableOpacity style={styles.errorButton} onPress={() => fetchServer({ refresh: true })}>
-              <Text style={styles.errorButtonText}>Retry Connection</Text>
-            </TouchableOpacity>
-          </View>
-        )}
 
-        {/* Table */}
+            {/* Status Filters */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterBar} contentContainerStyle={styles.filterBarContent}>
+              {[
+                { key: STATUS_FILTERS.ALL, label: 'All' },
+                { key: STATUS_FILTERS.PENDING, label: 'Pending' },
+                { key: STATUS_FILTERS.VERIFIED, label: 'Verified' },
+                { key: STATUS_FILTERS.DISAPPROVED, label: 'Disapproved' },
+                { key: STATUS_FILTERS.DISPOSED, label: 'Disposed' },
+                { key: STATUS_FILTERS.SUPERDARI, label: 'Superdari' },
+              ].map(item => {
+                const active = statusFilter === item.key;
+                return (
+                  <TouchableOpacity
+                    key={item.key}
+                    activeOpacity={0.85}
+                    onPress={() => setStatusFilter(item.key)}
+                    style={[styles.filterChip, active ? styles.filterChipActive : styles.filterChipInactive]}>
+                    <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : styles.filterChipTextInactive]}>
+                      {item.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Stats */}
+          <View style={styles.statsCard}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{filteredRowsWithUi.length}</Text>
+              <Text style={styles.statLabel}>Filtered</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{serverRows.length}</Text>
+              <Text style={styles.statLabel}>Total</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons name={loading ? 'refresh' : 'checkmark-circle'} size={24} color={loading ? COLORS.warning : COLORS.success} />
+              <Text style={styles.statLabel}>{loading ? 'Loading...' : 'Ready'}</Text>
+            </View>
+          </View>
+
+          {/* Error */}
+          {!!serverError && (
+            <View style={styles.errorCard}>
+              <View style={styles.errorHeader}>
+                <Ionicons name="warning" size={20} color={COLORS.danger} />
+                <Text style={styles.errorTitle}>Server Error</Text>
+              </View>
+              <Text style={styles.errorMessage}>{serverError}</Text>
+              <TouchableOpacity style={styles.errorButton} onPress={() => fetchServer({ refresh: true })}>
+                <Text style={styles.errorButtonText}>Retry Connection</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Table Header Section */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Records</Text>
+              <Text style={styles.sectionSubtitle}>
+                {filteredRowsWithUi.length} of {serverRows.length}
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Main Container — Horizontal ScrollView wrapping vertical FlatList */}
+      <View style={{ flex: 1, paddingHorizontal: 20, paddingBottom: 20 }}>
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Records</Text>
-            <Text style={styles.sectionSubtitle}>
-              {filteredRowsWithUi.length} of {serverRows.length}
-            </Text>
-          </View>
-
           {filteredRowsWithUi.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="folder-open-outline" size={64} color={COLORS.border} />
@@ -1654,6 +1685,8 @@ export default function RegistersScreen({ navigation }) {
                   data={filteredRowsWithUi}
                   keyExtractor={keyExtractor}
                   renderItem={renderRow}
+                  onScroll={handleTableScroll}
+                  scrollEventThrottle={16}
                   initialNumToRender={10}
                   maxToRenderPerBatch={15}
                   windowSize={5}

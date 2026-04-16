@@ -18,6 +18,8 @@ import {
   Image,
   Linking,
   PermissionsAndroid,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -33,6 +35,10 @@ import FullScreenLoader from '../components/FullScreenLoader'; // Added loader
 import { DropdownRow } from '../components/SelectRows';
 
 const { height } = Dimensions.get('window');
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // IMPORTANT:
 // If testing locally, set API_HOST = 'http://localhost:5000'
@@ -91,6 +97,24 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
   const [existingPictures, setExistingPictures] = useState([]);
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerImage, setViewerImage] = useState(null);
+
+  // Fullscreen Table Scroll State
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const scrollOffset = useRef(0);
+
+  const handleTableScroll = useCallback((e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const diff = y - scrollOffset.current;
+    
+    if (y > 40 && diff > 10 && headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(false);
+    } else if ((diff < -15 || y <= 0) && !headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(true);
+    }
+    scrollOffset.current = y;
+  }, [headerVisible]);
 
   // Search + filters (light)
   const [search, setSearch] = useState('');
@@ -1479,68 +1503,73 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     <View style={styles.screen}>
       <StatusBar backgroundColor={COLORS.primary} barStyle="light-content" />
 
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerContainer}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-            activeOpacity={0.7}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
+      {/* Header and Sync Section - Collapsible */}
+      {headerVisible && (
+        <View>
+          {/* Header */}
+          <View style={styles.header}>
+            <View style={styles.headerContainer}>
+              <TouchableOpacity
+                style={styles.backButton}
+                onPress={() => navigation.goBack()}
+                activeOpacity={0.7}>
+                <Ionicons name="arrow-back" size={24} color="#fff" />
+              </TouchableOpacity>
 
-          <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>Pole Crop</Text>
-            {nameOfSiteId ? <Text style={styles.siteId}>Site ID: {nameOfSiteId}</Text> : null}
+              <View style={styles.headerContent}>
+                <Text style={styles.headerTitle}>Pole Crop</Text>
+                {nameOfSiteId ? <Text style={styles.siteId}>Site ID: {nameOfSiteId}</Text> : null}
+              </View>
+
+              <TouchableOpacity
+                style={styles.headerAction}
+                onPress={() => fetchPoleCropList({ refresh: true })}
+                activeOpacity={0.7}>
+                <Ionicons name="refresh" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
           </View>
 
-          <TouchableOpacity
-            style={styles.headerAction}
-            onPress={() => fetchPoleCropList({ refresh: true })}
-            activeOpacity={0.7}>
-            <Ionicons name="refresh" size={22} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* --- Offline Sync Bar --- */}
-      {offlineStatus.count > 0 && (
-        <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
-          <TouchableOpacity
-            style={{
-              backgroundColor: COLORS.warning,
-              paddingVertical: 12,
-              paddingHorizontal: 16,
-              borderRadius: 12,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.1,
-              shadowRadius: 4,
-              elevation: 3,
-            }}
-            onPress={() => offlineService.openSyncModal()}
-            disabled={offlineStatus.syncing}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {offlineStatus.syncing ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons name="cloud-offline" size={20} color="#fff" />
-              )}
-              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
-                {offlineStatus.syncing
-                  ? 'Syncing records...'
-                  : `${offlineStatus.count} Offline Records Pending`}
-              </Text>
+          {/* --- Offline Sync Bar --- */}
+          {offlineStatus.count > 0 && (
+            <View style={{ backgroundColor: COLORS.background, paddingHorizontal: 20, paddingTop: 10 }}>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: COLORS.warning,
+                  paddingVertical: 12,
+                  paddingHorizontal: 16,
+                  borderRadius: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }}
+                onPress={() => offlineService.openSyncModal()}
+                disabled={offlineStatus.syncing}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  {offlineStatus.syncing ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="cloud-offline" size={20} color="#fff" />
+                  )}
+                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                    {offlineStatus.syncing
+                      ? 'Syncing records...'
+                      : `${offlineStatus.count} Offline Records Pending`}
+                  </Text>
+                </View>
+                {!offlineStatus.syncing && (
+                  <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
+                    <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
             </View>
-            {!offlineStatus.syncing && (
-              <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
-                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>SYNC NOW</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -1548,6 +1577,8 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         style={styles.container}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
+        onScroll={handleTableScroll}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={serverRefreshing}
@@ -1556,24 +1587,27 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
             tintColor={COLORS.primary}
           />
         }>
-        {/* Search */}
-        <View style={styles.searchSection}>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search by ID, species, status..."
-              placeholderTextColor={COLORS.textLight}
-              style={styles.searchInput}
-            />
-            {!!search && (
-              <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
-                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
-              </TouchableOpacity>
-            )}
+
+        {/* Collapsible Search */}
+        {headerVisible && (
+          <View style={styles.searchSection}>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by ID, species, status..."
+                placeholderTextColor={COLORS.textLight}
+                style={styles.searchInput}
+              />
+              {!!search && (
+                <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
+                  <Ionicons name="close-circle" size={20} color={COLORS.danger} />
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Table */}
         <View style={styles.section}>

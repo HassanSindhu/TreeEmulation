@@ -21,6 +21,8 @@ import {
   Image,
   Linking,
   FlatList,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -215,6 +217,25 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
 
   const [search, setSearch] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+
+  // Fullscreen Table Scroll State
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const scrollOffset = useRef(0);
+
+  const handleTableScroll = useCallback((e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const diff = y - scrollOffset.current;
+    
+    if (y > 40 && diff > 10 && headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(false);
+    } else if ((diff < -15 || y <= 0) && !headerVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setHeaderVisible(true);
+    }
+    scrollOffset.current = y;
+  }, [headerVisible]);
+
   const [filters, setFilters] = useState({
     species: '',
     condition: '',
@@ -1754,74 +1775,76 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
          ====================================================== */}
 
       {/* Full-width vertical-only top section */}
-      <View>
-        {/* Search Bar */}
-        <View style={styles.searchSection}>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search by ID, species, condition, GPS, status..."
-              placeholderTextColor={COLORS.textLight}
-              style={styles.searchInput}
-            />
-            {!!search && (
-              <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
-                <Ionicons name="close-circle" size={20} color={COLORS.danger} />
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-
-        {/* Stats Card */}
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{filteredServerWithUi.length}</Text>
-            <Text style={styles.statLabel}>Filtered</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{serverRecords.length}</Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Ionicons
-              name={serverLoading ? 'refresh' : 'checkmark-circle'}
-              size={24}
-              color={serverLoading ? COLORS.warning : COLORS.success}
-            />
-            <Text style={styles.statLabel}>{serverLoading ? 'Loading...' : 'Ready'}</Text>
-          </View>
-        </View>
-
-        {/* Error Banner */}
-        {!!serverError && (
-          <View style={styles.errorCard}>
-            <View style={styles.errorHeader}>
-              <Ionicons name="warning" size={20} color={COLORS.danger} />
-              <Text style={styles.errorTitle}>Server Error</Text>
+      {headerVisible && (
+        <View>
+          {/* Search Bar */}
+          <View style={styles.searchSection}>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color={COLORS.textLight} style={styles.searchIcon} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by ID, species, condition, GPS, status..."
+                placeholderTextColor={COLORS.textLight}
+                style={styles.searchInput}
+              />
+              {!!search && (
+                <TouchableOpacity onPress={() => setSearch('')} style={styles.searchClear}>
+                  <Ionicons name="close-circle" size={20} color={COLORS.danger} />
+                </TouchableOpacity>
+              )}
             </View>
-            <Text style={styles.errorMessage}>{serverError}</Text>
-            <TouchableOpacity
-              style={styles.errorButton}
-              onPress={() => fetchServerEnumerations({ refresh: true })}>
-              <Text style={styles.errorButtonText}>Retry Connection</Text>
-            </TouchableOpacity>
           </View>
-        )}
 
-        {/* Section title */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Tree Records</Text>
-            <Text style={styles.sectionSubtitle}>
-              {filteredServerWithUi.length} of {serverRecords.length} records
-            </Text>
+          {/* Stats Card */}
+          <View style={styles.statsCard}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{filteredServerWithUi.length}</Text>
+              <Text style={styles.statLabel}>Filtered</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{serverRecords.length}</Text>
+              <Text style={styles.statLabel}>Total</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons
+                name={serverLoading ? 'refresh' : 'checkmark-circle'}
+                size={24}
+                color={serverLoading ? COLORS.warning : COLORS.success}
+              />
+              <Text style={styles.statLabel}>{serverLoading ? 'Loading...' : 'Ready'}</Text>
+            </View>
+          </View>
+
+          {/* Error Banner */}
+          {!!serverError && (
+            <View style={styles.errorCard}>
+              <View style={styles.errorHeader}>
+                <Ionicons name="warning" size={20} color={COLORS.danger} />
+                <Text style={styles.errorTitle}>Server Error</Text>
+              </View>
+              <Text style={styles.errorMessage}>{serverError}</Text>
+              <TouchableOpacity
+                style={styles.errorButton}
+                onPress={() => fetchServerEnumerations({ refresh: true })}>
+                <Text style={styles.errorButtonText}>Retry Connection</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Section title */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Tree Records</Text>
+              <Text style={styles.sectionSubtitle}>
+                {filteredServerWithUi.length} of {serverRecords.length} records
+              </Text>
+            </View>
           </View>
         </View>
-      </View>
+      )}
 
       {/* Horizontal ScrollView wraps BOTH the table header and the FlatList rows
           so they scroll left-right together */}
@@ -1848,6 +1871,8 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
             data={filteredServerWithUi}
             keyExtractor={keyExtractor}
             renderItem={renderRow}
+            onScroll={handleTableScroll}
+            scrollEventThrottle={16}
             refreshControl={
               <RefreshControl
                 refreshing={serverRefreshing}

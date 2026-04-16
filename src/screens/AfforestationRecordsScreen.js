@@ -844,7 +844,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
       // ✅ NEW (array based)
       hasSuperdari: superdari.hasSuperdari,
       superdariId: superdari.superdariId,
-      superdarName: superdarName,
+      superdarName: superdari.superdarName,
 
       isDisposed: disposal.isDisposed,
       disposalId: disposal.disposalId,
@@ -864,7 +864,6 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
         refresh ? setServerRefreshing(true) : setListLoading(true);
 
         const token = await getAuthToken();
-        // API List Fetch
         let serverRows = [];
         try {
           const res = await fetch(AFFORESTATION_LIST_URL, {
@@ -1049,18 +1048,26 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
   }, [navigation, enumeration]);
 
   const openSuperdariForRecord = useCallback(r => {
+    const sid = r?.serverId ?? r?.serverRaw?.id ?? r?.serverRaw?._id ?? r?.id ?? null;
     navigation.navigate(AFFORESTATION_SUPERDARI_SCREEN, {
       record: r,
       enumeration,
+      afforestationId: sid,
+      nameOfSiteId: nameOfSiteId || r?.nameOfSiteId || 0,
+      superdariId: r?.superdariId ?? null,
     });
-  }, [navigation, enumeration]);
+  }, [navigation, enumeration, nameOfSiteId]);
 
   const openDisposalForRecord = useCallback(r => {
+    const sid = r?.serverId ?? r?.serverRaw?.id ?? r?.serverRaw?._id ?? r?.id ?? null;
     navigation.navigate(AFFORESTATION_DISPOSAL_SCREEN, {
       record: r,
       enumeration,
+      afforestationId: sid,
+      nameOfSiteId: nameOfSiteId || r?.nameOfSiteId || 0,
+      disposalId: r?.disposalId ?? null,
     });
-  }, [navigation, enumeration]);
+  }, [navigation, enumeration, nameOfSiteId]);
 
   const keyExtractor = useCallback(item => String(item.id ?? item.serverId ?? item._idx), []);
 
@@ -1297,7 +1304,7 @@ export default function AfforestationRecordsScreen({ navigation, route }) {
           maxWidth: 1024,
           maxHeight: 1024,
           saveToPhotos: false,
-          cameraType: 'back',
+          cameraType: 'back',   
         },
         onImagePickerResult,
       );

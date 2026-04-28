@@ -210,7 +210,7 @@ class OfflineService {
                     const token = await AsyncStorage.getItem('AUTH_TOKEN');
                     const headers = { ...item.headers };
                     if (token) {
-                        headers['Authorization'] = `Bearer ${token}`;
+                        headers.Authorization = `Bearer ${token}`;
                     }
 
                     const res = await fetch(item.url, {

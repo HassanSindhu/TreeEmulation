@@ -1123,7 +1123,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
         return { ids: cleanIds, counts: normCounts };
       }
 
-      const legacyName = String(namesMap?.['__legacy_name__'] || '').trim();
+      const legacyName = String(namesMap?.__legacy_name__ || '').trim();
       if (legacyName) {
         const found = (speciesRows || []).find(
           s => String(s?.name || '').trim().toLowerCase() === legacyName.toLowerCase(),
@@ -1146,7 +1146,7 @@ export default function PoleCropRecordsScreen({ navigation, route }) {
     if (!rec) return;
 
     const namesMap = rec?.species_names_map || {};
-    const hasLegacyName = Boolean(String(namesMap?.['__legacy_name__'] || '').trim());
+    const hasLegacyName = Boolean(String(namesMap?.__legacy_name__ || '').trim());
 
     if (speciesRows?.length > 0 && (speciesIds.length === 0 || hasLegacyName)) {
       const resolved = resolveSpeciesSelectionForEdit(rec);

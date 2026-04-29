@@ -344,7 +344,7 @@ export default function SignupScreen({navigation}) {
   useEffect(() => {
     fetchRoles();
     fetchZones();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   // ---------------------------
@@ -354,14 +354,14 @@ export default function SignupScreen({navigation}) {
     if (!formData.zoneId) return;
     fetchCircles(formData.zoneId);
     clearDependentData('zone');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [formData.zoneId]);
 
   useEffect(() => {
     if (!formData.circleId) return;
     fetchDivisions(formData.circleId);
     clearDependentData('circle');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [formData.circleId]);
 
   useEffect(() => {

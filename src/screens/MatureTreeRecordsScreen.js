@@ -1352,6 +1352,14 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
       return Alert.alert('Missing', 'Girth is required');
     }
 
+    if (!String(pageNo || '').trim()) {
+      return Alert.alert('Missing', 'Page No is required');
+    }
+
+    if (!String(registerNo || '').trim()) {
+      return Alert.alert('Missing', 'Register No is required');
+    }
+
     // Resolve species id
     let finalSpeciesId = speciesId ?? (speciesRows.find(x => x.name === species)?.id ?? null);
 
@@ -2257,7 +2265,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 />
 
                 <FormRow
-                  label="Page No (Optional)"
+                  label="Page No *"
                   value={pageNo}
                   onChangeText={setPageNo}
                   placeholder="PG-123"
@@ -2265,7 +2273,7 @@ export default function MatureTreeRecordsScreen({ navigation, route }) {
                 />
 
                 <FormRow
-                  label="Register No (Optional)"
+                  label="Register No *"
                   value={registerNo}
                   onChangeText={setRegisterNo}
                   placeholder="REG-456"
